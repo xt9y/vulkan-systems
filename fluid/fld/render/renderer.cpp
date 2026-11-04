@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace fld::render
@@ -13,7 +14,6 @@ namespace fld::render
     {
         state *data = nullptr;
         constexpr std::uint32_t tile_size = 16;
-        constexpr std::uint32_t tile_capacity = 96;
 
         struct gpu_particle
         {
@@ -32,42 +32,62 @@ namespace fld::render
         };
         static_assert(sizeof(parameters) == 128);
 
+        // Variable-length, compact per-tile lists: dense splashes must not
+        // lose fluid simply because more than 96 particles overlap a tile.
         struct bins
         {
             std::uint32_t columns, rows;
-            std::uint64_t overflow=0;
             std::uint32_t peak=0;
-            std::vector<std::uint32_t> counts, indices;
+            std::vector<std::vector<std::uint32_t>> entries;
+            std::vector<std::array<std::uint32_t,2>> ranges;
+            std::vector<std::uint32_t> indices;
 
             bins(std::uint32_t width, std::uint32_t height)
             {
-                columns = (width+tile_size-1)/tile_size;
-                rows = (height+tile_size-1)/tile_size;
-                counts.assign(std::size_t(columns)*rows,0);
-                indices.assign(std::size_t(columns)*rows*tile_capacity,0);
+                columns=(width+tile_size-1)/tile_size;
+                rows=(height+tile_size-1)/tile_size;
+                const auto count=std::size_t(columns)*rows;
+                entries.resize(count);
+                ranges.resize(count);
             }
 
-            void add(std::uint32_t id, float left,float top,float right,float bottom)
+            void add(std::uint32_t id,float left,float top,
+                     float right,float bottom)
             {
-                if (right<0 || bottom<0 ||
-                    left>=float(columns*tile_size) ||
-                    top>=float(rows*tile_size)) return;
-                const auto lo_x = std::clamp(int(std::floor(left/tile_size)),0,int(columns)-1);
-                const auto hi_x = std::clamp(int(std::floor(right/tile_size)),0,int(columns)-1);
-                const auto lo_y = std::clamp(int(std::floor(top/tile_size)),0,int(rows)-1);
-                const auto hi_y = std::clamp(int(std::floor(bottom/tile_size)),0,int(rows)-1);
+                if(right<0 || bottom<0 ||
+                   left>=float(columns*tile_size) ||
+                   top>=float(rows*tile_size))return;
+                const auto lo_x=std::clamp(int(std::floor(left/tile_size)),0,int(columns)-1);
+                const auto hi_x=std::clamp(int(std::floor(right/tile_size)),0,int(columns)-1);
+                const auto lo_y=std::clamp(int(std::floor(top/tile_size)),0,int(rows)-1);
+                const auto hi_y=std::clamp(int(std::floor(bottom/tile_size)),0,int(rows)-1);
                 for(int y=lo_y;y<=hi_y;++y)
                     for(int x=lo_x;x<=hi_x;++x)
                     {
-                        const auto tile=std::size_t(y)*columns+x;
-                        auto &count=counts[tile];
-                        if(count<tile_capacity)
-                        {
-                            indices[tile*tile_capacity+count++]=id;
-                            peak=std::max(peak,count);
-                        }
-                        else ++overflow;
+                        auto &tile=entries[std::size_t(y)*columns+x];
+                        tile.push_back(id);
+                        peak=std::max(peak,std::uint32_t(tile.size()));
                     }
+            }
+
+            void pack()
+            {
+                std::size_t total=0;
+                constexpr auto limit=std::numeric_limits<std::uint32_t>::max();
+                for(const auto &tile:entries)
+                {
+                    if(tile.size()>limit-total)
+                        throw std::overflow_error("Fluid tile index count exceeds 32 bits");
+                    total+=tile.size();
+                }
+                indices.reserve(total);
+                for(std::size_t i=0;i<entries.size();++i)
+                {
+                    const auto &tile=entries[i];
+                    ranges[i]={std::uint32_t(indices.size()),
+                               std::uint32_t(tile.size())};
+                    indices.insert(indices.end(),tile.begin(),tile.end());
+                }
             }
         };
 
@@ -82,10 +102,10 @@ namespace fld::render
                 std::max<std::size_t>(1,maximum)*sizeof(gpu_particle),
                 usage,memory);
             f.tile_counts=vk::buffer::create(
-                std::max<std::size_t>(1,tiles)*sizeof(std::uint32_t),
+                std::max<std::size_t>(1,tiles)*sizeof(std::array<std::uint32_t,2>),
                 usage,memory);
             f.tile_indices=vk::buffer::create(
-                std::max<std::size_t>(1,tiles*tile_capacity)*sizeof(std::uint32_t),
+                std::max<std::size_t>(1,maximum)*sizeof(std::uint32_t),
                 usage,memory);
         }
 
@@ -273,15 +293,29 @@ namespace fld::render
             }
         }
 
-        data->tile_overflows=tiles.overflow;
+        tiles.pack();
+        data->tile_overflows=0;
         data->peak_tile_occupancy=tiles.peak;
         if(!points.empty())
             vk::buffer::write(frame.particles,points.data(),
                               points.size()*sizeof(gpu_particle));
-        vk::buffer::write(frame.tile_counts,tiles.counts.data(),
-                          tiles.counts.size()*sizeof(std::uint32_t));
-        vk::buffer::write(frame.tile_indices,tiles.indices.data(),
-                          tiles.indices.size()*sizeof(std::uint32_t));
+        vk::buffer::write(frame.tile_counts,tiles.ranges.data(),
+                          tiles.ranges.size()*sizeof(std::array<std::uint32_t,2>));
+        const auto bytes=tiles.indices.size()*sizeof(std::uint32_t);
+        if(frame.tile_indices.size<bytes)
+        {
+            // Frame resources may be resized only after its fence is signaled,
+            // as already required by record() for CPU writes.
+            const auto capacity=std::max<std::size_t>(
+                bytes,frame.tile_indices.size*2);
+            vk::buffer::destroy(frame.tile_indices);
+            const auto memory=vk::MemoryPropertyFlagBits::eHostVisible |
+                              vk::MemoryPropertyFlagBits::eHostCoherent;
+            frame.tile_indices=vk::buffer::create(
+                capacity,vk::BufferUsageFlagBits::eStorageBuffer,memory);
+        }
+        if(bytes)
+            vk::buffer::write(frame.tile_indices,tiles.indices.data(),bytes);
         bind(frame,target);
 
         const appearance *optical=&target.liquid;
