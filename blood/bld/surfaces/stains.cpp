@@ -168,7 +168,8 @@ namespace bld::surface
 
     void register_geometry(instance_id id,
         const std::vector<fld::surface::chart_vertex>& vertices,
-        const std::vector<std::uint32_t>& indices)
+        const std::vector<std::uint32_t>& indices,
+        bool physical_chart_edges)
     {
         if(!data || !data->targets.count(id))return;
         auto &image=data->atlases[id];
@@ -178,6 +179,9 @@ namespace bld::surface
                 data->targets.at(id).metres_per_uv);
         image.film.transform=data->targets.at(id).transform;
         fld::surface::set_chart(image.film,vertices,indices);
+        // Only explicitly supplied physical edges may shed a droplet.
+        // UV seams are not an acceptable detachment condition.
+        image.film.open_edges=physical_chart_edges;
         pack(image.film,image.pixels);
         image.generation=++data->generation;
     }
