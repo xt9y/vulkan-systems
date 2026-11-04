@@ -1,6 +1,7 @@
 #pragma once
 #include "../core/types.hpp"
 #include <fld/surface/film.hpp>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -78,7 +79,8 @@ namespace bld::surface
     void deposit(instance_id id, vec3 position, vec3 normal, vec2 uv,
                  bool uv_valid, float volume_ml, float velocity,
                  std::uint32_t seed);
-    void update(float dt);
+    using release_callback=std::function<bool(const fld::emission&)>;
+    void update(float dt,const release_callback &release={});
     const atlas *find(instance_id id);
     // Cubic metres in the surface/porous reservoirs (separate from 3D drops).
     double volume();
