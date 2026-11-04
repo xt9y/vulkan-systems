@@ -350,8 +350,12 @@ namespace fld::render
                 const float radius=std::clamp(
                     smoothing*std::abs(target.view_projection(1,1))*
                     target.height*.5f/clip.w,1.f,2048.f);
-                tiles.add(id,x-radius-1.f,y-radius-1.f,
-                          x+radius+1.f,y+radius+1.f);
+                // A full tile of conservative halo prevents discontinuous
+                // reconstruction at tile edges when perspective projection
+                // and the kernel's world-space support disagree slightly.
+                const float halo=float(tile_size)+2.f;
+                tiles.add(id,x-radius-halo,y-radius-halo,
+                          x+radius+halo,y+radius+halo);
             }
         }
 
