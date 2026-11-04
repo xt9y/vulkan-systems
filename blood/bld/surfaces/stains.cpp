@@ -158,6 +158,8 @@ namespace bld::surface
         if(!data)return;
         data->targets.erase(id);
         data->atlases.erase(id);
+        data->rigid_targets.erase(id);
+        ++data->generation;
         auto &stains=data->stains;
         stains.erase(std::remove_if(stains.begin(),stains.end(),
             [id](const rigid_stain &s){return s.target==id;}),stains.end());
@@ -184,7 +186,13 @@ namespace bld::surface
         const float spread=std::clamp(.6f+std::pow(weber,.25f)*.20f,
                                       .7f,2.5f);
 
-        if(uv_valid)
+        // Mesh UV atlases are for character/fabric surfaces only. World
+        // geometry needs world-space footprints: stretching a 256px atlas
+        // across a floor produces a visible quantization grid.
+        const bool atlas_surface=registered->second.skinned ||
+            registered->second.kind==substrate::textile ||
+            registered->second.kind==substrate::skin;
+        if(uv_valid && atlas_surface)
         {
             auto &atlas=data->atlases[id];
             atlas.target=id;
@@ -217,7 +225,13 @@ namespace bld::surface
 
         if(registered->second.skinned) return;
         if(data->stains.size()>=data->settings.max_stains)
+        {
+            const auto evicted=data->stains.front().target;
             data->stains.erase(data->stains.begin());
+            const bool still_present=std::any_of(data->stains.begin(),data->stains.end(),
+                [evicted](const rigid_stain &s){return s.target==evicted;});
+            if(!still_present)data->rigid_targets.erase(evicted);
+        }
 
         // Merge repeated near-identical marks on the same rigid instance.
         for(auto &stain:data->stains)
@@ -230,6 +244,7 @@ namespace bld::surface
             stain.volume_ml+=volume_ml;
             stain.radius=std::min(.25f,stain.radius+diameter*.12f);
             stain.wetness=1.f;
+            ++data->generation;
             return;
         }
         rigid_stain stain{};
@@ -260,6 +275,8 @@ namespace bld::surface
         stain.world(2,3)=position.z;
         stain.local=inverse_affine(registered->second.transform)*stain.world;
         data->stains.push_back(stain);
+        data->rigid_targets.insert(id);
+        ++data->generation;
     }
 
     void update(float dt)
@@ -310,6 +327,16 @@ namespace bld::surface
             mark.wetness=std::exp(-mark.age/
                 std::max(1.f,data->settings.drying_time*props.drying_scale));
         }
+        // GPU projected-stain buffers need updates only at a modest rate.
+        if(!data->stains.empty())
+        {
+            data->rigid_update_accumulator+=dt;
+            if(data->rigid_update_accumulator>=.15f)
+            {
+                data->rigid_update_accumulator=0.f;
+                ++data->generation;
+            }
+        }
     }
 
     const atlas *find(instance_id id)
@@ -324,6 +351,8 @@ namespace bld::surface
         if(!data)return;
         data->atlases.clear();
         data->stains.clear();
+        data->rigid_targets.clear();
+        ++data->generation;
     }
 
     void shutdown()
