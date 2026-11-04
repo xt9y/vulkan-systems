@@ -17,6 +17,7 @@ namespace bld::material
         blood.yasuda_exponent=.64f;
         blood.surface_tension=.05f;
         blood.contact_angle=1.05f;
+        blood.optical=optical();
         return blood;
     }
 

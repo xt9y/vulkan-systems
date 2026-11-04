@@ -11,6 +11,28 @@ namespace fld
     using vec4 = vk::util::math::vec4;
     using mat4 = vk::util::math::mat4;
 
+    // Renderer-neutral optical parameters stored with each fluid phase.
+    // All color coefficients are linear-light, inverse metre.
+    struct appearance
+    {
+        vec3 absorption{.12f,.045f,.022f};
+        vec3 scattering{.005f,.016f,.024f};
+        float index_of_refraction=1.333f;
+        float roughness=.035f;
+        vec3 light_direction{.45f,.85f,.25f};
+    };
+
+    struct surface_properties
+    {
+        // Dimensionless fraction and physically meaningful contact angle.
+        float porosity=0.f;                 // fraction 0..1
+        float wetting=0.65f;                // adhesion 0..1
+        float contact_angle=1.1f;          // radians
+        float restitution=.04f;            // 0..1
+        float friction=.50f;               // 0..1
+        float roughness=.40f;              // normalized height-scale proxy
+    };
+
     struct material
     {
         // SI units. Defaults: water at about 20 Celsius.
@@ -22,6 +44,7 @@ namespace fld
         float yasuda_exponent = 2.0f;       // Carreau-Yasuda exponent a
         float surface_tension = .072f;      // N/m
         float contact_angle = 1.2f;         // radians, receiver dependent
+        appearance optical{};
     };
 
     struct particle
@@ -54,6 +77,10 @@ namespace fld
         // Fraction of this particle's mass transferred to the receiving
         // surface. The remaining mass continues after collision.
         float deposition_fraction = 0.f;
+        // When true, the generic solver computes wetting, absorption and
+        // rebound from the fluid and the receiving material. No blood code.
+        bool material_response=true;
+        surface_properties surface{};
     };
 
     using collision_callback =

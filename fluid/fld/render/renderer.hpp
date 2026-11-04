@@ -7,15 +7,7 @@
 
 namespace fld::render
 {
-    struct appearance
-    {
-        // Linear-light absorption and in-scattering, in inverse metres.
-        vec3 absorption{.12f, .045f, .022f};
-        vec3 scattering{.005f, .016f, .024f};
-        float index_of_refraction = 1.333f;
-        float roughness = .035f;
-        vec3 light_direction{.45f, .85f, .25f};
-    };
+    using appearance=fld::appearance;
 
     struct input
     {
@@ -28,6 +20,9 @@ namespace fld::render
         vk::ImageLayout color_layout = vk::ImageLayout::eShaderReadOnlyOptimal;
         bool reversed_depth = false;
         std::uint32_t phase = 0xffffffffu; // all phases by default
+        // Phase appearance is the default. Override only for previews
+        // or rendering all phases as one material.
+        bool use_phase_appearance=true;
         appearance liquid{};
     };
 

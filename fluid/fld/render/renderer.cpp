@@ -272,17 +272,21 @@ namespace fld::render
                           tiles.indices.size()*sizeof(std::uint32_t));
         bind(frame,target);
 
+        const appearance *optical=&target.liquid;
+        if(target.use_phase_appearance && world &&
+           target.phase<world->materials.size())
+            optical=&world->materials[target.phase].optical;
         parameters push{};
         push.inverse_view_projection=target.inverse_view_projection;
-        push.absorption={target.liquid.absorption.x,
-                         target.liquid.absorption.y,
-                         target.liquid.absorption.z,
-                         target.liquid.index_of_refraction};
-        push.scattering={target.liquid.scattering.x,
-                         target.liquid.scattering.y,
-                         target.liquid.scattering.z,
-                         target.liquid.roughness};
-        const auto light=math::safe_normal(target.liquid.light_direction);
+        push.absorption={optical->absorption.x,
+                         optical->absorption.y,
+                         optical->absorption.z,
+                         optical->index_of_refraction};
+        push.scattering={optical->scattering.x,
+                         optical->scattering.y,
+                         optical->scattering.z,
+                         optical->roughness};
+        const auto light=math::safe_normal(optical->light_direction);
         push.lighting={light.x,light.y,light.z,spacing};
         const std::uint32_t ratio=std::uint32_t(std::clamp(
             std::round(smoothing/spacing*100.f),100.f,65535.f));

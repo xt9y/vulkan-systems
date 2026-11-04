@@ -44,7 +44,7 @@ namespace bld::render
             throw std::logic_error("Blood renderer not initialized");
         input target=inputs;
         target.phase=system::get()->phase;
-        target.liquid=material::optical(data->oxygenation);
+        target.use_phase_appearance=true;
         fld::render::record(command,frame,target);
     }
 
