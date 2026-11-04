@@ -67,6 +67,25 @@ namespace bld::surfaces
         if (!data || data->capacity == 0 || is_skinned(target)) return;
         if (pool)
         {
+            // Nearby impacts feed an existing puddle rather than stacking
+            // dozens of giant, identical overlapping red circles.
+            for (auto &existing : data->decals)
+            {
+                if (!existing.pool || existing.target != target) continue;
+                auto frame = existing.world;
+                const auto owner = data->transforms.find(target);
+                if (existing.anchored && owner != data->transforms.end())
+                    frame = owner->second * existing.local;
+                const auto center = math::position(frame);
+                const auto delta = position - center;
+                if (vk::util::math::length_squared(delta) > .12f * .12f)
+                    continue;
+                existing.final_radius = std::min(.55f,
+                    existing.final_radius + std::max(.008f, size * .06f));
+                existing.wetness = std::min(1.f, existing.wetness + .08f);
+                existing.age = std::max(0.f, existing.age - .4f);
+                return;
+            }
             const auto count = std::count_if(
                 data->decals.begin(), data->decals.end(),
                 [](const decal &d) { return d.pool; });
