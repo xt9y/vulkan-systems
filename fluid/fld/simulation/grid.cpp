@@ -1,6 +1,7 @@
 #include "grid.hpp"
 #include <cmath>
-#include <map>
+#include <unordered_map>
+#include <cstddef>
 
 namespace fld::simulation
 {
@@ -9,13 +10,22 @@ namespace fld::simulation
         struct cell
         {
             int x, y, z;
-            bool operator<(const cell &other) const
+            bool operator==(const cell &other) const
             {
-                if (x != other.x) return x < other.x;
-                if (y != other.y) return y < other.y;
-                return z < other.z;
+                return x==other.x && y==other.y && z==other.z;
             }
         };
+        struct hash
+        {
+            std::size_t operator()(const cell &c) const noexcept
+            {
+                const auto x=std::uint64_t(std::uint32_t(c.x))*73856093ull;
+                const auto y=std::uint64_t(std::uint32_t(c.y))*19349663ull;
+                const auto z=std::uint64_t(std::uint32_t(c.z))*83492791ull;
+                return std::size_t(x ^ y ^ z);
+            }
+        };
+
         cell index(vec3 point, float h)
         {
             return {
@@ -28,7 +38,8 @@ namespace fld::simulation
 
     std::vector<pair> neighbors(const std::vector<particle> &ps, float h)
     {
-        std::map<cell, std::vector<std::uint32_t>> cells;
+        std::unordered_map<cell,std::vector<std::uint32_t>,hash> cells;
+        cells.reserve(ps.size());
         for (std::uint32_t i=0; i<ps.size(); ++i)
             cells[index(ps[i].predicted,h)].push_back(i);
         std::vector<pair> result;
