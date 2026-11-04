@@ -1,0 +1,33 @@
+name: gpu-fluid
+on:
+  push:
+    branches:
+      - feature/gpu-fluid-v1
+  pull_request:
+    paths:
+      - "fluid/**"
+      - ".github/workflows/gpu-fluid.yml"
+jobs:
+  shaders:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GPU shader validators
+        run: sudo apt-get update && sudo apt-get install -y glslang-tools spirv-tools
+      - name: Validate all particle stages
+        run: |
+          set -eu
+          for stage in CLEAR PREDICT BUILD LAMBDA DELTA APPLY FINALIZE NORMAL CAPILLARY; do
+            glslangValidator -V -DFLD_$stage -o /tmp/fluid_$stage.spv fluid/fld/shaders/particles.comp
+            spirv-val /tmp/fluid_$stage.spv
+          done
+          for name in tile_clear tile_build surface; do
+            glslangValidator -V -o /tmp/$name.spv fluid/fld/shaders/$name.comp
+            spirv-val /tmp/$name.spv
+          done
+      - name: Check physical unit tests
+        run: |
+          g++ -std=c++17 -O2 -Wall -Wextra -pedantic \
+            tests/physical_units.cpp fluid/fld/material/properties.cpp \
+            -o /tmp/physical_units
+          /tmp/physical_units

@@ -4,6 +4,8 @@ void build(C_Build *b)
 {
     C_Target *fluid=c_static_library(b,"VulkanFluid");
     c_sources(fluid,"fld/material/*.cpp");
+    c_sources(fluid,"fld/core/*.cpp");
+    c_sources(fluid,"fld/render/*.cpp");
     c_include(fluid,".");
     c_flag(fluid,"-std=c++17");
 

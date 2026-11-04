@@ -1,0 +1,245 @@
+#version 450
+
+// Generic reconstructed liquid: density is an ISO-SURFACE in world space.
+// The renderer never displays independent SPH particles as capsules or disks.
+// Run at a chosen resolution; upscale/reproject in the host renderer.
+layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
+
+layout(set=0,binding=0) uniform sampler2D depth_image;
+layout(set=0,binding=1) uniform sampler2D scene_color;
+layout(rgba16f,set=0,binding=2) writeonly uniform image2D liquid_output;
+
+struct Particle
+{
+    vec4 world;
+    vec4 velocity;
+    vec4 previous;
+    vec4 properties; // x physical volume m^3, y mass kg
+};
+layout(std430,set=0,binding=3) readonly buffer Particles
+{
+    Particle particles[];
+};
+layout(std430,set=0,binding=4) readonly buffer TileCount
+{
+    uint counts[];
+};
+layout(std430,set=0,binding=5) readonly buffer TileIndex
+{
+    uint indices[];
+};
+
+layout(push_constant) uniform Data
+{
+    mat4 inverse_view_projection;
+    vec4 absorption;  // RGB extinction [1/metre], w IOR
+    vec4 scattering;  // RGB in-scattering, w roughness
+    vec4 lighting;    // XYZ normalized light direction, w particle spacing
+    uvec4 sizes;      // width, height, flags (bit0 reverse depth), max particles
+} pc;
+
+const float pi = 3.14159265358979323846;
+const float inf = 1e20;
+const uint tile_size = 16u;
+
+vec3 unproject(vec2 ndc, float d)
+{
+    vec4 h = pc.inverse_view_projection * vec4(ndc, d, 1.0);
+    return h.xyz / h.w;
+}
+
+float poly6(float r2, float h)
+{
+    if (r2 >= h*h) return 0.0;
+    float q = h*h-r2;
+    return 315.0/(64.0*pi*pow(h,9.0))*q*q*q;
+}
+
+float field(vec3 p, uint tile, float h)
+{
+    float density = 0.0;
+    uint count = counts[tile];
+    bool overflow=count>256u;
+    count=overflow?pc.sizes.w:count;
+    for (uint i=0u; i<count; ++i)
+    {
+        uint id = overflow?i:indices[tile*256u+i];
+        if (id >= pc.sizes.w) continue;
+        vec3 separation = p-particles[id].world.xyz;
+        density += poly6(dot(separation,separation),h) *
+                   particles[id].properties.x;
+    }
+    return density;
+}
+
+vec3 gradient(vec3 p,uint tile,float h)
+{
+    float step_length = max(h*.13, .0003);
+    vec3 dx=vec3(step_length,0,0),dy=vec3(0,step_length,0),dz=vec3(0,0,step_length);
+    return vec3(field(p+dx,tile,h)-field(p-dx,tile,h),
+                field(p+dy,tile,h)-field(p-dy,tile,h),
+                field(p+dz,tile,h)-field(p-dz,tile,h));
+}
+
+vec2 sphere_interval(vec3 ro, vec3 rd, vec3 c, float r)
+{
+    vec3 oc=ro-c;
+    float b=dot(oc,rd);
+    float discriminant=b*b-dot(oc,oc)+r*r;
+    if(discriminant<0.0)return vec2(inf,-inf);
+    float root=sqrt(discriminant);
+    float begin=-b-root;
+    float end=-b+root;
+    if(end<0.0)return vec2(inf,-inf);
+    return vec2(max(0.0,begin),end);
+}
+
+void main()
+{
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
+    if(pixel.x>=int(pc.sizes.x)||pixel.y>=int(pc.sizes.y))return;
+    uint columns=(pc.sizes.x+tile_size-1u)/tile_size;
+    uint tile=(uint(pixel.y)/tile_size)*columns+uint(pixel.x)/tile_size;
+    uint count=counts[tile];
+    if(count==0u)
+    {
+        imageStore(liquid_output,pixel,texelFetch(scene_color,pixel,0));
+        return;
+    }
+
+    vec2 uv=(vec2(pixel)+.5)/vec2(pc.sizes.xy);
+    vec2 ndc=uv*2.0-1.0;
+    // Stay clear of exact z=0/1: infinite-far projections can have w=0.
+    bool reverse=(pc.sizes.z&1u)!=0u;
+    vec3 near_point=unproject(ndc,reverse?.999f:.001f);
+    vec3 far_point=unproject(ndc,reverse?.001f:.999f);
+    vec3 ray=normalize(far_point-near_point);
+    float d=texelFetch(depth_image,pixel,0).r;
+    bool background=(pc.sizes.z&1u)!=0u?d<=.000001:d>=.999999;
+    float scene_t=background?inf:dot(unproject(ndc,d)-near_point,ray);
+    float spacing=pc.lighting.w;
+    float h=spacing*max(1.5,float((pc.sizes.z>>8u)&65535u)/100.0);
+    float start_t=inf, end_t=-inf;
+
+    // Traverse only the union of particle kernel supports. Rays outside
+    // this interval cannot intersect the liquid's density isosurface.
+    for(uint i=0u;i<(count>256u?pc.sizes.w:count);++i)
+    {
+        uint id=count>256u?i:indices[tile*256u+i];
+        if(id>=pc.sizes.w)continue;
+        vec2 interval=sphere_interval(near_point,ray,
+                                     particles[id].world.xyz,h);
+        start_t=min(start_t,interval.x);
+        end_t=max(end_t,interval.y);
+    }
+    end_t=min(end_t,scene_t);
+    if(start_t>=inf || start_t>=end_t)
+    {
+        imageStore(liquid_output,pixel,texelFetch(scene_color,pixel,0));
+        return;
+    }
+
+    // Slightly lower density threshold keeps viscous neighboring droplets
+    // visually connected into an isosurface instead of isolated beads.
+    const float iso=.34;
+    float t=max(0.0,start_t);
+    float last_t=t;
+    bool found=false;
+    // Raymarch the CONTINUOUS kernel sum, not a union of capsules.
+    // Tile-list bounds cap work; min support distance controls step length.
+    for(int k=0;k<36;++k)
+    {
+        float rho=field(near_point+ray*t,tile,h);
+        if(rho>=iso)
+        {
+            found=true;
+            break;
+        }
+        last_t=t;
+        t+=mix(h*.4,h*.12,smoothstep(.06,.40,rho));
+        if(t>end_t)break;
+    }
+    vec3 world=vec3(0.0);
+    vec3 normal=-ray;
+    float thickness=0.0;
+    if(found)
+    {
+        float a=last_t,b=t;
+        for(int k=0;k<5;++k)
+        {
+            float mid=(a+b)*.5;
+            if(field(near_point+ray*mid,tile,h)>iso)b=mid;
+            else a=mid;
+        }
+        t=(a+b)*.5;
+        world=near_point+ray*t;
+        vec3 g=gradient(world,tile,h);
+        if(dot(g,g)>1e-14)
+            normal=normalize(-g);
+        if(dot(normal,ray)>0.0)normal=-normal;
+        // Optical thickness through a smooth fluid reconstruction.
+        float at=t;
+        for(int k=0;k<24;++k)
+        {
+            at+=h*.32;
+            if(at>end_t || at>t+.35)break;
+            float density=field(near_point+ray*at,tile,h);
+            thickness+=h*.32*clamp(density,0.0,1.0);
+            if(k>2 && density<.10)break;
+        }
+        thickness=max(h*.35,thickness);
+    }
+    else
+    {
+        // A disconnected tiny drop cannot reach the bulk iso-threshold.
+        // Free droplets minimize surface area under surface tension, so
+        // render their true-volume spheres rather than billboard capsules.
+        float nearest=inf, exit_t=inf;
+        vec3 center=vec3(0.0);
+        for(uint j=0u;j<(count>256u?pc.sizes.w:count);++j)
+        {
+            uint id=count>256u?j:indices[tile*256u+j];
+            if(id>=pc.sizes.w)continue;
+            Particle drop=particles[id];
+            vec2 interval=sphere_interval(near_point,ray,drop.world.xyz,
+                                         max(drop.world.w,.00001));
+            if(interval.x<nearest && interval.x<scene_t)
+            {
+                nearest=interval.x;
+                exit_t=interval.y;
+                center=drop.world.xyz;
+            }
+        }
+        if(nearest>=inf)
+        {
+            imageStore(liquid_output,pixel,texelFetch(scene_color,pixel,0));
+            return;
+        }
+        t=nearest;
+        world=near_point+ray*t;
+        vec3 n=world-center;
+        if(dot(n,n)>1e-12)
+            normal=normalize(n);
+        thickness=max(.000001,min(scene_t,exit_t)-t);
+    }
+
+    float ior=max(1.001,pc.absorption.w);
+    float f0=pow((ior-1.0)/(ior+1.0),2.0);
+    float cos_theta=clamp(dot(normal,-ray),0.0,1.0);
+    float fresnel=f0+(1.0-f0)*pow(1.0-cos_theta,5.0);
+    vec3 transmittance=exp(-max(pc.absorption.rgb,vec3(0))*thickness);
+    vec3 behind=texture(scene_color,uv).rgb;
+    vec3 in_scatter=pc.scattering.rgb*(vec3(1.0)-transmittance);
+    vec3 refracted=behind*transmittance+in_scatter;
+
+    vec3 light=normalize(pc.lighting.xyz);
+    vec3 half_vector=normalize(light-ray);
+    float rough=max(.015,pc.scattering.w);
+    float shininess=max(4.0,2.0/(rough*rough)-2.0);
+    float highlight=pow(max(dot(normal,half_vector),0.0),shininess);
+    float specular=(.04+.96*fresnel)*highlight;
+    // Reflection in this baseline is approximated by lit environmental light;
+    // a host-supplied environment map is required for film-grade reflections.
+    vec3 result=mix(refracted,vec3(.42,.46,.50),fresnel)+vec3(specular);
+    imageStore(liquid_output,pixel,vec4(result,1.0));
+}

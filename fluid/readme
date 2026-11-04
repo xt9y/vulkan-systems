@@ -1,15 +1,33 @@
 VulkanFluid
-  build.c                    c build static library
-  fld/core/                  public types and high-level scene state
-  fld/material/              physical liquid and solid contact properties
-  fld/math/                  numerical helpers
-  fld/simulation/            GPU particle solver and neighbor search
-  fld/surface/               surface/topology treatment (as needed)
-  fld/porous/                deferred
-  fld/render/                optical surface reconstruction
-  fld/shaders/               Vulkan compute and rendering shaders
+  build.c                    static C++17 library
+  fld/fld.hpp                public API
+  fld/core/                  particle state and GPU simulation
+  fld/material/              SI material properties
+  fld/render/                tile bins and liquid compositor
+  fld/shaders/               SPIR-V compute kernels
+  research.md                algorithms and validation contract
 
-This branch intentionally contains NO legacy liquid simulation.
-Physical property helpers are the first verified implementation component;
-the high-performance GPU solver and renderer are NOT implemented yet.
-Main is unchanged until a functional baseline can be tested.
+Current implementation: first GPU baseline, not the completed research paper.
+  GPU-resident particles, spatial-hash neighbor graph, PBF pressure projection,
+  bounded capillary surface-force approximation, contact-line friction,
+  GPU screen-space tile lists and density-isosurface optical rendering.
+  This does NOT reproduce the full unified implicit Probst-Teschner solver.
+  Neither full Vulkan C++ compilation nor 60 FPS on M2 has been measured.
+
+VulkanEngine must be initialized before fld::system::init.
+  fld::system::init(options,initial_drop,shader_paths);
+  fld::render::init(renderer_shader_paths,frames,width,height);
+  fld::system::record(command,elapsed_seconds);
+  fld::render::record(command,frame,targets);
+  fld::render::shutdown();
+  fld::system::shutdown();
+
+All units are SI. The game supplies liquid material, drop radius/position,
+floor height and shaders. The generic library never names blood, characters,
+weapons, or gameplay rules.
+
+Validation:
+  GitHub Actions gpu-fluid.yml compiles and validates all 12 SPIR-V stages.
+  Physical SI helpers have headless deterministic unit tests.
+  Full C++ compilation, GPU timing, conservation and capillary benchmarks
+  still require a VulkanEngine-enabled machine.
