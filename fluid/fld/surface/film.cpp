@@ -288,6 +288,7 @@ namespace fld::surface
         std::vector<std::uint32_t> tiles;
         for(std::uint32_t i=0;i<active.size();++i)
             if(active[i])tiles.push_back(i);
+        f.last_active_tiles=std::uint32_t(tiles.size());
         if(tiles.empty())return;
 
         if(f.mobile_delta.size()!=f.cells.size())
@@ -300,6 +301,7 @@ namespace fld::surface
         const float dy=f.metres_per_uv.y/f.height;
         const int substeps=std::clamp(int(std::ceil(dt/.008f)),1,20);
         const float step=std::min(dt,.16f)/float(substeps);
+        f.simulated_cells+=std::uint64_t(tiles.size())*tile*tile*substeps;
         bool changed=false;
         const auto active_cell=[&](std::uint32_t x,std::uint32_t y)
         {
