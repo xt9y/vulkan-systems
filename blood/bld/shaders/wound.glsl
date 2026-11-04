@@ -15,10 +15,14 @@ vec4 bld_texel(ivec2 p,int resolution,uint instance_index)
     uint index=1u+total+slot*uint(resolution*resolution)+
                uint(p.y*resolution+p.x);
     uint packed=bld_pixels[index];
-    return vec4(float((packed>>24u)&255u),
-                float((packed>>16u)&255u),
-                float((packed>>8u)&255u),
-                float(packed&255u))/255.0;
+    // Two 16-bit fixed-point physical film depths (metres). No 8-bit
+    // stamp/opacity mask: smooth coverage emerges from transported volume.
+    float mobile=float(packed>>16u)*(0.008/65535.0);
+    float retained=float(packed&65535u)*(0.004/65535.0);
+    float coverage=1.0-exp(-mobile*4300.0-retained*7000.0);
+    float wet=1.0-exp(-mobile*2500.0);
+    return vec4(coverage,wet,clamp(mobile/.002,0.0,1.0),
+                clamp(retained/.0015,0.0,1.0));
 }
 
 vec4 bld_sample(vec2 uv,int resolution,uint instance_index)
@@ -74,38 +78,61 @@ void bld_projected_material(vec3 world_position,vec3 world_normal,
     vec3 surface_normal=normalize(world_normal);
     float coverage=0.0;
     float wetness=0.0;
+    const uint resolution=48u;
+    const uint stride=12u+resolution*resolution;
     for(uint i=0u;i<count;++i)
     {
-        uint at=1u+2u*total+8u*(offset+i);
+        uint at=1u+2u*total+stride*(offset+i);
         vec3 center=vec3(uintBitsToFloat(bld_projected[at]),
                          uintBitsToFloat(bld_projected[at+1u]),
                          uintBitsToFloat(bld_projected[at+2u]));
-        float radius=max(.001,uintBitsToFloat(bld_projected[at+3u]));
-        vec3 n=normalize(vec3(
+        float width=max(.001,uintBitsToFloat(bld_projected[at+3u]));
+        vec3 tangent=normalize(vec3(
             uintBitsToFloat(bld_projected[at+4u]),
             uintBitsToFloat(bld_projected[at+5u]),
             uintBitsToFloat(bld_projected[at+6u])));
-        // Reject geometry behind the hit plane and facing a different way.
-        float facing=dot(n,surface_normal);
-        if(facing<.55)continue;
+        float height=max(.001,uintBitsToFloat(bld_projected[at+7u]));
+        vec3 n=normalize(vec3(
+            uintBitsToFloat(bld_projected[at+8u]),
+            uintBitsToFloat(bld_projected[at+9u]),
+            uintBitsToFloat(bld_projected[at+10u])));
+        if(dot(n,surface_normal)<.5)continue;
         vec3 delta=world_position-center;
-        float depth=abs(dot(delta,n));
-        if(depth>max(.012,radius*.15))continue;
-        vec3 in_plane=delta-n*dot(delta,n);
-        float angle=atan(in_plane.y,in_plane.x);
-        float irregular=1.0+.075*sin(angle*7.0+float(i)*1.7)
-                           +.035*sin(angle*13.0+float(i)*.9);
-        float r=length(in_plane)/max(.001,radius*irregular);
-        float spot=1.0-smoothstep(.68,1.0,r);
-        spot*=1.0-smoothstep(0.0,max(.012,radius*.15),depth);
+        float signed_distance=dot(delta,n);
+        if(abs(signed_distance)>max(.012,width*.08))continue;
+        vec3 bitangent=normalize(cross(n,tangent));
+        vec2 uv=vec2(dot(delta,tangent)/width+.5,
+                     dot(delta,bitangent)/height+.5);
+        if(any(lessThan(uv,vec2(0))) || any(greaterThan(uv,vec2(1))))
+            continue;
+        vec2 p=clamp(uv,vec2(0),vec2(1))*float(resolution-1u);
+        uvec2 ij=uvec2(floor(p));
+        uvec2 next=min(ij+uvec2(1),uvec2(resolution-1u));
+        vec2 weight=fract(p);
+        uint base=at+12u;
+        uint a=bld_projected[base+ij.y*resolution+ij.x];
+        uint b=bld_projected[base+ij.y*resolution+next.x];
+        uint c=bld_projected[base+next.y*resolution+ij.x];
+        uint d=bld_projected[base+next.y*resolution+next.x];
+        vec2 ac=vec2(float(a>>16u),float(a&65535u));
+        vec2 bc=vec2(float(b>>16u),float(b&65535u));
+        vec2 cc=vec2(float(c>>16u),float(c&65535u));
+        vec2 dc=vec2(float(d>>16u),float(d&65535u));
+        vec2 layers=mix(mix(ac,bc,weight.x),mix(cc,dc,weight.x),weight.y);
+        float mobile=layers.x*(.008/65535.0);
+        float retained=layers.y*(.004/65535.0);
+        float spot=1.0-exp(-mobile*4300.0-retained*7000.0);
+        float damp=1.0-exp(-mobile*2500.0);
+        float proximity=1.0-smoothstep(.002,max(.012,width*.08),
+                                       abs(signed_distance));
+        spot*=proximity;
         coverage=1.0-(1.0-coverage)*(1.0-spot);
-        wetness=max(wetness,spot*
-            clamp(uintBitsToFloat(bld_projected[at+7u]),0.0,1.0));
+        wetness=max(wetness,damp*spot);
     }
     if(coverage<=0.0)return;
     vec3 pigment=mix(vec3(.038,.008,.006),
                      vec3(.125,.005,.011),wetness);
     albedo=mix(albedo,pigment,coverage);
-    roughness=mix(roughness,mix(.76,.16,wetness),coverage);
+    roughness=mix(roughness,mix(.76,.13,wetness),coverage);
     metallic=mix(metallic,0.0,coverage);
 }
