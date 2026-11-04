@@ -96,9 +96,13 @@ namespace bld::system
                 auto hit=world(from,to,radius);
                 if(!hit.hit)return hit;
                 const auto *surfaces=surface::get();
-                const auto it=surfaces?surfaces->targets.find(hit.target):
-                                         surface::state{}.targets.end();
-                if(!surfaces || it==surfaces->targets.end())
+                if(!surfaces)
+                {
+                    hit.absorb=true;
+                    return hit;
+                }
+                const auto it=surfaces->targets.find(hit.target);
+                if(it==surfaces->targets.end())
                 {
                     hit.absorb=true;
                     return hit;
