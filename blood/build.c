@@ -4,13 +4,21 @@ void build(C_Build *b)
 {
     C_Target *blood = c_static_library(b, "VulkanBlood");
     c_sources(blood, "bld/core/*.cpp");
-    c_sources(blood, "bld/math/*.cpp");
-    c_sources(blood, "bld/simulation/*.cpp");
+    c_sources(blood, "bld/material/*.cpp");
     c_sources(blood, "bld/surfaces/*.cpp");
     c_sources(blood, "bld/network/*.cpp");
     c_sources(blood, "bld/render/*.cpp");
     c_include(blood, ".");
     c_flag(blood, "-std=c++17");
+
+    // Blood is a MATERIAL and impact/surface system, not another solver.
+    C_Dependency *fluid = c_git(
+        b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
+        "research/fluids-blood");
+    c_dep_subdir(fluid, "fluid");
+    c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
+    c_dep_include(fluid, ".");
+    c_use(blood, fluid);
 
     C_Dependency *engine = c_git(
         b, "VulkanEngine", "https://github.com/xt9y/vulkan-engine.git",

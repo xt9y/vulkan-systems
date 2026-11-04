@@ -1,22 +1,13 @@
 blood
-  bld::system::init(settings)
+  bld::system::init(options)
+  bld::surface::register_target(id, type, transform, skinned)
   bld::system::hit(event)
   bld::system::update(seconds, collision_callback)
-  bld::system::get()->...
-  bld::surfaces::get()->decals
-  bld::surfaces::set_transform(instance, model)
-  bld::wounds::get()->...
-  bld::render::init(shader_spirv, frames_in_flight)
-  bld::render::active()
+  bld::surface::get()->atlases
+  bld::surface::get()->stains
   bld::render::record(command, frame, inputs)
-  bld::render::wound::init(frames_in_flight)
-  bld::render::wound::descriptor(instance, frame)
-  bld::render::wound::shutdown()
-  bld::render::shutdown()
-  bld::network::init()
-  bld::network::encode(event)
-  bld::network::receive(packet, bytes)
-  bld::network::shutdown()
+  bld::network::send(event)
+  bld::network::receive(packet, count)
   bld::system::shutdown()
 
-Vulkan blood simulation with surface decals, skinned UV wounds and optional deterministic multiplayer replication. Static library built using c build; shaders are independent GLSL sources.
+Blood materials, impacts, skinned wounds, cloth wicking, decals and optional network. Uses the independent VulkanFluid solver and renderer.

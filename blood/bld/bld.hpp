@@ -1,8 +1,8 @@
 #pragma once
+#include "core/types.hpp"
 #include "core/system.hpp"
-#include "simulation/solver.hpp"
-#include "surfaces/decals.hpp"
-#include "surfaces/wounds.hpp"
+#include "material/blood.hpp"
+#include "surfaces/stains.hpp"
 #include "network/events.hpp"
 #include "render/renderer.hpp"
-#include "render/wound.hpp"
+#include "render/wounds.hpp"
