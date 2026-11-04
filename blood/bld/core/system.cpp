@@ -1,5 +1,7 @@
 #include "system.hpp"
 #include "../material/blood.hpp"
+#include <fld/core/system.hpp>
+#include <fld/math/kernels.hpp>
 #include "../surfaces/stains.hpp"
 #include "../network/events.hpp"
 #include <algorithm>
