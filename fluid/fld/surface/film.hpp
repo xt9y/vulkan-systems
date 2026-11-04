@@ -47,6 +47,8 @@ namespace fld::surface
         std::vector<std::pair<std::uint32_t,std::uint32_t>> seam_links;
         // Reused scratch space: no full-frame allocation per film substep.
         std::vector<float> mobile_delta,pore_delta;
+        std::uint32_t last_active_tiles=0;
+        std::uint64_t simulated_cells=0;
         std::uint64_t generation=1;
         double supplied_m3=0,detached_m3=0;
     };
