@@ -295,6 +295,12 @@ namespace bld::render
         }
     }
 
+    void init(const std::string &shader_path, std::uint32_t frames,
+              std::uint32_t width, std::uint32_t height)
+    {
+        init(vk::shader::read(shader_path), frames, width, height);
+    }
+
     void record(vk::CommandBuffer command, std::uint32_t index,
                 const input &target)
     {

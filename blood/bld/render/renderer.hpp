@@ -1,6 +1,7 @@
 #pragma once
 #include "../core/types.hpp"
 #include <vk/vk.hpp>
+#include <string>
 
 namespace bld::render
 {
@@ -41,9 +42,12 @@ namespace bld::render
     void init(const std::vector<std::uint32_t> &shader_spirv,
               std::uint32_t frames_in_flight,
               std::uint32_t max_width, std::uint32_t max_height);
+    void init(const std::string &shader_path, std::uint32_t frames_in_flight,
+              std::uint32_t max_width, std::uint32_t max_height);
     // Call in the host's render graph after GBuffer, before lighting/compositing.
     // The host transitions output to GENERAL and inputs to readable layouts.
     // Wait for frame fences before reusing frame_index or releasing GPU resources.
+    // If active() is false, the host can skip both record() and overlay composite.
     void record(vk::CommandBuffer command, std::uint32_t frame_index,
                 const input &targets);
     void shutdown();
