@@ -17,7 +17,7 @@ jobs:
       - name: Validate all particle stages
         run: |
           set -eu
-          for stage in CLEAR PREDICT BUILD LAMBDA DELTA APPLY FINALIZE; do
+          for stage in CLEAR PREDICT BUILD LAMBDA DELTA APPLY FINALIZE NORMAL CAPILLARY; do
             glslangValidator -V -DFLD_$stage -o /tmp/fluid_$stage.spv fluid/fld/shaders/particles.comp
             spirv-val /tmp/fluid_$stage.spv
           done
