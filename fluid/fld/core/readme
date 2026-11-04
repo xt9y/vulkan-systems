@@ -1,0 +1,3 @@
+Core will own GPU fluid scene creation, conservative emit/remove queues,
+material IDs, deterministic frame stepping, counters and error reporting.
+No engine-internal gameplay, blood, collision assets or material defaults.

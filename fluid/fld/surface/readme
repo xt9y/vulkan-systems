@@ -1,0 +1,4 @@
+Planned: liquid-solid contact and optional world-mesh geometry support.
+Do not implement synthetic UV stamps or assume UV adjacency == 3D
+surface connectivity. Only introduce a 2D film solver if measured
+submillimetre cases cannot be represented adequately in particle space.

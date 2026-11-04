@@ -1,0 +1,2 @@
+Numerical functions should stay testable without a graphics context.
+Neighbor lookup and sparse cell keys belong to simulation/, not here.

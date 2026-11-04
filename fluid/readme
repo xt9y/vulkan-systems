@@ -1,27 +1,15 @@
-fluid
-  fld::system::init(options)
-  fld::system::add_material(properties)
-  fld::system::emit(source)
-  fld::system::splash(source)
-  fld::system::update(seconds, collision, contact)
-  fld::surface::init(grid, width, height, metres_per_uv)
-  fld::surface::set_frame(grid, normal, transform)
-  fld::surface::set_chart(grid, vertices, triangle_indices)
-  fld::surface::deposit(grid, uv, radius_metres, volume_m3)
-  fld::surface::update(grid, seconds, fluid_material, porous_material, gravity)
-  fld::surface::volume(grid)
-  fld::surface::take(grid, x, y, amount_m3)
-  fld::porous::absorb(mobile_m3, stored_m3, area_m2, dt, material)
-  fld::system::shutdown()
+VulkanFluid
+  build.c                    c build static library
+  fld/core/                  public types and high-level scene state
+  fld/material/              physical liquid and solid contact properties
+  fld/math/                  numerical helpers
+  fld/simulation/            GPU particle solver and neighbor search
+  fld/surface/               surface/topology treatment (as needed)
+  fld/porous/                deferred
+  fld/render/                optical surface reconstruction
+  fld/shaders/               Vulkan compute and rendering shaders
 
-The 3D SPH solver and the finite-volume surface solver share the same fluid
-material and density/rheology parameters. Surface transport uses tangent
-gravity, a regularized capillary pressure gradient and bounded conservative
-face fluxes. Porous uptake transfers liquid from mobile film to pores without
-losing mass; wicking uses separate U/V diffusivities for fabric directionality.
-A successful film->particle emission explicitly removes the corresponding
-volume from its film. Unsupported/failing emission preserves its source mass.
-
-The CPU solver uses physical SI units. It is a real-time thin-film approximation,
-not a complete 3D Navier-Stokes/free-surface solve on every cloth fibre and
-not a validated vascular injury or forensic reconstruction.
+This branch intentionally contains NO legacy liquid simulation.
+Physical property helpers are the first verified implementation component;
+the high-performance GPU solver and renderer are NOT implemented yet.
+Main is unchanged until a functional baseline can be tested.

@@ -1,10 +1,4 @@
 #pragma once
-#include "core/types.hpp"
-#include "core/system.hpp"
-#include "math/kernels.hpp"
-#include "material/contact.hpp"
-#include "material/rheology.hpp"
-#include "simulation/solver.hpp"
-#include "surface/film.hpp"
-#include "porous/transport.hpp"
-#include "render/renderer.hpp"
+// Public entry point. A GPU liquid solver is deliberately NOT exposed until
+// it passes validation; this branch contains physical primitives only.
+#include "material/properties.hpp"
