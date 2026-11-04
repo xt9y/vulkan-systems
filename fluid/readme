@@ -1,0 +1,14 @@
+fluid
+  fld::system::init(options)
+  fld::system::add_material(properties)
+  fld::system::emit(source)
+  fld::system::splash(material_driven_impact)
+  fld::system::update(seconds, collision, contact)
+  fld::system::get()->particles
+  fld::system::clear()
+  fld::system::clear_phase(material_phase)
+  fld::system::shutdown()
+
+Independent Vulkan/C++ liquid simulation and rendering. The same
+solver and renderer handle any phase, including blood; each material owns
+density, rheology, surface tension, contact and optical properties.

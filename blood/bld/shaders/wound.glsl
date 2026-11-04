@@ -1,42 +1,52 @@
-// Include in your skinned fragment shader. Bind one actor's bld::render::wound
-// descriptor at set 0, binding 14. Data is packed R4 coverage/G4 wetness.
-layout(std430, set = 0, binding = 14) readonly buffer BloodWounds
+// Surface wetness stored in the mesh UV atlas, attached through animations.
+// One 32-bit word per texel: coverage, wetness, thickness, porosity.
+layout(std430,set=0,binding=14) readonly buffer BloodSurfaceAtlas
 {
-    uint blood_pixels[];
+    uint bld_pixels[];
 };
 
-vec2 bld_wound_texel(ivec2 xy, int width, uint instance_index)
+vec4 bld_texel(ivec2 p,int resolution,uint instance_index)
 {
-    xy = clamp(xy, ivec2(0), ivec2(width - 1));
-    uint pixel = uint(xy.y * width + xy.x);
-    uint offset = instance_index * uint(width * width / 4);
-    uint value = (blood_pixels[offset + pixel / 4u] >>
-                  ((pixel & 3u) * 8u)) & 255u;
-    return vec2(float(value >> 4u), float(value & 15u)) / 15.0;
+    p=clamp(p,ivec2(0),ivec2(resolution-1));
+    uint total=bld_pixels[0];
+    if(instance_index>=total)return vec4(0.0);
+    uint slot=bld_pixels[1u+instance_index];
+    if(slot==0xffffffffu)return vec4(0.0);
+    uint index=1u+total+slot*uint(resolution*resolution)+
+               uint(p.y*resolution+p.x);
+    uint packed=bld_pixels[index];
+    return vec4(float((packed>>24u)&255u),
+                float((packed>>16u)&255u),
+                float((packed>>8u)&255u),
+                float(packed&255u))/255.0;
 }
 
-vec2 bld_wound_sample(vec2 uv, int width, uint instance_index)
+vec4 bld_sample(vec2 uv,int resolution,uint instance_index)
 {
-    vec2 p = clamp(uv, vec2(0), vec2(1)) * float(width - 1);
-    ivec2 origin = ivec2(floor(p));
-    vec2 t = fract(p);
-    return mix(
-        mix(bld_wound_texel(origin, width, instance_index),
-            bld_wound_texel(origin + ivec2(1, 0), width, instance_index), t.x),
-        mix(bld_wound_texel(origin + ivec2(0, 1), width, instance_index),
-            bld_wound_texel(origin + ivec2(1, 1), width, instance_index), t.x),
-        t.y
-    );
+    vec2 p=clamp(uv,vec2(0),vec2(1))*float(resolution-1);
+    ivec2 origin=ivec2(floor(p));
+    vec2 t=fract(p);
+    vec4 a=mix(bld_texel(origin,resolution,instance_index),
+               bld_texel(origin+ivec2(1,0),resolution,instance_index),t.x);
+    vec4 b=mix(bld_texel(origin+ivec2(0,1),resolution,instance_index),
+               bld_texel(origin+ivec2(1,1),resolution,instance_index),t.x);
+    return mix(a,b,t.y);
 }
 
-void bld_wound_material(vec2 uv, int width, uint instance_index,
-                        inout vec3 albedo, inout float roughness)
+void bld_material(vec2 uv,int resolution,uint instance_index,
+                  inout vec3 albedo,inout float roughness,
+                  inout float metallic)
 {
-    vec2 wound = bld_wound_sample(uv, width, instance_index);
-    float coverage = wound.x;
-    float wetness = wound.y;
-    vec3 dried = vec3(.05, .008, .006);
-    vec3 fresh = vec3(.17, .006, .011);
-    albedo = mix(albedo, mix(dried, fresh, wetness), coverage);
-    roughness = mix(roughness, mix(.78, .13, wetness), coverage);
+    vec4 stain=bld_sample(uv,resolution,instance_index);
+    float coverage=stain.x;
+    float wet=stain.y;
+    float depth=stain.z;
+    float absorbency=stain.w;
+    vec3 fresh=vec3(.125,.005,.011);
+    vec3 dry=vec3(.038,.008,.006);
+    vec3 pigment=mix(dry,fresh,wet)*mix(.91,.63,depth);
+    albedo=mix(albedo,pigment,coverage);
+    float wet_roughness=mix(.76,.13,wet*(1.0-absorbency*.86));
+    roughness=mix(roughness,wet_roughness,coverage);
+    metallic=mix(metallic,0.0,coverage);
 }

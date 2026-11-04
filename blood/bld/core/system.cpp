@@ -1,5 +1,6 @@
 #include "system.hpp"
-#include "../math/geometry.hpp"
+#include "../material/blood.hpp"
+#include "../surfaces/stains.hpp"
 #include "../network/events.hpp"
 #include <algorithm>
 #include <cmath>
@@ -7,158 +8,152 @@
 
 namespace bld::system
 {
-    namespace { state *data = nullptr; }
+    namespace { state *data=nullptr; }
 
     state *get() { return data; }
 
-    void init(const settings &options)
+    void init(const options &options)
     {
-        if (data) throw std::logic_error("Blood system already initialized");
-        if (!(options.fixed_step > 0.f) ||
-            options.fixed_step > .05f ||
-            options.wound_resolution < 16 ||
-            options.wound_resolution > 2048 ||
-            (options.wound_resolution % 2u) != 0u)
-            throw std::invalid_argument("Invalid blood system settings");
-        data = new state{};
-        data->options = options;
+        if(data)throw std::logic_error("Blood system already initialized");
+        data=new state{};
+        data->settings=options;
         try
         {
-            surfaces::init(options);
-            wounds::init(options);
-            simulation::init(options);
+            if(!fld::system::get())
+            {
+                // Keep a shared solver for other liquid systems.
+                fld::system::init(options.fluid);
+                data->owns_fluid=true;
+            }
+            data->phase=fld::system::add_material(material::physical());
+            surface::init(options);
         }
-        catch (...)
+        catch(...)
         {
-            simulation::shutdown();
-            wounds::shutdown();
-            surfaces::shutdown();
+            surface::shutdown();
+            if(data->owns_fluid)fld::system::shutdown();
             delete data;
-            data = nullptr;
+            data=nullptr;
             throw;
         }
     }
 
     impact hit(impact event)
     {
-        if (!data) throw std::logic_error("Initialize blood before impact");
-        if (!event.id) event.id = data->sequence++;
-        if (!event.seed) event.seed = std::uint32_t(event.id) ^
-                                           std::uint32_t(event.id >> 32);
+        if(!data)throw std::logic_error("Blood system not initialized");
+        if(!event.id)event.id=data->sequence++;
+        if(!event.seed)
+            event.seed=std::uint32_t(event.id ^ (event.id>>32u));
         apply(event);
         return event;
     }
 
     void apply(const impact &event)
     {
-        if (!data || event.type != material::flesh) return;
-        if (!std::isfinite(event.position.x) || !std::isfinite(event.position.y) ||
-            !std::isfinite(event.position.z) ||
-            !std::isfinite(event.normal.x) || !std::isfinite(event.normal.y) ||
-            !std::isfinite(event.normal.z) ||
-            !std::isfinite(event.direction.x) || !std::isfinite(event.direction.y) ||
-            !std::isfinite(event.direction.z) ||
-            !std::isfinite(event.energy) || event.energy <= 0.f) return;
+        if(!data || !fld::system::get() ||
+           !std::isfinite(event.position.x) ||
+           !std::isfinite(event.position.y) ||
+           !std::isfinite(event.position.z) ||
+           !std::isfinite(event.amount_ml) ||
+           !std::isfinite(event.velocity) ||
+           event.amount_ml<=0 || event.velocity<0)return;
 
-        simulation::emit(event);
-        if (event.target && surfaces::is_skinned(event.target))
-        {
-            // UV marks are only meaningful on a skinned surface. Rigid mesh UV
-            // hits belong in the projected surface-decal system instead.
-            if (event.uv_valid)
-            {
-                auto seed = event.seed;
-                wounds::stamp(event.target, event.uv,
-                              .012f + math::unit(seed) * .016f,
-                              .85f + math::unit(seed)*.15f, seed);
-                const auto attached = surfaces::get()->transforms.find(event.target);
-                if (attached != surfaces::get()->transforms.end())
-                {
-                    const auto local = math::transform_point(
-                        math::inverse_affine(attached->second), event.position);
-                    wounds::source_at(event.target, local, event.energy, seed);
-                }
-            }
-        }
-        else if (event.target)
-        {
-            surfaces::add(event.target, event.position, event.normal,
-                          .10f, event.seed, false, 1.2f);
-        }
+        const auto outward=fld::math::safe_normal(event.normal);
+        const auto travel=fld::math::safe_normal(event.direction);
+        const float velocity=std::clamp(event.velocity,0.f,25.f);
 
-        if (data->pending_backdrops.size() >= 32)
-            data->pending_backdrops.erase(data->pending_backdrops.begin());
-        data->pending_backdrops.push_back(event);
+        fld::splash_source source{};
+        source.position=event.position;
+        source.normal=outward;
+        source.velocity=outward*velocity + travel*(velocity*.18f);
+        source.volume=std::clamp(event.amount_ml,.1f,30.f)*.000001f;
+        source.group=std::uint32_t(event.id ^ (event.id>>32u));
+        source.phase=data->phase;
+        source.seed=event.seed;
+        source.lifetime=4.f;
+        if(const auto *surfaces=surface::get())
+        {
+            const auto owner=surfaces->targets.find(event.target);
+            if(owner!=surfaces->targets.end())
+                source.surface=material::interaction(owner->second.kind);
+        }
+        // Both blood and other liquids use EXACTLY this generic solver path.
+        const auto splash=fld::system::splash(source);
+        if(event.target && splash.retained_volume>0.f)
+            surface::deposit(event.target,event.position,event.normal,
+                             event.uv,event.uv_valid,
+                             splash.retained_volume*1e6f,
+                             velocity,event.seed);
+        ++data->impacts;
     }
 
-    void update(float dt, const collision_callback &world)
+    void update(float dt,const collision_callback &world)
     {
-        if (!data) return;
+        if(!data)return;
         network::dispatch();
-        const float bounded = std::max(0.f, std::min(dt, .12f));
-        if (bounded == 0) return;
-        data->accumulator += bounded;
-        const double step = data->options.fixed_step;
-        for (int iterations = 0;
-             data->accumulator >= step && iterations < 24;
-             ++iterations)
-        {
-            if (world && !data->pending_backdrops.empty())
+        // Surface class decides whether the impacted portion adheres, wicks,
+        // or rebounds. The solver computes liquid motion and contacts.
+        fld::system::update(dt,
+            [&](fld::vec3 from,fld::vec3 to,float radius)->fld::collision
             {
-                for (const auto &event : data->pending_backdrops)
+                if(!world)return {};
+                auto hit=world(from,to,radius);
+                if(!hit.hit)return hit;
+                const auto *surfaces=surface::get();
+                // Unregistered scene geometry is a passive hard wall.
+                // Never delete liquid mass because a target has no stain
+                // handler. The host can register a surface at any time.
+                if(!surfaces || !surfaces->targets.count(hit.target))
                 {
-                    auto travel = math::direction(event.direction, {0, 0, 1});
-                    auto a = event.position + travel * .07f;
-                    for (int i = 0; i < 5; ++i)
-                    {
-                        const auto b = a + travel * 4.f;
-                        const auto struck = world(a, b);
-                        if (!struck.hit) break;
-                        if (struck.target != event.target)
-                        {
-                            auto seed = event.seed;
-                            surfaces::add(struck, .16f + .10f * math::unit(seed),
-                                          seed, false, 1.45f);
-                            break;
-                        }
-                        a = struck.position + travel * .045f;
-                    }
+                    hit.material_response=false;
+                    hit.absorb=false;
+                    hit.deposition_fraction=0.f;
+                    hit.restitution=.02f;
+                    hit.friction=.65f;
+                    return hit;
                 }
-                data->pending_backdrops.clear();
-            }
-            simulation::update(float(step), world);
-            for (auto p : wounds::update(float(step)))
-                simulation::drip(p, std::uint32_t(++data->sequence));
-            surfaces::update(float(step));
-            ++data->steps;
-            data->accumulator -= step;
-        }
-        if (data->accumulator > step*2) data->accumulator = step;
-        if (!world) data->pending_backdrops.clear();
+                const auto it=surfaces->targets.find(hit.target);
+                // The blood layer only describes the receiving surface.
+                // Actual wetting, absorption and rebound are solved in fld.
+                hit.surface=material::interaction(it->second.kind);
+                hit.material_response=true;
+                return hit;
+            },
+            [&](const fld::particle &p,const fld::collision &hit)
+            {
+                if(p.phase!=data->phase || !hit.target)return;
+                const float speed=fld::math::norm(p.velocity);
+                const auto &physical=material::physical();
+                const float volume_ml=p.mass/physical.density*1e6f;
+                surface::deposit(hit.target,hit.position,hit.normal,
+                                 hit.uv,hit.uv_valid,volume_ml,
+                                 speed,p.group);
+                ++data->deposited;
+            });
+        surface::update(dt);
     }
 
     void clear()
     {
-        if (!data) return;
-        const auto options = data->options;
-        simulation::shutdown();
-        wounds::shutdown();
-        surfaces::shutdown();
-        surfaces::init(options);
-        wounds::init(options);
-        simulation::init(options);
-        data->pending_backdrops.clear();
+        if(!data)return;
+        fld::system::clear_phase(data->phase);
+        surface::clear();
         network::reset();
-        data->accumulator = 0;
+        data->impacts=data->deposited=0;
     }
 
     void shutdown()
     {
+        if(!data)return;
         network::shutdown();
-        simulation::shutdown();
-        wounds::shutdown();
-        surfaces::shutdown();
+        surface::shutdown();
+        fld::system::clear_phase(data->phase);
+        // If another liquid phase was registered after blood initialized
+        // the shared solver, leave it owned by that remaining host.
+        if(data->owns_fluid && fld::system::get() &&
+           fld::system::get()->materials.size()<=2u)
+            fld::system::shutdown();
         delete data;
-        data = nullptr;
+        data=nullptr;
     }
 }
