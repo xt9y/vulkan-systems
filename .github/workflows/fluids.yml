@@ -24,6 +24,7 @@ jobs:
       - name: Compile GLSL
         run: |
           glslangValidator -V fluid/fld/shaders/surface.comp -o /tmp/fluid.spv
+          glslangValidator -V -Iblood/bld/shaders tests/blood_shader.frag -o /tmp/blood.frag.spv
       - name: Configure private sibling dependencies
         env:
           DEPENDENCY_TOKEN: ${{ secrets.VULKAN_DEPS_TOKEN }}
