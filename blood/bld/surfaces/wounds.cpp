@@ -93,9 +93,9 @@ namespace bld::wounds
             s.age += dt;
             if (s.age > 9.f || s.age < s.next_drip) continue;
             const auto transforms = surfaces::get();
-            auto it = transforms ? transforms->transforms.find(s.target) :
-                                   std::unordered_map<instance_id, mat4>::const_iterator{};
-            if (!transforms || it == transforms->transforms.end()) continue;
+            if (!transforms) continue;
+            const auto it = transforms->transforms.find(s.target);
+            if (it == transforms->transforms.end()) continue;
             emission.push_back(math::transform_point(it->second, s.local_position));
             s.next_drip += .6f + math::unit(s.seed) * 1.4f;
         }

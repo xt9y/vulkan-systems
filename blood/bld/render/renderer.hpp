@@ -42,6 +42,7 @@ namespace bld::render
               std::uint32_t max_width, std::uint32_t max_height);
     // Call in the host's render graph after GBuffer, before lighting/compositing.
     // The host transitions output to GENERAL and inputs to readable layouts.
+    // Wait for frame fences before reusing frame_index or releasing GPU resources.
     void record(vk::CommandBuffer command, std::uint32_t frame_index,
                 const input &targets);
     void shutdown();
