@@ -4,6 +4,8 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace fld::surface
 {
@@ -108,6 +110,86 @@ namespace fld::surface
                 point.valid=true;
             }
         }
+        // Link touching regions even when their UV coordinates are far
+        // apart. Geometry is sampled per chart texel, so make a sparse
+        // spatial hash of boundary texels and connect nearby counterparts.
+        // This is a conservative contact topology, not an artist-made blur.
+        f.seam_links.clear();
+        const float du=f.metres_per_uv.x/f.width;
+        const float dv=f.metres_per_uv.y/f.height;
+        const float proximity=std::max(.0002f,2.8f*std::sqrt(du*du+dv*dv));
+        const float inv=1.f/proximity;
+        struct key
+        {
+            int x,y,z;
+            bool operator==(const key &b) const
+            {return x==b.x && y==b.y && z==b.z;}
+        };
+        struct hash
+        {
+            std::size_t operator()(key p) const
+            {
+                std::size_t h=14695981039346656037ull;
+                h=(h^std::uint32_t(p.x))*1099511628211ull;
+                h=(h^std::uint32_t(p.y))*1099511628211ull;
+                h=(h^std::uint32_t(p.z))*1099511628211ull;
+                return h;
+            }
+        };
+        const auto cell_key=[&](vec3 p)->key
+        {return {int(std::floor(p.x*inv)),int(std::floor(p.y*inv)),
+                 int(std::floor(p.z*inv))};};
+        std::unordered_map<key,std::vector<std::uint32_t>,hash> buckets;
+        std::vector<std::uint32_t> boundary;
+        for(std::uint32_t y=0;y<f.height;++y)
+            for(std::uint32_t x=0;x<f.width;++x)
+            {
+                const auto id=std::uint32_t(index(f,x,y));
+                if(!f.geometry[id].valid)continue;
+                const bool edge=x==0 || y==0 || x+1==f.width ||
+                                y+1==f.height ||
+                    !f.geometry[index(f,x-std::uint32_t(x>0),y)].valid ||
+                    !f.geometry[index(f,x+std::uint32_t(x+1<f.width),y)].valid ||
+                    !f.geometry[index(f,x,y-std::uint32_t(y>0))].valid ||
+                    !f.geometry[index(f,x,y+std::uint32_t(y+1<f.height))].valid;
+                if(!edge)continue;
+                boundary.push_back(id);
+                buckets[cell_key(f.geometry[id].position)].push_back(id);
+            }
+        std::unordered_set<std::uint64_t> seen;
+        for(const auto a:boundary)
+        {
+            const auto ka=cell_key(f.geometry[a].position);
+            float best=proximity*proximity;
+            std::uint32_t target=~std::uint32_t{0};
+            for(int dz=-1;dz<=1;++dz)
+                for(int dy=-1;dy<=1;++dy)
+                    for(int dx=-1;dx<=1;++dx)
+                    {
+                        const auto it=buckets.find({ka.x+dx,ka.y+dy,ka.z+dz});
+                        if(it==buckets.end())continue;
+                        for(const auto b:it->second)
+                        {
+                            const auto ax=a%f.width,ay=a/f.width;
+                            const auto bx=b%f.width,by=b/f.width;
+                            if(std::abs(int(ax)-int(bx))<=2 &&
+                               std::abs(int(ay)-int(by))<=2)continue;
+                            const auto &A=f.geometry[a],&B=f.geometry[b];
+                            if(dot3(A.normal,B.normal)<.65f)continue;
+                            const auto d=A.position-B.position;
+                            const float distance2=dot3(d,d);
+                            if(distance2<best)
+                            {
+                                best=distance2;
+                                target=b;
+                            }
+                        }
+                    }
+            if(target==~std::uint32_t{0})continue;
+            const auto lo=std::min(a,target),hi=std::max(a,target);
+            const auto pair=(std::uint64_t(lo)<<32u)|hi;
+            if(seen.insert(pair).second)f.seam_links.emplace_back(lo,hi);
+        }
         ++f.generation;
     }
 
@@ -133,10 +215,25 @@ namespace fld::surface
         }
         if(sum<=0.f)
         {
-            // No valid chart texel: retain the impact in the nearest cell
-            // rather than discard source mass.
-            const int x=std::clamp(int(cx+.5f),0,int(f.width)-1);
-            const int y=std::clamp(int(cy+.5f),0,int(f.height)-1);
+            // A hit may fall between UV islands. Use the closest actual
+            // surface texel, not an invalid cell where flow cannot advance.
+            int x=std::clamp(int(cx+.5f),0,int(f.width)-1);
+            int y=std::clamp(int(cy+.5f),0,int(f.height)-1);
+            if(!f.geometry.empty() && !f.geometry[index(f,x,y)].valid)
+            {
+                float nearest=std::numeric_limits<float>::infinity();
+                for(std::uint32_t j=0;j<f.height;++j)
+                    for(std::uint32_t i=0;i<f.width;++i)
+                    {
+                        if(!f.geometry[index(f,i,j)].valid)continue;
+                        const float d=squared(float(i)-cx)+squared(float(j)-cy);
+                        if(d<nearest)
+                        {
+                            nearest=d;
+                            x=int(i);y=int(j);
+                        }
+                    }
+            }
             f.cells[index(f,x,y)].mobile+=amount;
         }
         else
