@@ -6,6 +6,7 @@ void build(C_Build *b)
     c_sources(blood, "bld/core/*.cpp");
     c_sources(blood, "bld/material/*.cpp");
     c_sources(blood, "bld/surfaces/*.cpp");
+    c_sources(blood, "bld/wounds/*.cpp");
     c_sources(blood, "bld/network/*.cpp");
     c_sources(blood, "bld/render/*.cpp");
     c_include(blood, ".");
