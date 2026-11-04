@@ -26,6 +26,8 @@ int main()
     wound.bleeding_rate_ml_s=1.5f;
     wound.bleeding_decay_seconds=10.f;
     bld::system::hit(wound);
+    assert(bld::system::get()->impacts==1);
+    assert(fld::system::get()->stats.emitted_mass_kg>0.);
     assert(bld::system::get()->open_wounds.size()==1);
     const double initial_surface=bld::surface::volume();
     assert(initial_surface>0.);
