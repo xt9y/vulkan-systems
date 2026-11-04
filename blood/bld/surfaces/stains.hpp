@@ -1,6 +1,7 @@
 #pragma once
 #include "../core/types.hpp"
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace bld::surface
@@ -54,7 +55,9 @@ namespace bld::surface
         std::unordered_map<instance_id,target> targets;
         std::unordered_map<instance_id,atlas> atlases;
         std::vector<rigid_stain> stains;
+        std::unordered_set<instance_id> rigid_targets;
         std::uint64_t generation=1;
+        float rigid_update_accumulator=0.f;
     };
 
     state *get();
