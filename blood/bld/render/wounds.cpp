@@ -2,7 +2,9 @@
 #include "../surfaces/stains.hpp"
 #include "../core/system.hpp"
 #include <algorithm>
+#include <cstring>
 #include <limits>
+#include <unordered_map>
 #include <stdexcept>
 
 namespace bld::render::wounds
@@ -79,8 +81,9 @@ namespace bld::render::wounds
     bool visible(instance_id id)
     {
         const auto *a=surface::find(id);
-        return a && (!a->marks.empty() ||
-               !a->baked_pixels.empty());
+        const auto *surfaces=surface::get();
+        return (a && (!a->marks.empty() || !a->baked_pixels.empty())) ||
+            (surfaces && surfaces->rigid_targets.count(id)!=0);
     }
 
     vk::DescriptorBufferInfo descriptor(instance_id id,std::uint32_t frame)
@@ -157,11 +160,83 @@ namespace bld::render::wounds
         return write(entry,frame,packed,signature);
     }
 
+    vk::DescriptorBufferInfo descriptor_projected_batch(
+        std::uint32_t mesh,const std::vector<instance_id> &ids,
+        std::uint32_t frame)
+    {
+        if(!data || frame>=data->frames || !mesh)
+            throw std::invalid_argument("Invalid projected blood batch");
+        const auto *surfaces=surface::get();
+        if(!surfaces || ids.empty() || surfaces->stains.empty())
+            return vk::buffer::descriptor(data->fallback);
+
+        std::unordered_map<instance_id,std::vector<const surface::rigid_stain*>> grouped;
+        grouped.reserve(surfaces->rigid_targets.size());
+        for(const auto &stain:surfaces->stains)
+            grouped[stain.target].push_back(&stain);
+        std::size_t total=0;
+        for(const auto id:ids)
+        {
+            const auto iter=grouped.find(id);
+            if(iter!=grouped.end())
+                total+=std::min<std::size_t>(64,iter->second.size());
+        }
+        if(!total)return vk::buffer::descriptor(data->fallback);
+        if(ids.size()>std::numeric_limits<std::uint32_t>::max() ||
+           total>(std::numeric_limits<std::uint32_t>::max()-1-2*ids.size())/8)
+            throw std::overflow_error("Projected blood batch too large");
+        std::uint64_t signature=14695981039346656037ull;
+        signature=(signature^surfaces->generation)*1099511628211ull;
+        for(const auto id:ids)
+            signature=(signature^id)*1099511628211ull;
+        auto &entry=data->projected_batches[mesh];
+        if(!entry.buffers.empty() && entry.generations.at(frame)==signature)
+            return vk::buffer::descriptor(entry.buffers.at(frame));
+
+        // words: instance count, per-instance offset/count, then 2 vec4s
+        // per mark. The shader only looks up the current instance's span.
+        std::vector<std::uint32_t> packed(1+2*ids.size()+8*total,0);
+        packed[0]=std::uint32_t(ids.size());
+        const auto bits=[](float value)
+        {
+            std::uint32_t result=0;
+            std::memcpy(&result,&value,sizeof(result));
+            return result;
+        };
+        std::size_t slot=0;
+        const auto base=1+2*ids.size();
+        for(std::size_t i=0;i<ids.size();++i)
+        {
+            const auto iter=grouped.find(ids[i]);
+            packed[1+i]=std::uint32_t(slot);
+            if(iter==grouped.end())continue;
+            const auto &marks=iter->second;
+            const auto begin=marks.size()>64?marks.size()-64:0;
+            packed[1+ids.size()+i]=std::uint32_t(marks.size()-begin);
+            for(std::size_t j=begin;j<marks.size();++j)
+            {
+                const auto &mark=*marks[j];
+                const auto at=base+8*slot++;
+                packed[at+0]=bits(mark.world(0,3));
+                packed[at+1]=bits(mark.world(1,3));
+                packed[at+2]=bits(mark.world(2,3));
+                packed[at+3]=bits(mark.radius);
+                packed[at+4]=bits(mark.normal.x);
+                packed[at+5]=bits(mark.normal.y);
+                packed[at+6]=bits(mark.normal.z);
+                packed[at+7]=bits(mark.wetness);
+            }
+        }
+        return write(entry,frame,packed,signature);
+    }
+
     void clear_batches()
     {
         if(!data)return;
         for(auto &[id,item]:data->batches)destroy(item);
         data->batches.clear();
+        for(auto &[id,item]:data->projected_batches)destroy(item);
+        data->projected_batches.clear();
     }
 
     void shutdown()
