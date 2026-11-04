@@ -43,3 +43,13 @@ jobs:
             fluid/fld/simulation/solver.cpp \
             -o /tmp/fluid_physics
           /tmp/fluid_physics
+      - name: Persistent clothing atlas regression
+        run: |
+          clang++ -std=c++17 -O2 -I/tmp/vkengine -I fluid -I blood \
+            tests/blood_atlas.cpp \
+            blood/bld/surfaces/stains.cpp \
+            blood/bld/material/blood.cpp \
+            fluid/fld/material/rheology.cpp \
+            fluid/fld/math/kernels.cpp \
+            -o /tmp/blood_atlas
+          /tmp/blood_atlas
