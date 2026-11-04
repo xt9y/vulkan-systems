@@ -21,12 +21,9 @@ namespace bld::surface
             if(std::abs(det)<1e-10f)return mat4::identity();
             vec3 x=cross(b,c)/det,y=cross(c,a)/det,z=cross(a,b)/det;
             mat4 out=mat4::identity();
-            for(int i=0;i<3;++i)
-            {
-                out(0,i)=(&x.x)[i];
-                out(1,i)=(&y.x)[i];
-                out(2,i)=(&z.x)[i];
-            }
+            out(0,0)=x.x;out(0,1)=x.y;out(0,2)=x.z;
+            out(1,0)=y.x;out(1,1)=y.y;out(1,2)=y.z;
+            out(2,0)=z.x;out(2,1)=z.y;out(2,2)=z.z;
             const vec3 p{m(0,3),m(1,3),m(2,3)};
             out(0,3)=-dot(x,p);
             out(1,3)=-dot(y,p);
@@ -65,6 +62,12 @@ namespace bld::surface
                 const float cy=mark.uv.y*float(w-1);
                 const float rx=std::max(1.f,ux*float(w));
                 const float ry=std::max(1.f,uy*float(w));
+                const auto target=data->targets.find(image.target);
+                const vec2 metric=target!=data->targets.end() ?
+                    target->second.metres_per_uv : vec2{1.f,1.f};
+                const float area=pi*ux*metric.x*uy*metric.y;
+                const float film_thickness=mark.volume_ml*.000001f /
+                    std::max(area,1e-8f);
                 const int reach=int(std::ceil(std::max(rx,ry)*1.5f));
                 const float wet=std::clamp(
                     mark.wetness*std::exp(-mark.age/
@@ -88,9 +91,9 @@ namespace bld::surface
                         const std::uint32_t old=image.pixels[value];
                         const float old_cov=float(old>>24u)/255.f;
                         const float new_cov=coverage+old_cov*(1.f-coverage);
+                        // Normalized film thickness, where 1 means 1 mm.
                         const float amount=std::clamp(
-                            mark.volume_ml/(pi*ux*uy*1000.f),
-                            .02f,1.f);
+                            film_thickness/.001f,.008f,1.f);
                         const auto old_depth=float((old>>8u)&255u)/255.f;
                         const auto new_depth=std::max(old_depth,coverage*amount);
                         const auto old_wet=float((old>>16u)&255u)/255.f;
@@ -217,7 +220,22 @@ namespace bld::surface
         stain.seed=seed;
         stain.kind=registered->second.kind;
         stain.normal=normal;
+        const auto n=fld::math::safe_normal(normal);
+        const vec3 helper=std::abs(n.y)<.9f ?
+            vec3{0,1,0}:vec3{1,0,0};
+        const auto tangent=fld::math::safe_normal(
+            vk::util::math::cross(helper,n));
+        const auto bitangent=vk::util::math::cross(n,tangent);
         stain.world=fld::mat4::identity();
+        stain.world(0,0)=tangent.x;
+        stain.world(1,0)=tangent.y;
+        stain.world(2,0)=tangent.z;
+        stain.world(0,1)=bitangent.x;
+        stain.world(1,1)=bitangent.y;
+        stain.world(2,1)=bitangent.z;
+        stain.world(0,2)=n.x;
+        stain.world(1,2)=n.y;
+        stain.world(2,2)=n.z;
         stain.world(0,3)=position.x;
         stain.world(1,3)=position.y;
         stain.world(2,3)=position.z;
