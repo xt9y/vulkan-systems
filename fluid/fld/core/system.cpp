@@ -14,9 +14,10 @@ namespace fld::system
         {
             vec4 gravity_dt;
             vec4 liquid;
+            vec4 contact; // sigma, cos advancing, cos receding, viscosity
             std::array<std::uint32_t,4> indices;
         };
-        static_assert(sizeof(parameters)==48);
+        static_assert(sizeof(parameters)==64);
 
         void barrier(vk::CommandBuffer command)
         {
@@ -115,10 +116,12 @@ namespace fld::system
                                               usage,memory);
             data->deltas=vk::buffer::create(seeded.size()*sizeof(vec4),
                                              usage,memory);
+            data->normals=vk::buffer::create(seeded.size()*sizeof(vec4),
+                                              usage,memory);
             vk::buffer::write(data->particles,seeded.data(),
                               seeded.size()*sizeof(particle));
 
-            std::array<vk::DescriptorSetLayoutBinding,5> bindings{};
+            std::array<vk::DescriptorSetLayoutBinding,6> bindings{};
             for(std::uint32_t i=0;i<bindings.size();++i)
             {
                 bindings[i].binding=i;
@@ -163,7 +166,7 @@ namespace fld::system
             }
 
             vk::DescriptorPoolSize size{
-                vk::DescriptorType::eStorageBuffer,5
+                vk::DescriptorType::eStorageBuffer,6
             };
             vk::DescriptorPoolCreateInfo pool{};
             pool.maxSets=1;
@@ -176,14 +179,15 @@ namespace fld::system
             allocation.pSetLayouts=&data->descriptor_layout;
             data->descriptors=device.allocateDescriptorSets(allocation).front();
 
-            const std::array<vk::DescriptorBufferInfo,5> buffers{{
+            const std::array<vk::DescriptorBufferInfo,6> buffers{{
                 vk::buffer::descriptor(data->particles),
                 vk::buffer::descriptor(data->heads),
                 vk::buffer::descriptor(data->next),
                 vk::buffer::descriptor(data->lambdas),
-                vk::buffer::descriptor(data->deltas)
+                vk::buffer::descriptor(data->deltas),
+                vk::buffer::descriptor(data->normals)
             }};
-            std::array<vk::WriteDescriptorSet,5> writes{};
+            std::array<vk::WriteDescriptorSet,6> writes{};
             for(std::uint32_t i=0;i<writes.size();++i)
             {
                 writes[i].dstSet=data->descriptors;
@@ -218,6 +222,12 @@ namespace fld::system
                      data->settings.spacing,
                      data->settings.smoothing_radius,
                      data->settings.floor_height};
+        push.contact={
+            data->settings.liquid.surface_tension,
+            std::cos(data->settings.liquid.advancing_angle),
+            std::cos(data->settings.liquid.receding_angle),
+            data->settings.liquid.dynamic_viscosity
+        };
         push.indices={data->count,data->bucket_count,
                       data->settings.pressure_iterations,0};
         barrier(command); // RAW dependency from earlier queued submissions
@@ -231,8 +241,17 @@ namespace fld::system
                 dispatch(command,3,data->count,push);     // constraints
                 dispatch(command,4,data->count,push);     // Jacobi correction
                 dispatch(command,5,data->count,push);     // apply
+                if(i+1<data->settings.pressure_iterations)
+                {
+                    // Each Jacobi iteration updates positions; rebuild cell
+                    // membership to keep the SPH neighbor graph consistent.
+                    dispatch(command,0,data->bucket_count,push);
+                    dispatch(command,2,data->count,push);
+                }
             }
             dispatch(command,6,data->count,push);         // final velocity
+            dispatch(command,7,data->count,push);         // color gradient
+            dispatch(command,8,data->count,push);         // capillary force
         }
         data->simulated_seconds+=dt*data->settings.substeps;
     }
@@ -256,6 +275,7 @@ namespace fld::system
             if(data->next.handle)vk::buffer::destroy(data->next);
             if(data->lambdas.handle)vk::buffer::destroy(data->lambdas);
             if(data->deltas.handle)vk::buffer::destroy(data->deltas);
+            if(data->normals.handle)vk::buffer::destroy(data->normals);
         }
         delete data;
         data=nullptr;
