@@ -172,7 +172,12 @@ namespace bld::system
                                  speed,p.group);
                 ++data->deposited;
             });
-        surface::update(dt);
+        surface::update(dt,[&](const fld::emission &drop)
+        {
+            fld::emission e=drop;
+            e.phase=data->phase;
+            return fld::system::emit(e)>0;
+        });
     }
 
     void clear()
