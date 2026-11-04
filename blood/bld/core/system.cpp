@@ -52,8 +52,12 @@ namespace bld::system
     {
         if (!data || event.type != material::flesh) return;
         if (!std::isfinite(event.position.x) || !std::isfinite(event.position.y) ||
-            !std::isfinite(event.position.z) || !std::isfinite(event.energy) ||
-            event.energy <= 0.f) return;
+            !std::isfinite(event.position.z) ||
+            !std::isfinite(event.normal.x) || !std::isfinite(event.normal.y) ||
+            !std::isfinite(event.normal.z) ||
+            !std::isfinite(event.direction.x) || !std::isfinite(event.direction.y) ||
+            !std::isfinite(event.direction.z) ||
+            !std::isfinite(event.energy) || event.energy <= 0.f) return;
 
         simulation::emit(event);
         if (event.uv_valid && event.target)
@@ -121,6 +125,7 @@ namespace bld::system
             data->accumulator -= step;
         }
         if (data->accumulator > step*2) data->accumulator = step;
+        if (!world) data->pending_backdrops.clear();
     }
 
     void clear()

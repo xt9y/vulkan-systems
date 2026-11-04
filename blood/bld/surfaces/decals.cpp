@@ -26,12 +26,19 @@ namespace bld::surfaces
     void remove_transform(instance_id id)
     {
         if (!data) return;
-        data->transforms.erase(id);
+        const auto owner = data->transforms.find(id);
+        if (owner != data->transforms.end())
+        {
+            for (auto &decal : data->decals)
+                if (decal.target == id)
+                    decal.world = owner->second * decal.local;
+            data->transforms.erase(owner);
+        }
         for (auto &decal : data->decals)
         {
             if (decal.target != id) continue;
             // Keep the last world-space projection if the rigid owner disappears.
-            // The last resolved world transform is retained when detached.
+            // Preserve the last attached world-space projection.
             decal.target = 0;
         }
     }

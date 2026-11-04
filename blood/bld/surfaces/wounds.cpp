@@ -32,7 +32,6 @@ namespace bld::wounds
     {
         if (!data || !target || !data->max_marks ||
             uv.x < 0 || uv.y < 0 || uv.x > 1 || uv.y > 1) return;
-        if (data->marks >= data->max_marks) return;
         if (data->atlases.size() >= data->max_instances &&
             data->atlases.find(target) == data->atlases.end()) return;
 
@@ -73,7 +72,7 @@ namespace bld::wounds
             }
         }
         ++atlas.generation;
-        ++data->marks;
+        if (data->marks < data->max_marks) ++data->marks;
     }
 
     void source_at(instance_id target, vec3 local_position, float strength,
