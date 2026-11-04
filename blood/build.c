@@ -14,7 +14,7 @@ void build(C_Build *b)
     // Blood is a MATERIAL and impact/surface system, not another solver.
     C_Dependency *fluid = c_git(
         b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
-        "research/fluids-blood");
+        "814d180acfe8c24b628ac9d816e24861ab3cf624");
     c_dep_subdir(fluid, "fluid");
     c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
     c_dep_include(fluid, ".");
