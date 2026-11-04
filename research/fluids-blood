@@ -1,0 +1,40 @@
+fluid / blood research notes
+
+Status: independent research branch. None of the quality, physical-accuracy, performance, or Vulkan compatibility goals below have yet been verified. This is original implementation informed by published techniques, not a copied library.
+
+SOLVER
+Macklin and Muller 2013: Position Based Fluids. Density projection, positional constraints, artificial pressure, and vorticity confinement. https://blog.mmacklin.com/project/pbf/
+Bender and Koschier 2015: Divergence-Free SPH. Density and velocity-divergence solvers. https://animation.rwth-aachen.de/publication/054/
+Design: the baseline currently implements CPU PBF, neighbor hashing, shear-dependent viscosity and contact callbacks. DFSPH and GPU compute simulation are research targets, not implemented or performance-validated.
+Verification: compare retained fluid volume against initial mass after emission, airborne splashes, collisions, and deposits; perform timestep / particle-spacing convergence and measure peak positive density error. Do not assume a successful simulation means the image is realistic.
+
+SURFACES
+Yu and Turk 2013: Reconstructing Surfaces of Particle-Based Fluids Using Anisotropic Kernels. PCA-based anisotropy and smoothing improve thin sheets and fluid strands. https://faculty.cc.gatech.edu/~turk/my_papers/sph_surfaces.pdf
+Simon Green 2010: Screen-space fluid rendering, smoothed depth, thickness and reconstructed surface normals. https://media.gdcvault.com/gdc10/slides/Green_Simon_AdvancedDirect3DTutorial_ScreenSpaceFluidRendering.pdf
+Current renderer uses isotropic SPH density isosurfaces and Beer-Lambert attenuation, not anisotropic reconstruction, true environment reflections or offline film-quality meshing. Raymarching is restricted to particle support intervals.
+Verification: compare silhouettes, sheet breakup and normals from rotating cameras; quantify GPU time, per-tile overflow, temporal shimmer, and wet surface thickness.
+
+BLOOD MATERIAL
+Human-blood viscosity is shear dependent. An ETH 2020 dissertation (section 4.1) cites mu0=0.16 Pa s, mu_inf=0.0035 Pa s, lambda=8.2 s, inner exponent=0.64 and outer exponent=-1.23. https://www.ams-publications.ee.ethz.ch/uploads/tx_ethpublications/Diss_ETH26630_Puentener_2020_PESonline_small.pdf
+The implemented generalized Carreau-Yasuda function represents that parameterization. It is not automatically applicable to every hematocrit, temperature or donor.
+Measured blood spectra (absorption, scattering, oxygenation) differ strongly with wavelength and sample preparation. https://link.springer.com/article/10.1007/s10103-013-1446-7 and https://www.frontiersin.org/journals/photonics/articles/10.3389/fphot.2025.1636398/full
+Current RGB absorption coefficients are provisional artist-calibrated values, NOT measured spectral data.
+Verification: fixed exposure, calibrated sRGB/linear-space comparisons, multiple film thicknesses, D65 illumination, wet/dry transitions, and highlights.
+
+IMPACT AND WETTING
+Drop spreading is governed by Weber and Reynolds numbers, wettability and substrate roughness. Blood impact observations: https://pmc.ncbi.nlm.nih.gov/articles/PMC4476491/
+Target properties and hematocrit matter: https://pubmed.ncbi.nlm.nih.gov/27289034/
+Cotton textile impact has fast spread/rim breakup (under 0.1 s), then inter-yarn flow and inter-fiber wicking. Fabric construction changes stain size: https://pubmed.ncbi.nlm.nih.gov/40578126/
+The implemented impact spread and wicking laws are bounded empirical approximations, NOT full models of individual fibers or validated splash thresholds.
+Verification: compare high-speed splash outlines at fixed volume, speed and angle; evaluate multiple target substrates, dry/wet state, contact angle and UV seam crossing. Explicitly track deposited volume to prevent repeated contact from multiplying blood.
+
+FILM / GAME TECHNIQUES
+Film workflows layer primary fluid, secondary splashes and surface shading; rendered masks and baked flipbooks can be useful when full simulation is unnecessary. https://research.pixar.com/docs/2024.SiggraphTalks.B.pdf and https://ryansmith.artstation.com/store/Ydoy/simulating-blood-splatters-in-houdini
+The new system intentionally retains authored procedural simulation and does not copy external source or film assets.
+
+ACCEPTANCE BEFORE GAME INTEGRATION
+1. Build both static libraries independently with c build, shader compile/validate, and perform Vulkan smoke tests on Apple Silicon and discrete Vulkan devices.
+2. Establish five deterministic scenes: single blood droplet, directed impact at rigid wall, skinned character wound, cloth wicking, and gravity-fed puddle.
+3. Compare fixed-camera frames and camera rotation sequences against high-speed footage and references.
+4. Measure volume/mass error, collision stability, render continuity, GPU/CPU timings, transient VRAM, and tile overflow.
+5. Integrate a minimal bld adapter into the game ONLY after these checks pass. Reverting the game remains intentional until then.
