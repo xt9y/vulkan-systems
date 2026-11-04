@@ -74,7 +74,8 @@ namespace bld::surface
     // Optional geometry-aware chart for curvature and local tangent flow.
     void register_geometry(instance_id id,
         const std::vector<fld::surface::chart_vertex>& vertices,
-        const std::vector<std::uint32_t>& indices);
+        const std::vector<std::uint32_t>& indices,
+        bool physical_chart_edges=false);
     void remove_target(instance_id id);
     void deposit(instance_id id, vec3 position, vec3 normal, vec2 uv,
                  bool uv_valid, float volume_ml, float velocity,
