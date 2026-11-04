@@ -96,6 +96,13 @@ int main()
     for(int i=0;i<120;++i)
         fld::surface::update(empty,1.f/60.f,blood,{});
     assert(empty.generation==idle);
+    assert(empty.last_active_tiles==0);
+    assert(empty.simulated_cells==0);
+    fld::surface::deposit(empty,{.5f,.5f},.003f,1.e-8f);
+    fld::surface::update(empty,1.f/30.f,blood,{});
+    assert(empty.last_active_tiles>0 && empty.last_active_tiles<30);
+    assert(empty.simulated_cells<
+           std::uint64_t(256)*256*5);
 
     bld::wounds::source wound{};
     wound.remaining_ml=9.f;
