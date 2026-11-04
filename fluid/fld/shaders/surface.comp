@@ -9,7 +9,11 @@ layout(set=0,binding=0) uniform sampler2D depth_image;
 layout(set=0,binding=1) uniform sampler2D scene_color;
 layout(rgba16f,set=0,binding=2) writeonly uniform image2D liquid_output;
 
-struct Particle { vec4 world; }; // xyz metres, w radius
+struct Particle
+{
+    vec4 world;      // xyz metres, w radius
+    vec4 properties; // x particle volume in m^3, y mass in kg
+};
 layout(std430,set=0,binding=3) readonly buffer Particles
 {
     Particle particles[];
@@ -50,7 +54,7 @@ float poly6(float r2, float h)
     return 315.0/(64.0*pi*pow(h,9.0))*q*q*q;
 }
 
-float field(vec3 p, uint tile, float h, float particle_volume)
+float field(vec3 p, uint tile, float h)
 {
     float density = 0.0;
     uint count = min(counts[tile], tile_capacity);
@@ -59,18 +63,19 @@ float field(vec3 p, uint tile, float h, float particle_volume)
         uint id = indices[tile*tile_capacity+i];
         if (id >= pc.sizes.w) continue;
         vec3 separation = p-particles[id].world.xyz;
-        density += poly6(dot(separation,separation),h) * particle_volume;
+        density += poly6(dot(separation,separation),h) *
+                   particles[id].properties.x;
     }
     return density;
 }
 
-vec3 gradient(vec3 p,uint tile,float h,float particle_volume)
+vec3 gradient(vec3 p,uint tile,float h)
 {
     float step_length = max(h*.13, .0003);
     vec3 dx=vec3(step_length,0,0),dy=vec3(0,step_length,0),dz=vec3(0,0,step_length);
-    return vec3(field(p+dx,tile,h,particle_volume)-field(p-dx,tile,h,particle_volume),
-                field(p+dy,tile,h,particle_volume)-field(p-dy,tile,h,particle_volume),
-                field(p+dz,tile,h,particle_volume)-field(p-dz,tile,h,particle_volume));
+    return vec3(field(p+dx,tile,h)-field(p-dx,tile,h),
+                field(p+dy,tile,h)-field(p-dy,tile,h),
+                field(p+dz,tile,h)-field(p-dz,tile,h));
 }
 
 vec2 sphere_interval(vec3 ro, vec3 rd, vec3 c, float r)
@@ -111,7 +116,6 @@ void main()
     float scene_t=background?inf:dot(unproject(ndc,d)-near_point,ray);
     float spacing=pc.lighting.w;
     float h=spacing*max(1.5,float((pc.sizes.z>>8u)&65535u)/100.0);
-    float mass_volume=spacing*spacing*spacing;
     float start_t=inf, end_t=-inf;
 
     // Traverse only the union of particle kernel supports. Rays outside

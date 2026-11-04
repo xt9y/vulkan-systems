@@ -18,8 +18,9 @@ namespace fld::render
         struct gpu_particle
         {
             vec4 world;
+            vec4 properties; // x volume m^3, y mass kg, z material ID
         };
-        static_assert(sizeof(gpu_particle) == 16);
+        static_assert(sizeof(gpu_particle) == 32);
 
         struct parameters
         {
@@ -256,8 +257,11 @@ namespace fld::render
                     smoothing*std::abs(target.view_projection(1,1))*
                     target.height*.5f/clip.w,1.f,2048.f);
                 const auto id=std::uint32_t(points.size());
+                const float volume=p.mass /
+                    std::max(.0001f,world->materials[p.phase].density);
                 points.push_back({{p.position.x,p.position.y,
-                                   p.position.z,p.radius}});
+                                   p.position.z,p.radius},
+                                  {volume,p.mass,float(p.phase),0.f}});
                 tiles.add(id,x-radius-1.f,y-radius-1.f,
                           x+radius+1.f,y+radius+1.f);
             }

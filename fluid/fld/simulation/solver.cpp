@@ -224,7 +224,10 @@ namespace fld::simulation
                         deposited_mass.mass *= deposited;
                         contact(deposited_mass, hit);
                     }
+                    const float original_mass=p.mass;
                     p.mass *= (1.f-deposited);
+                    if(original_mass>0.f)
+                        p.radius*=std::cbrt(std::max(0.f,p.mass)/original_mass);
                     ++p.contacts;
                     const float minimum_mass =
                         rest_density(world,p) *
