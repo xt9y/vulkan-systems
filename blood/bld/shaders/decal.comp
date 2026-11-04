@@ -177,6 +177,14 @@ void main()
     uint columns = (pc.width + TILE_SIZE - 1u) / TILE_SIZE;
     uint tile = (uint(pixel.y) / TILE_SIZE) * columns +
                 (uint(pixel.x) / TILE_SIZE);
+    // The blood pass remains installed even in clean scenes so the overlay
+    // is cleared every frame. Do no matrix inversions or ray tests on empty
+    // tiles, keeping idle overhead low on Apple Silicon.
+    if (decal_count[tile] == 0u && drop_count[tile] == 0u)
+    {
+        imageStore(blood_output, pixel, vec4(0.0));
+        return;
+    }
     vec2 uv = (vec2(pixel) + .5) / vec2(pc.width, pc.height);
     vec2 ndc = uv * 2.0 - 1.0;
     float depth = texelFetch(depth_image, pixel, 0).r;
