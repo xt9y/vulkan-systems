@@ -9,6 +9,7 @@ on:
     paths:
       - "fluid/**"
       - "blood/**"
+      - "tests/**"
       - ".github/workflows/fluids.yml"
 
 jobs:
