@@ -29,6 +29,7 @@ namespace fld
         vec3 position{}, velocity{};
         vec3 previous{}, predicted{};
         std::uint32_t phase = 0, group = 0;
+        std::uint32_t contacts = 0;
         float mass = 0, radius = .0025f;
         float age = 0, lifetime = 8;
     };
@@ -50,6 +51,9 @@ namespace fld
         vec2 uv{};
         bool uv_valid = false;
         float restitution = .02f, friction = .35f;
+        // Fraction of this particle's mass transferred to the receiving
+        // surface. The remaining mass continues after collision.
+        float deposition_fraction = 0.f;
     };
 
     using collision_callback =

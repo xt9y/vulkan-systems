@@ -213,8 +213,20 @@ namespace fld::simulation
                 if (hit.hit)
                 {
                     ++world.stats.contacts;
-                    if (contact) contact(p, hit);
-                    if (hit.absorb)
+                    const float deposited = hit.absorb ? 1.f :
+                        std::clamp(hit.deposition_fraction, 0.f, 1.f);
+                    if (contact && deposited > 0.f)
+                    {
+                        auto deposited_mass = p;
+                        deposited_mass.mass *= deposited;
+                        contact(deposited_mass, hit);
+                    }
+                    p.mass *= (1.f-deposited);
+                    ++p.contacts;
+                    const float minimum_mass =
+                        rest_density(world,p) *
+                        std::pow(world.settings.spacing,3.f) * .03f;
+                    if (hit.absorb || p.mass <= minimum_mass)
                     {
                         consumed[i] = 1;
                     }
