@@ -130,11 +130,17 @@ namespace bld::simulation
                             if (r2 < 1e-8f || r2 >= range2) continue;
                             const float r = std::sqrt(r2);
                             const float weight = 1.f - r / range;
+                            // Viscous velocity sharing and surface attraction.
+                            const float contact =
+                                particles[i].radius + particles[j].radius;
+                            const float overlap = std::max(0.f, contact - r);
+                            const float repulsion = overlap / std::max(.001f, contact) *
+                                (data->options.collision_smoothing * 30.f);
                             forces[i] = forces[i] +
                                 (particles[j].velocity - particles[i].velocity) *
                                     (weight * data->options.viscosity) +
                                 (between / r) *
-                                    (weight * data->options.cohesion);
+                                    (weight * data->options.cohesion - repulsion);
                         }
                     }
         }
