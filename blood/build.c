@@ -17,7 +17,7 @@ void build(C_Build *b)
     // commit hashes may not be present in its shallow dependency checkout.
     C_Dependency *fluid = c_git(
         b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
-        "vulkan-fluids-v4");
+        "vulkan-fluids-v5");
     c_dep_subdir(fluid, "fluid");
     c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
     c_dep_include(fluid, ".");
