@@ -1,5 +1,6 @@
 #pragma once
 #include "../core/types.hpp"
+#include <fld/surface/film.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -23,7 +24,8 @@ namespace bld::surface
         // Flatten evicted marks here so stains survive the active-mark budget.
         // Allocated lazily, only when the first mark is evicted.
         std::vector<std::uint32_t> baked_pixels;
-        std::vector<mark> marks;
+        std::vector<mark> marks; // impact history, not a procedural mask
+        fld::surface::grid film;
         std::uint64_t generation=0;
         float update_accumulator=0;
     };
@@ -37,6 +39,8 @@ namespace bld::surface
         float radius=.04f, age=0, wetness=1, volume_ml=.1f;
         std::uint32_t seed=1;
         substrate kind=substrate::painted;
+        fld::surface::grid film;
+        std::vector<std::uint32_t> pixels;
     };
 
     struct target
@@ -66,12 +70,18 @@ namespace bld::surface
                          bool skinned=false,
                          vec2 metres_per_uv={1.f,1.f});
     void set_transform(instance_id id, mat4 transform);
+    // Optional geometry-aware chart for curvature and local tangent flow.
+    void register_geometry(instance_id id,
+        const std::vector<fld::surface::chart_vertex>& vertices,
+        const std::vector<std::uint32_t>& indices);
     void remove_target(instance_id id);
     void deposit(instance_id id, vec3 position, vec3 normal, vec2 uv,
                  bool uv_valid, float volume_ml, float velocity,
                  std::uint32_t seed);
     void update(float dt);
     const atlas *find(instance_id id);
+    // Cubic metres in the surface/porous reservoirs (separate from 3D drops).
+    double volume();
     void clear();
     void shutdown();
 }
