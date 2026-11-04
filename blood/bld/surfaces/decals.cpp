@@ -31,7 +31,7 @@ namespace bld::surfaces
         {
             if (decal.target != id) continue;
             // Keep the last world-space projection if the rigid owner disappears.
-            decal.world = decal.world;
+            // The last resolved world transform is retained when detached.
             decal.target = 0;
         }
     }

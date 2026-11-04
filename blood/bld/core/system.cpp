@@ -16,7 +16,8 @@ namespace bld::system
         if (!(options.fixed_step > 0.f) ||
             options.fixed_step > .05f ||
             options.wound_resolution < 16 ||
-            options.wound_resolution > 2048)
+            options.wound_resolution > 2048 ||
+            (options.wound_resolution % 2u) != 0u)
             throw std::invalid_argument("Invalid blood system settings");
         data = new state{};
         data->options = options;

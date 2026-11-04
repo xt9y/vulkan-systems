@@ -1,4 +1,5 @@
 #include "wound.hpp"
+#include "../core/system.hpp"
 #include "../surfaces/wounds.hpp"
 #include <stdexcept>
 
@@ -18,11 +19,15 @@ namespace bld::render::wound
         {
             const auto flags = vk::MemoryPropertyFlagBits::eHostVisible |
                                vk::MemoryPropertyFlagBits::eHostCoherent;
+            const auto system = bld::system::get();
+            const auto width = system ? system->options.wound_resolution : 128u;
+            std::vector<std::uint32_t> zeros(
+                std::size_t(width) * width / 4, 0u);
             data->fallback = vk::buffer::create(
-                sizeof(std::uint32_t), vk::BufferUsageFlagBits::eStorageBuffer,
-                flags);
-            const std::uint32_t zero = 0;
-            vk::buffer::write(data->fallback, &zero, sizeof(zero));
+                zeros.size() * sizeof(std::uint32_t),
+                vk::BufferUsageFlagBits::eStorageBuffer, flags);
+            vk::buffer::write(data->fallback, zeros.data(),
+                              zeros.size() * sizeof(std::uint32_t));
         }
         catch (...)
         {

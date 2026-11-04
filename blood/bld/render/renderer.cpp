@@ -1,4 +1,5 @@
 #include "renderer.hpp"
+#include "../core/system.hpp"
 #include "../math/geometry.hpp"
 #include "../simulation/solver.hpp"
 #include "../surfaces/decals.hpp"
@@ -295,9 +296,9 @@ namespace bld::render
 
         auto &frame = data->frames[index];
         const auto decals = surfaces::resolve();
+        static const std::vector<simulation::drop> empty_particles;
         const auto *sim = simulation::get();
-        const auto &particles = sim ? sim->particles :
-            *static_cast<const std::vector<simulation::drop> *>(nullptr);
+        const auto &particles = sim ? sim->particles : empty_particles;
 
         bins decal_tiles(target.width, target.height, decal_cap);
         bins drop_tiles(target.width, target.height, drop_cap);
