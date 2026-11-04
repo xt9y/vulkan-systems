@@ -12,9 +12,11 @@ void build(C_Build *b)
     c_flag(blood, "-std=c++17");
 
     // Blood is a MATERIAL and impact/surface system, not another solver.
+    // Use a named release ref: c_git only fetches selected refs, so historical
+    // commit hashes may not be present in its shallow dependency checkout.
     C_Dependency *fluid = c_git(
         b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
-        "814d180acfe8c24b628ac9d816e24861ab3cf624");
+        "vulkan-fluids-v1");
     c_dep_subdir(fluid, "fluid");
     c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
     c_dep_include(fluid, ".");
