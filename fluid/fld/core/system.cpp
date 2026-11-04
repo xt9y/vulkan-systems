@@ -1,6 +1,8 @@
 #include "system.hpp"
 #include "../simulation/solver.hpp"
 #include "../math/kernels.hpp"
+#include "../material/contact.hpp"
+#include "../material/rheology.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -97,6 +99,98 @@ namespace fld::system
                     ++written;
                 }
         return written;
+    }
+
+    splash_result splash(const fld::splash_source &source)
+    {
+        splash_result result{};
+        if(!data || source.phase>=data->materials.size() ||
+           !std::isfinite(source.volume) || source.volume<=0.f ||
+           !std::isfinite(source.velocity.x) ||
+           !std::isfinite(source.velocity.y) ||
+           !std::isfinite(source.velocity.z) ||
+           !std::isfinite(source.position.x) ||
+           !std::isfinite(source.position.y) ||
+           !std::isfinite(source.position.z))return result;
+
+        const auto &material=data->materials[source.phase];
+        const float speed=math::norm(source.velocity);
+        const float radius=data->settings.spacing*.5f;
+        particle representative{};
+        representative.radius=radius;
+        representative.velocity=source.velocity;
+        representative.mass=material.density *
+            std::pow(data->settings.spacing,3.f);
+        collision probe{};
+        probe.hit=true;
+        probe.material_response=true;
+        probe.surface=source.surface;
+        const auto info=wetting::resolve(material,representative,probe);
+        result.weber=info.weber;
+        result.reynolds=info.reynolds;
+        const float deposited=std::clamp(probe.deposition_fraction,0.f,1.f);
+        result.retained_volume=source.volume*deposited;
+        const float available=source.volume-result.retained_volume;
+        if(available<=0.f)return result;
+
+        const auto axis=math::safe_normal(source.normal);
+        const vec3 tangent=std::abs(axis.y)<.94f ?
+            math::safe_normal(vk::util::math::cross(axis,vec3{0,1,0})) :
+            math::safe_normal(vk::util::math::cross(axis,vec3{1,0,0}));
+        const auto bitangent=vk::util::math::cross(axis,tangent);
+
+        // This governs the sheet opening angle and secondary breakup.
+        // The solver, not the blood preset, decides from We, Re and wetting.
+        const float oh=info.ohnesorge;
+        const float breakup=std::clamp(
+            info.splash_parameter/(57.7f+info.splash_parameter),0.f,1.f);
+        const float opening=std::clamp(
+            .12f+breakup*.95f/(1.f+oh*8.f),.12f,1.12f);
+        emission initial{};
+        initial.position=source.position+axis*(data->settings.spacing*1.7f);
+        initial.velocity=axis*speed;
+        initial.spread=0.f;
+        initial.volume=available;
+        initial.lifetime=source.lifetime;
+        initial.phase=source.phase;
+        initial.group=source.group;
+        initial.seed=source.seed;
+        const auto before=data->particles.size();
+        const auto count=emit(initial);
+        result.particles=count;
+        if(!count)
+        {
+            // Do not silently lose fluid when a tiny impact is below the
+            // discretization limit or the particle budget is exhausted.
+            result.retained_volume=source.volume;
+            return result;
+        }
+        float emitted=0.f;
+        std::uint32_t seed=source.seed ? source.seed : 1;
+        const vec3 lateral=source.velocity-axis*
+            vk::util::math::dot(source.velocity,axis);
+        for(std::size_t i=before;i<data->particles.size();++i)
+        {
+            auto &p=data->particles[i];
+            const float angle=math::random01(seed)*2.f*pi;
+            const vec3 radial=tangent*std::cos(angle)+
+                              bitangent*std::sin(angle);
+            const float eccentricity=math::random01(seed);
+            const float theta=opening*std::sqrt(eccentricity);
+            const float effective_speed=speed*
+                (.38f+.62f*math::random01(seed))*
+                (1.f-source.surface.wetting*.16f);
+            p.velocity=axis*(std::cos(theta)*effective_speed)+
+                       radial*(std::sin(theta)*effective_speed)+
+                       lateral*.18f;
+            emitted+=p.mass/material.density;
+        }
+        result.emitted_volume=emitted;
+        // Quantization loses a fractional particle volume. Deposit the
+        // residual on the receiving surface to preserve mass globally.
+        result.retained_volume=std::max(0.f,
+            source.volume-result.emitted_volume);
+        return result;
     }
 
     void update(float seconds, const collision_callback &collision,

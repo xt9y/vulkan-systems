@@ -60,26 +60,30 @@ namespace bld::system
 
         const auto outward=fld::math::safe_normal(event.normal);
         const auto travel=fld::math::safe_normal(event.direction);
-        const float volume=std::clamp(event.amount_ml,.1f,30.f);
         const float velocity=std::clamp(event.velocity,0.f,25.f);
-        const float deposit_ml=volume*.18f;
-        if(event.target)
-        {
-            surface::deposit(event.target,event.position,event.normal,
-                             event.uv,event.uv_valid,deposit_ml,
-                             velocity,event.seed);
-        }
 
-        fld::emission plume{};
-        plume.position=event.position+outward*.015f;
-        plume.velocity=outward*(velocity*.76f)+travel*(velocity*.22f);
-        plume.volume=volume*.82f*.000001f;
-        plume.spread=.50f+velocity*.15f;
-        plume.group=std::uint32_t(event.id ^ (event.id>>32u));
-        plume.phase=data->phase;
-        plume.seed=event.seed;
-        plume.lifetime=4.f;
-        fld::system::emit(plume);
+        fld::splash_source source{};
+        source.position=event.position;
+        source.normal=outward;
+        source.velocity=outward*velocity + travel*(velocity*.18f);
+        source.volume=std::clamp(event.amount_ml,.1f,30.f)*.000001f;
+        source.group=std::uint32_t(event.id ^ (event.id>>32u));
+        source.phase=data->phase;
+        source.seed=event.seed;
+        source.lifetime=4.f;
+        if(const auto *surfaces=surface::get())
+        {
+            const auto owner=surfaces->targets.find(event.target);
+            if(owner!=surfaces->targets.end())
+                source.surface=material::interaction(owner->second.kind);
+        }
+        // Both blood and other liquids use EXACTLY this generic solver path.
+        const auto splash=fld::system::splash(source);
+        if(event.target && splash.retained_volume>0.f)
+            surface::deposit(event.target,event.position,event.normal,
+                             event.uv,event.uv_valid,
+                             splash.retained_volume*1e6f,
+                             velocity,event.seed);
         ++data->impacts;
     }
 

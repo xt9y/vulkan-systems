@@ -66,6 +66,25 @@ namespace fld
         std::uint32_t phase = 0, group = 1, seed = 1;
     };
 
+    // One generic liquid-impact source. Position/velocity are physical
+    // initial conditions supplied by the host (metres, metres/second).
+    // Material, surface tension, wetting and viscosity determine ejection.
+    struct splash_source
+    {
+        vec3 position{}, normal{0,1,0}, velocity{};
+        float volume=.000001f;          // m^3
+        float lifetime=5.f;
+        std::uint32_t phase=0, group=1, seed=1;
+        surface_properties surface{};
+    };
+
+    struct splash_result
+    {
+        std::uint32_t particles=0;
+        float retained_volume=0, emitted_volume=0;
+        float weber=0, reynolds=0;
+    };
+
     struct collision
     {
         bool hit = false, absorb = false;

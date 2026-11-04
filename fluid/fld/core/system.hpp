@@ -16,6 +16,7 @@ namespace fld::system
     void init(const options &settings = {});
     std::uint32_t add_material(const fld::material &properties);
     std::uint32_t emit(const fld::emission &source);
+    splash_result splash(const fld::splash_source &source);
     void update(float seconds,
                 const collision_callback &collision = {},
                 const contact_callback &contact = {});
