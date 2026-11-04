@@ -1,0 +1,10 @@
+fluid
+  fld::system::init(options)
+  fld::system::material(properties)
+  fld::system::emit(source)
+  fld::system::update(seconds, collision, contact)
+  fld::system::get()->particles
+  fld::system::clear()
+  fld::system::shutdown()
+
+Independent Vulkan/C++ liquid simulation library. PBF incompressibility, spatial neighbors, non-Newtonian rheology and collision callbacks.
