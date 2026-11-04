@@ -61,6 +61,42 @@ int main()
         assert(std::abs(fld::surface::volume(film)+detached-before)<1.e-9);
     }
 
+    // Two physically touching quads stored in disconnected UV islands.
+    // Film should cross their 3D shared edge without leaking mass.
+    fld::surface::grid seams;
+    fld::surface::init(seams,64,64,{1.f,1.f});
+    std::vector<fld::surface::chart_vertex> vertices{
+        {{0,0,0},{0,0,1},{.10f,.15f}},
+        {{.5f,0,0},{0,0,1},{.40f,.15f}},
+        {{.5f,1,0},{0,0,1},{.40f,.85f}},
+        {{0,1,0},{0,0,1},{.10f,.85f}},
+        {{.5f,0,0},{0,0,1},{.60f,.15f}},
+        {{1,0,0},{0,0,1},{.90f,.15f}},
+        {{1,1,0},{0,0,1},{.90f,.85f}},
+        {{.5f,1,0},{0,0,1},{.60f,.85f}}
+    };
+    const std::vector<std::uint32_t> indices{
+        0,1,2,0,2,3,4,5,6,4,6,7
+    };
+    fld::surface::set_chart(seams,vertices,indices);
+    assert(!seams.seam_links.empty());
+    fld::surface::deposit(seams,{.39f,.5f},.02f,1.e-6f);
+    for(int i=0;i<90;++i)
+        fld::surface::update(seams,1.f/60.f,blood,{});
+    double across=0.;
+    for(std::uint32_t y=0;y<seams.height;++y)
+        for(std::uint32_t x=38;x<seams.width;++x)
+            across+=seams.cells[std::size_t(y)*seams.width+x].mobile;
+    assert(across>0.);
+    assert(std::abs(fld::surface::volume(seams)-1.e-6)<1.e-9);
+    // Dry films must sleep without causing GPU generation increments.
+    fld::surface::grid empty;
+    fld::surface::init(empty,256,256,{1.f,1.f});
+    const auto idle=empty.generation;
+    for(int i=0;i<120;++i)
+        fld::surface::update(empty,1.f/60.f,blood,{});
+    assert(empty.generation==idle);
+
     bld::wounds::source wound{};
     wound.remaining_ml=9.f;
     wound.initial_rate_ml_s=2.f;
