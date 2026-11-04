@@ -2,6 +2,7 @@
 #include "../surfaces/stains.hpp"
 #include "../core/system.hpp"
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 namespace bld::render::wounds
@@ -63,13 +64,10 @@ namespace bld::render::wounds
         data->frames=frames;
         try
         {
-            const auto system=bld::system::get();
-            const auto resolution=system?system->settings.wound_resolution:256u;
-            const std::vector<std::uint32_t> zeros(
-                std::size_t(resolution)*resolution,0u);
-            data->fallback=allocate(zeros.size()*sizeof(std::uint32_t));
-            vk::buffer::write(data->fallback,zeros.data(),
-                              zeros.size()*sizeof(std::uint32_t));
+            // Zero instances = clean mask, even when accidentally sampled.
+            const std::uint32_t empty=0;
+            data->fallback=allocate(sizeof(empty));
+            vk::buffer::write(data->fallback,&empty,sizeof(empty));
         }
         catch(...)
         {
@@ -81,7 +79,8 @@ namespace bld::render::wounds
     bool visible(instance_id id)
     {
         const auto *a=surface::find(id);
-        return a && !a->marks.empty();
+        return a && (!a->marks.empty() ||
+               !a->baked_pixels.empty());
     }
 
     vk::DescriptorBufferInfo descriptor(instance_id id,std::uint32_t frame)
@@ -91,7 +90,14 @@ namespace bld::render::wounds
         const auto *a=surface::find(id);
         if(!a || a->pixels.empty())
             return vk::buffer::descriptor(data->fallback);
-        return write(data->actors[id],frame,a->pixels,a->generation);
+        // Standalone descriptor uses the same sparse batch format as
+        // descriptor_batch(), with a single occupied slot.
+        std::vector<std::uint32_t> packed;
+        packed.reserve(a->pixels.size()+2);
+        packed.push_back(1);
+        packed.push_back(0);
+        packed.insert(packed.end(),a->pixels.begin(),a->pixels.end());
+        return write(data->actors[id],frame,packed,a->generation);
     }
 
     vk::DescriptorBufferInfo descriptor_batch(
@@ -108,25 +114,45 @@ namespace bld::render::wounds
 
         bool any=false;
         std::uint64_t signature=14695981039346656037ull;
+        std::size_t stained=0;
         for(auto id:ids)
         {
             const auto *a=surface::find(id);
+            const bool dirty=a && a->pixels.size()==words;
             signature=(signature^id)*1099511628211ull;
-            signature=(signature^(a?a->generation:0ull))*1099511628211ull;
-            if(a && !a->pixels.empty())any=true;
+            signature=(signature^(dirty?a->generation:0ull))*1099511628211ull;
+            if(dirty)
+            {
+                any=true;
+                ++stained;
+            }
         }
         if(!any)return vk::buffer::descriptor(data->fallback);
 
         auto &entry=data->batches[mesh];
         if(!entry.buffers.empty() && entry.generations.at(frame)==signature)
             return vk::buffer::descriptor(entry.buffers.at(frame));
-        std::vector<std::uint32_t> packed(ids.size()*words,0u);
+
+        // Slot table occupies one word per instance, while the expensive
+        // 256x256 atlas is stored ONLY for stained actors.
+        if(ids.size()>std::numeric_limits<std::uint32_t>::max() ||
+           stained>(std::numeric_limits<std::uint32_t>::max()-1-ids.size())/words)
+            throw std::overflow_error("Blood atlas address space exceeded");
+        std::vector<std::uint32_t> packed(
+            1+ids.size()+stained*words,0u);
+        packed[0]=std::uint32_t(ids.size());
+        std::uint32_t slot=0;
         for(std::size_t i=0;i<ids.size();++i)
         {
             const auto *a=surface::find(ids[i]);
             if(a && a->pixels.size()==words)
+            {
+                packed[1+i]=slot++;
                 std::copy(a->pixels.begin(),a->pixels.end(),
-                          packed.begin()+i*words);
+                          packed.begin()+1+ids.size()+
+                          std::size_t(slot-1)*words);
+            }
+            else packed[1+i]=~std::uint32_t{0};
         }
         return write(entry,frame,packed,signature);
     }
