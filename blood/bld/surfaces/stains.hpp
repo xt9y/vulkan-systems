@@ -42,6 +42,7 @@ namespace bld::surface
         substrate kind=substrate::painted;
         fld::surface::grid film;
         std::vector<std::uint32_t> pixels;
+        std::uint64_t packed_generation=0;
     };
 
     struct target
