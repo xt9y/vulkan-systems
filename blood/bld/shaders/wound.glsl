@@ -8,7 +8,11 @@ layout(std430,set=0,binding=14) readonly buffer BloodSurfaceAtlas
 vec4 bld_texel(ivec2 p,int resolution,uint instance_index)
 {
     p=clamp(p,ivec2(0),ivec2(resolution-1));
-    uint index=instance_index*uint(resolution*resolution)+
+    uint total=bld_pixels[0];
+    if(instance_index>=total)return vec4(0.0);
+    uint slot=bld_pixels[1u+instance_index];
+    if(slot==0xffffffffu)return vec4(0.0);
+    uint index=1u+total+slot*uint(resolution*resolution)+
                uint(p.y*resolution+p.x);
     uint packed=bld_pixels[index];
     return vec4(float((packed>>24u)&255u),
