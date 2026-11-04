@@ -41,8 +41,11 @@ namespace fld::system
             m.viscosity_zero < m.viscosity_infinite ||
             !std::isfinite(m.surface_tension) ||
             m.surface_tension <= 0.f ||
+            !std::isfinite(m.flow_index) ||
             m.flow_index <= 0.f || m.flow_index > 2.f ||
-            m.relaxation < 0.f)
+            !std::isfinite(m.yasuda_exponent) ||
+            m.yasuda_exponent < .1f || m.yasuda_exponent > 8.f ||
+            !std::isfinite(m.relaxation) || m.relaxation < 0.f)
             throw std::invalid_argument("Invalid fluid material or state");
         data->materials.push_back(m);
         return std::uint32_t(data->materials.size()-1);

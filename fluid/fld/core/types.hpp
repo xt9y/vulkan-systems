@@ -19,6 +19,7 @@ namespace fld
         float viscosity_infinite = .001f;   // Pa*s
         float relaxation = 0.0f;            // seconds
         float flow_index = 1.0f;            // Carreau-Yasuda exponent n
+        float yasuda_exponent = 2.0f;       // Carreau-Yasuda exponent a
         float surface_tension = .072f;      // N/m
         float contact_angle = 1.2f;         // radians, receiver dependent
     };
