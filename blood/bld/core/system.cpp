@@ -84,6 +84,29 @@ namespace bld::system
                              event.uv,event.uv_valid,
                              splash.retained_volume*1e6f,
                              velocity,event.seed);
+
+        // A bullet impact is an impulse. Continued bleeding is a distinct
+        // finite source: mass enters the film over time, not as fictitious
+        // extra SPH droplets. Hosts can disable by setting reservoir=0.
+        if(event.target && event.bleeding_reservoir_ml>0.f &&
+           event.bleeding_rate_ml_s>0.f &&
+           std::isfinite(event.bleeding_reservoir_ml) &&
+           std::isfinite(event.bleeding_rate_ml_s))
+        {
+            wounds::source wound{};
+            wound.id=event.id;
+            wound.target=event.target;
+            wound.position=event.position;
+            wound.normal=event.normal;
+            wound.uv=event.uv;
+            wound.uv_valid=event.uv_valid;
+            wound.remaining_ml=std::clamp(event.bleeding_reservoir_ml,0.f,1000.f);
+            wound.initial_rate_ml_s=std::clamp(event.bleeding_rate_ml_s,0.f,50.f);
+            wound.decay_seconds=std::max(.01f,event.bleeding_decay_seconds);
+            wound.pulse_hz=std::max(0.f,event.pulse_hz);
+            wound.seed=event.seed;
+            data->open_wounds.push_back(wound);
+        }
         ++data->impacts;
     }
 
@@ -91,6 +114,25 @@ namespace bld::system
     {
         if(!data)return;
         network::dispatch();
+        // Deliver bounded wound sources directly into mobile surface-film
+        // reservoirs. The film solver subsequently transports, absorbs and
+        // detaches this volume. Unregistered targets retain their supply.
+        for(auto &wound:data->open_wounds)
+        {
+            const auto *surfaces=surface::get();
+            if(!surfaces || !surfaces->targets.count(wound.target))continue;
+            const float emitted=wounds::advance(wound,dt);
+            if(emitted<=0.f)continue;
+            surface::deposit(wound.target,wound.position,wound.normal,
+                             wound.uv,wound.uv_valid,emitted,0.f,wound.seed);
+            data->wound_supplied_ml+=emitted;
+        }
+        data->open_wounds.erase(std::remove_if(data->open_wounds.begin(),
+            data->open_wounds.end(),[](const wounds::source &w)
+            {
+                return w.remaining_ml<=1.e-5f ||
+                       (w.age>5.f*w.decay_seconds);
+            }),data->open_wounds.end());
         // Surface class decides whether the impacted portion adheres, wicks,
         // or rebounds. The solver computes liquid motion and contacts.
         fld::system::update(dt,
@@ -139,6 +181,8 @@ namespace bld::system
         fld::system::clear_phase(data->phase);
         surface::clear();
         network::reset();
+        data->open_wounds.clear();
+        data->wound_supplied_ml=0;
         data->impacts=data->deposited=0;
     }
 
