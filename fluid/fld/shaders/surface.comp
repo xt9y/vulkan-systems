@@ -73,14 +73,17 @@ vec3 gradient(vec3 p,uint tile,float h,float particle_volume)
                 field(p+dz,tile,h,particle_volume)-field(p-dz,tile,h,particle_volume));
 }
 
-float sphere_enter(vec3 ro, vec3 rd, vec3 c, float r)
+vec2 sphere_interval(vec3 ro, vec3 rd, vec3 c, float r)
 {
-    vec3 oc = ro-c;
-    float b = dot(oc,rd);
-    float d = b*b-dot(oc,oc)+r*r;
-    if(d<0.0) return inf;
-    float t=-b-sqrt(d);
-    return t>=0.0?t:(-b+sqrt(d)>=0.0?0.0:inf);
+    vec3 oc=ro-c;
+    float b=dot(oc,rd);
+    float discriminant=b*b-dot(oc,oc)+r*r;
+    if(discriminant<0.0)return vec2(inf,-inf);
+    float root=sqrt(discriminant);
+    float begin=-b-root;
+    float end=-b+root;
+    if(end<0.0)return vec2(inf,-inf);
+    return vec2(max(0.0,begin),end);
 }
 
 void main()
@@ -109,17 +112,21 @@ void main()
     float spacing=pc.lighting.w;
     float h=spacing*max(1.5,float((pc.sizes.z>>8u)&65535u)/100.0);
     float mass_volume=spacing*spacing*spacing;
-    float start_t=inf;
+    float start_t=inf, end_t=-inf;
 
-    // Analytic ray/smoothing-support-sphere intersection bounds traversal.
+    // Traverse only the union of particle kernel supports. Rays outside
+    // this interval cannot intersect the liquid's density isosurface.
     for(uint i=0u;i<count;++i)
     {
         uint id=indices[tile*tile_capacity+i];
         if(id>=pc.sizes.w)continue;
-        start_t=min(start_t,sphere_enter(near_point,ray,
-                    particles[id].world.xyz,h));
+        vec2 interval=sphere_interval(near_point,ray,
+                                     particles[id].world.xyz,h);
+        start_t=min(start_t,interval.x);
+        end_t=max(end_t,interval.y);
     }
-    if(start_t>=inf || start_t>=scene_t)
+    end_t=min(end_t,scene_t);
+    if(start_t>=inf || start_t>=end_t)
     {
         imageStore(liquid_output,pixel,vec4(0));
         return;
@@ -141,7 +148,7 @@ void main()
         }
         last_t=t;
         t+=mix(h*.4,h*.12,smoothstep(.06,.40,rho));
-        if(t>scene_t || t>start_t+3.0)break;
+        if(t>end_t)break;
     }
     if(!found)
     {
@@ -169,7 +176,7 @@ void main()
     for(int k=0;k<24;++k)
     {
         at+=h*.32;
-        if(at>scene_t || at>t+.35)break;
+        if(at>end_t || at>t+.35)break;
         float density=field(near_point+ray*at,tile,h,mass_volume);
         thickness+=h*.32*clamp(density,0.0,1.0);
         if(k>2 && density<.10)break;
