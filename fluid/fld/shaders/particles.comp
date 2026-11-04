@@ -1,0 +1,151 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable
+layout(local_size_x=64,local_size_y=1,local_size_z=1) in;
+
+struct Particle
+{
+    vec4 position;
+    vec4 velocity;
+    vec4 previous;
+    vec4 physical;
+};
+layout(std430,set=0,binding=0) buffer Particles { Particle particles[]; };
+layout(std430,set=0,binding=1) buffer Heads { int heads[]; };
+layout(std430,set=0,binding=2) buffer Next { int next_particle[]; };
+layout(std430,set=0,binding=3) buffer Lambdas { float lambdas[]; };
+layout(std430,set=0,binding=4) buffer Deltas { vec4 deltas[]; };
+
+layout(push_constant) uniform Settings
+{
+    vec4 gravity_dt; // xyz gravity, w substep seconds
+    vec4 liquid;     // x rest density, y spacing, z h, w floor height
+    uvec4 indices;   // x particle count, y bucket count, z iteration count
+} pc;
+
+const float pi=3.14159265358979323846;
+const int invalid=-1;
+
+ivec3 cell(vec3 p)
+{
+    return ivec3(floor(p/pc.liquid.z));
+}
+uint hash_cell(ivec3 c)
+{
+    uvec3 u=uvec3(c);
+    return (u.x*73856093u ^ u.y*19349663u ^ u.z*83492791u)
+        % pc.indices.y;
+}
+float poly6(float r2,float h)
+{
+    float h2=h*h;
+    if(r2>=h2)return 0.;
+    float q=h2-r2;
+    float h3=h*h*h;
+    return 315.0/(64.0*pi*h3*h3*h3)*q*q*q;
+}
+vec3 spiky(vec3 r,float h)
+{
+    float len=length(r);
+    if(len<1e-6 || len>=h)return vec3(0);
+    float h2=h*h,h6=h2*h2*h2;
+    return -45.0/(pi*h6)*pow(h-len,2.)*r/len;
+}
+
+void main()
+{
+    uint id=gl_GlobalInvocationID.x;
+#if defined(FLD_CLEAR)
+    if(id<pc.indices.y)heads[id]=invalid;
+#else
+    if(id>=pc.indices.x)return;
+    Particle p=particles[id];
+#if defined(FLD_PREDICT)
+    p.previous=p.position;
+    p.velocity.xyz+=pc.gravity_dt.xyz*pc.gravity_dt.w;
+    p.position.xyz+=p.velocity.xyz*pc.gravity_dt.w;
+    // Analytic static plane; no collider or rigid-body coupling yet.
+    if(p.position.y<pc.liquid.w+p.position.w)
+        p.position.y=pc.liquid.w+p.position.w;
+    particles[id]=p;
+#elif defined(FLD_BUILD)
+    uint bucket=hash_cell(cell(p.position.xyz));
+    next_particle[id]=atomicExchange(heads[bucket],int(id));
+#elif defined(FLD_LAMBDA)
+    float h=pc.liquid.z;
+    float rho=p.physical.y*poly6(0.,h);
+    vec3 grad_self=vec3(0);
+    float sum_grad2=0.;
+    ivec3 at=cell(p.position.xyz);
+    for(int z=-1;z<=1;++z)
+    for(int y=-1;y<=1;++y)
+    for(int x=-1;x<=1;++x)
+    {
+        ivec3 n=at+ivec3(x,y,z);
+        int j=heads[hash_cell(n)];
+        uint visited=0u;
+        while(j!=invalid && visited++<pc.indices.x)
+        {
+            Particle q=particles[j];
+            if(j!=int(id) && all(equal(cell(q.position.xyz),n)))
+            {
+                vec3 d=p.position.xyz-q.position.xyz;
+                rho+=q.physical.y*poly6(dot(d,d),h);
+                vec3 g=q.physical.y/pc.liquid.x*spiky(d,h);
+                grad_self+=g;
+                sum_grad2+=dot(g,g);
+            }
+            j=next_particle[j];
+        }
+    }
+    sum_grad2+=dot(grad_self,grad_self);
+    float error=max(0.,rho/pc.liquid.x-1.);
+    lambdas[id]=-error/(sum_grad2+1e-4);
+#elif defined(FLD_DELTA)
+    vec3 correction=vec3(0);
+    float h=pc.liquid.z;
+    ivec3 at=cell(p.position.xyz);
+    for(int z=-1;z<=1;++z)
+    for(int y=-1;y<=1;++y)
+    for(int x=-1;x<=1;++x)
+    {
+        ivec3 n=at+ivec3(x,y,z);
+        int j=heads[hash_cell(n)];
+        uint visited=0u;
+        while(j!=invalid && visited++<pc.indices.x)
+        {
+            Particle q=particles[j];
+            if(j!=int(id) && all(equal(cell(q.position.xyz),n)))
+            {
+                vec3 d=p.position.xyz-q.position.xyz;
+                float w=poly6(dot(d,d),h)/
+                         max(poly6(.09*h*h,h),1e-7);
+                // PBF artificial pressure discourages close packing.
+                float scorr=-.001*pow(w,4.);
+                correction+=(lambdas[id]+lambdas[j]+scorr)*
+                             q.physical.y/pc.liquid.x*spiky(d,h);
+            }
+            j=next_particle[j];
+        }
+    }
+    // Jacobi updates: no reads of partially corrected neighbors.
+    float m=length(correction);
+    float max_step=.25*pc.liquid.y;
+    deltas[id]=vec4(m>max_step?correction*max_step/m:correction,0);
+#elif defined(FLD_APPLY)
+    p.position.xyz+=deltas[id].xyz;
+    p.position.y=max(p.position.y,pc.liquid.w+p.position.w);
+    particles[id]=p;
+#elif defined(FLD_FINALIZE)
+    vec3 v=(p.position.xyz-p.previous.xyz)/max(pc.gravity_dt.w,1e-5);
+    // Simple contact friction, deliberately not the unified implicit
+    // Probst-Teschner solver (future quantitative capillary milestone).
+    if(p.position.y<=pc.liquid.w+p.position.w+1e-4)
+    {
+        v.y=max(0.,v.y);
+        v.xz*=.965;
+    }
+    p.velocity.xyz=v;
+    particles[id]=p;
+#endif
+#endif
+}
