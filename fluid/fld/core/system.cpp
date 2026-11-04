@@ -161,10 +161,19 @@ namespace fld::system
         const float oh=info.ohnesorge;
         const float breakup=std::clamp(
             info.splash_parameter/(57.7f+info.splash_parameter),0.f,1.f);
+        // Viscous splash sheets open more narrowly than ballistic spray.
+        // Retain the solver's breakup dependence instead of randomizing
+        // each droplet into an unrelated, high-speed trajectory.
         const float opening=std::clamp(
-            .12f+breakup*.95f/(1.f+oh*8.f),.12f,1.12f);
+            .10f+breakup*.30f/(1.f+oh*8.f),.10f,.48f);
         emission initial{};
-        initial.position=source.position+axis*(data->settings.spacing*1.7f);
+        // Begin the bulk ejecta just outside the impacted surface, including
+        // the finite radius of the starting fluid clump. Otherwise the
+        // collision callback immediately reabsorbs half the sheet.
+        const float source_radius=std::cbrt(
+            available*3.f/(4.f*pi));
+        initial.position=source.position+axis*(
+            source_radius+data->settings.spacing*1.5f);
         initial.velocity=axis*speed;
         initial.spread=0.f;
         initial.volume=available;
@@ -194,12 +203,17 @@ namespace fld::system
                               bitangent*std::sin(angle);
             const float eccentricity=math::random01(seed);
             const float theta=opening*std::sqrt(eccentricity);
-            const float effective_speed=speed*
-                (.38f+.62f*math::random01(seed))*
-                (1.f-source.surface.wetting*.16f);
-            p.velocity=axis*(std::cos(theta)*effective_speed)+
-                       radial*(std::sin(theta)*effective_speed)+
-                       lateral*.18f;
+            // Most impact energy is spent on deformation, wetting and
+            // cohesion. Keep the particle neighborhood moving as a sheet;
+            // radial breakup remains controlled by the fluid's We/Oh.
+            const float forward_speed=speed*
+                (.24f+.17f*math::random01(seed))*
+                (1.f-source.surface.wetting*.10f);
+            const float outward_speed=speed*
+                (.34f+.12f*math::random01(seed));
+            p.velocity=axis*(std::cos(theta)*forward_speed)+
+                       radial*(std::sin(theta)*outward_speed)+
+                       lateral*.12f;
             emitted+=p.mass/material.density;
         }
         result.emitted_volume=emitted;
