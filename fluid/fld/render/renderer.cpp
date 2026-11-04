@@ -268,26 +268,49 @@ namespace fld::render
         {
             points.reserve(std::min(
                 world->particles.size(),std::size_t(data->max_particles)));
+            // Expand clip-plane tests by the kernel support radius. A drop
+            // whose center is outside the near plane may still be visible.
+            const auto row_extent=[&](int row)
+            {
+                const auto &m=target.view_projection;
+                return smoothing*std::sqrt(
+                    m(row,0)*m(row,0)+m(row,1)*m(row,1)+
+                    m(row,2)*m(row,2));
+            };
+            const float z_margin=row_extent(2);
+            const float w_margin=row_extent(3);
             for(const auto &p:world->particles)
             {
                 if(target.phase!=0xffffffffu && p.phase!=target.phase)continue;
                 if(points.size()>=data->max_particles)break;
                 const auto clip=target.view_projection *
                     vec4{p.position.x,p.position.y,p.position.z,1.f};
-                if(clip.w<=1e-5f)continue;
-                const auto x=(clip.x/clip.w*.5f+.5f)*target.width;
-                const auto y=(clip.y/clip.w*.5f+.5f)*target.height;
-                const auto z=clip.z/clip.w;
-                if(z<0.f || z>1.f)continue;
-                const float radius=std::clamp(
-                    smoothing*std::abs(target.view_projection(1,1))*
-                    target.height*.5f/clip.w,1.f,2048.f);
+                if(clip.w<=-w_margin || clip.z<-z_margin ||
+                   clip.z>clip.w+z_margin+w_margin)continue;
+
+                const bool clipped=clip.w<=w_margin ||
+                    clip.z<z_margin ||
+                    clip.z>clip.w-(z_margin+w_margin);
                 const auto id=std::uint32_t(points.size());
                 const float volume=p.mass /
                     std::max(.0001f,world->materials[p.phase].density);
                 points.push_back({{p.position.x,p.position.y,
                                    p.position.z,p.radius},
                                   {volume,p.mass,float(p.phase),0.f}});
+                if(clipped)
+                {
+                    // Conservative bound for near/far-clipped spheres. The
+                    // ray-sphere kernel test in the shader rejects pixels
+                    // with no actual liquid intersection.
+                    tiles.add(id,0.f,0.f,float(target.width),
+                              float(target.height));
+                    continue;
+                }
+                const auto x=(clip.x/clip.w*.5f+.5f)*target.width;
+                const auto y=(clip.y/clip.w*.5f+.5f)*target.height;
+                const float radius=std::clamp(
+                    smoothing*std::abs(target.view_projection(1,1))*
+                    target.height*.5f/clip.w,1.f,2048.f);
                 tiles.add(id,x-radius-1.f,y-radius-1.f,
                           x+radius+1.f,y+radius+1.f);
             }
@@ -296,6 +319,7 @@ namespace fld::render
         tiles.pack();
         data->tile_overflows=0;
         data->peak_tile_occupancy=tiles.peak;
+        data->tile_candidates=tiles.indices.size();
         if(!points.empty())
             vk::buffer::write(frame.particles,points.data(),
                               points.size()*sizeof(gpu_particle));
