@@ -9,12 +9,12 @@ namespace fld::system
     struct state
     {
         options settings{};
-        vk::buffer::resource particles,heads,next,lambdas,deltas;
+        vk::buffer::resource particles,heads,next,lambdas,deltas,normals;
         vk::DescriptorSetLayout descriptor_layout{};
         vk::DescriptorPool descriptor_pool{};
         vk::DescriptorSet descriptors{};
         vk::PipelineLayout pipeline_layout{};
-        std::array<vk::Pipeline,7> pipelines{};
+        std::array<vk::Pipeline,9> pipelines{};
         std::uint32_t count=0;
         std::uint32_t bucket_count=16384;
         double simulated_seconds=0.;
