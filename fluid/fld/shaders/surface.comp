@@ -100,7 +100,7 @@ void main()
     uint count=min(counts[tile],tile_capacity);
     if(count==0u)
     {
-        imageStore(liquid_output,pixel,vec4(0));
+        imageStore(liquid_output,pixel,texelFetch(scene_color,pixel,0));
         return;
     }
 
@@ -132,7 +132,7 @@ void main()
     end_t=min(end_t,scene_t);
     if(start_t>=inf || start_t>=end_t)
     {
-        imageStore(liquid_output,pixel,vec4(0));
+        imageStore(liquid_output,pixel,texelFetch(scene_color,pixel,0));
         return;
     }
 
@@ -207,7 +207,7 @@ void main()
         }
         if(nearest>=inf)
         {
-            imageStore(liquid_output,pixel,vec4(0));
+            imageStore(liquid_output,pixel,texelFetch(scene_color,pixel,0));
             return;
         }
         t=nearest;
