@@ -12,6 +12,45 @@ namespace fld::render
 {
     namespace
     {
+        // The host supplies its actual camera matrix; inversion stays in
+        // VulkanFluid so games do not duplicate fluid-render setup.
+        mat4 inverse(const mat4 &m)
+        {
+            double a[4][8]{};
+            for(int row=0;row<4;++row)
+            {
+                for(int col=0;col<4;++col)
+                    a[row][col]=m(row,col);
+                a[row][4+row]=1.0;
+            }
+            for(int col=0;col<4;++col)
+            {
+                int pivot=col;
+                for(int row=col+1;row<4;++row)
+                    if(std::abs(a[row][col])>std::abs(a[pivot][col]))
+                        pivot=row;
+                if(!std::isfinite(a[pivot][col]) ||
+                   std::abs(a[pivot][col])<1e-15)
+                    throw std::invalid_argument("Singular fluid camera matrix");
+                for(int k=0;k<8;++k)
+                    std::swap(a[col][k],a[pivot][k]);
+                const double d=a[col][col];
+                for(int k=0;k<8;++k)a[col][k]/=d;
+                for(int row=0;row<4;++row)
+                {
+                    if(row==col)continue;
+                    const double n=a[row][col];
+                    for(int k=0;k<8;++k)
+                        a[row][k]-=n*a[col][k];
+                }
+            }
+            mat4 result{};
+            for(int row=0;row<4;++row)
+                for(int col=0;col<4;++col)
+                    result(row,col)=float(a[row][4+col]);
+            return result;
+        }
+
         state *data = nullptr;
         constexpr std::uint32_t tile_size = 16;
 
@@ -347,7 +386,7 @@ namespace fld::render
            target.phase<world->materials.size())
             optical=&world->materials[target.phase].optical;
         parameters push{};
-        push.inverse_view_projection=target.inverse_view_projection;
+        push.inverse_view_projection=inverse(target.view_projection);
         push.absorption={optical->absorption.x,
                          optical->absorption.y,
                          optical->absorption.z,
