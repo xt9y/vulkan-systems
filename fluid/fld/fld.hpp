@@ -5,4 +5,6 @@
 #include "material/contact.hpp"
 #include "material/rheology.hpp"
 #include "simulation/solver.hpp"
+#include "surface/film.hpp"
+#include "porous/transport.hpp"
 #include "render/renderer.hpp"

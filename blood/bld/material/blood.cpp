@@ -23,10 +23,10 @@ namespace bld::material
         return blood;
     }
 
-    fld::render::appearance optical(float oxygenation)
+    fld::appearance optical(float oxygenation)
     {
         const float oxygen=std::clamp(oxygenation,0.f,1.f);
-        fld::render::appearance blood{};
+        fld::appearance blood{};
         // RGB absorption is an ARTIST-CALIBRATED approximation, not a
         // substitute for measured wavelength-dependent hemoglobin spectra.
         blood.absorption={

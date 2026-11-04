@@ -1,5 +1,7 @@
 #pragma once
 #include "types.hpp"
+#include "../wounds/flow.hpp"
+#include <vector>
 
 namespace bld::system
 {
@@ -10,6 +12,8 @@ namespace bld::system
         std::uint64_t sequence=1;
         bool owns_fluid=false;
         std::uint64_t impacts=0, deposited=0;
+        std::vector<wounds::source> open_wounds;
+        double wound_supplied_ml=0;
     };
 
     state *get();

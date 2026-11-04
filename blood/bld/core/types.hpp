@@ -1,5 +1,5 @@
 #pragma once
-#include <fld/fld.hpp>
+#include <fld/core/types.hpp>
 #include <cstdint>
 #include <functional>
 
@@ -24,6 +24,12 @@ namespace bld
         bool uv_valid=false;
         float amount_ml=8.f;   // source volume in millilitres
         float velocity=5.f;    // impact ejecta speed, metres/second
+        // Separate bounded source volume for continued post-impact bleeding.
+        // Game-defined approximations, not inferred vessel anatomy.
+        float bleeding_reservoir_ml=12.f;
+        float bleeding_rate_ml_s=1.2f;
+        float bleeding_decay_seconds=8.f;
+        float pulse_hz=0.f;
     };
 
     struct options

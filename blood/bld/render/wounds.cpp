@@ -174,16 +174,20 @@ namespace bld::render::wounds
         grouped.reserve(surfaces->rigid_targets.size());
         for(const auto &stain:surfaces->stains)
             grouped[stain.target].push_back(&stain);
+        constexpr std::size_t resolution=48;
+        constexpr std::size_t stride=12+resolution*resolution;
+        constexpr std::size_t max_marks_per_instance=16;
         std::size_t total=0;
         for(const auto id:ids)
         {
             const auto iter=grouped.find(id);
             if(iter!=grouped.end())
-                total+=std::min<std::size_t>(64,iter->second.size());
+                total+=std::min(max_marks_per_instance,iter->second.size());
         }
         if(!total)return vk::buffer::descriptor(data->fallback);
         if(ids.size()>std::numeric_limits<std::uint32_t>::max() ||
-           total>(std::numeric_limits<std::uint32_t>::max()-1-2*ids.size())/8)
+           ids.size()>(std::numeric_limits<std::uint32_t>::max()-1)/2 ||
+           total>(std::numeric_limits<std::uint32_t>::max()-1-2*ids.size())/stride)
             throw std::overflow_error("Projected blood batch too large");
         std::uint64_t signature=14695981039346656037ull;
         signature=(signature^surfaces->generation)*1099511628211ull;
@@ -193,9 +197,9 @@ namespace bld::render::wounds
         if(!entry.buffers.empty() && entry.generations.at(frame)==signature)
             return vk::buffer::descriptor(entry.buffers.at(frame));
 
-        // words: instance count, per-instance offset/count, then 2 vec4s
-        // per mark. The shader only looks up the current instance's span.
-        std::vector<std::uint32_t> packed(1+2*ids.size()+8*total,0);
+        // Per-instance compact offsets/counts, followed by a 12-word
+        // local surface frame and a 48x48 evolving film field per patch.
+        std::vector<std::uint32_t> packed(1+2*ids.size()+stride*total,0);
         packed[0]=std::uint32_t(ids.size());
         const auto bits=[](float value)
         {
@@ -211,20 +215,28 @@ namespace bld::render::wounds
             packed[1+i]=std::uint32_t(slot);
             if(iter==grouped.end())continue;
             const auto &marks=iter->second;
-            const auto begin=marks.size()>64?marks.size()-64:0;
+            const auto begin=marks.size()>max_marks_per_instance?
+                marks.size()-max_marks_per_instance:0;
             packed[1+ids.size()+i]=std::uint32_t(marks.size()-begin);
             for(std::size_t j=begin;j<marks.size();++j)
             {
                 const auto &mark=*marks[j];
-                const auto at=base+8*slot++;
+                const auto at=base+stride*slot++;
                 packed[at+0]=bits(mark.world(0,3));
                 packed[at+1]=bits(mark.world(1,3));
                 packed[at+2]=bits(mark.world(2,3));
-                packed[at+3]=bits(mark.radius);
-                packed[at+4]=bits(mark.normal.x);
-                packed[at+5]=bits(mark.normal.y);
-                packed[at+6]=bits(mark.normal.z);
-                packed[at+7]=bits(mark.wetness);
+                packed[at+3]=bits(mark.film.metres_per_uv.x);
+                packed[at+4]=bits(mark.world(0,0));
+                packed[at+5]=bits(mark.world(1,0));
+                packed[at+6]=bits(mark.world(2,0));
+                packed[at+7]=bits(mark.film.metres_per_uv.y);
+                packed[at+8]=bits(mark.world(0,2));
+                packed[at+9]=bits(mark.world(1,2));
+                packed[at+10]=bits(mark.world(2,2));
+                packed[at+11]=bits(mark.wetness);
+                if(mark.pixels.size()==resolution*resolution)
+                    std::copy(mark.pixels.begin(),mark.pixels.end(),
+                              packed.begin()+at+12);
             }
         }
         return write(entry,frame,packed,signature);

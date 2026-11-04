@@ -5,7 +5,7 @@ namespace bld::material
 {
     // Parameters are SI measurements and bounded calibration values.
     fld::material physical();
-    fld::render::appearance optical(float oxygenation=.95f);
+    fld::appearance optical(float oxygenation=.95f);
     struct substrate_properties
     {
         float absorption=0, roughness=.15f;

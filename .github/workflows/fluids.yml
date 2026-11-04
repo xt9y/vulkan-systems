@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - research/fluids-blood
+      - research/coupled-films-porous-wounds
   pull_request:
     paths:
       - "fluid/**"
@@ -25,6 +26,24 @@ jobs:
         run: |
           glslangValidator -V fluid/fld/shaders/surface.comp -o /tmp/fluid.spv
           glslangValidator -V -Iblood/bld/shaders tests/blood_shader.frag -o /tmp/blood.frag.spv
+      - name: Verify headless coupled-physics conservation
+        run: |
+          clang++ -std=c++17 -O2 -Itests/mock_vk -Ifluid -Iblood \
+            tests/coupled_films.cpp \
+            fluid/fld/surface/film.cpp \
+            fluid/fld/porous/transport.cpp \
+            fluid/fld/material/rheology.cpp \
+            blood/bld/wounds/flow.cpp -o /tmp/coupled_headless
+          /tmp/coupled_headless
+          clang++ -std=c++17 -O2 -Itests/mock_vk -Ifluid -Iblood \
+            tests/blood_atlas.cpp \
+            blood/bld/surfaces/stains.cpp \
+            blood/bld/material/blood.cpp \
+            fluid/fld/surface/film.cpp \
+            fluid/fld/porous/transport.cpp \
+            fluid/fld/material/rheology.cpp \
+            -o /tmp/blood_headless
+          /tmp/blood_headless
       - name: Configure private sibling dependencies
         env:
           DEPENDENCY_TOKEN: ${{ secrets.VULKAN_DEPS_TOKEN }}
@@ -59,7 +78,19 @@ jobs:
             tests/blood_atlas.cpp \
             blood/bld/surfaces/stains.cpp \
             blood/bld/material/blood.cpp \
+            fluid/fld/surface/film.cpp \
+            fluid/fld/porous/transport.cpp \
             fluid/fld/material/rheology.cpp \
             fluid/fld/math/kernels.cpp \
             -o /tmp/blood_atlas
           /tmp/blood_atlas
+      - name: Coupled film, porous transport and wound-flow conservation
+        run: |
+          clang++ -std=c++17 -O2 -I/tmp/vkengine -Ifluid -Iblood \
+            tests/coupled_films.cpp \
+            fluid/fld/surface/film.cpp \
+            fluid/fld/porous/transport.cpp \
+            fluid/fld/material/rheology.cpp \
+            blood/bld/wounds/flow.cpp \
+            -o /tmp/coupled_films
+          /tmp/coupled_films
