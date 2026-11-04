@@ -43,6 +43,7 @@ namespace fld::render
         std::uint32_t max_particles = 0;
         std::uint64_t tile_overflows = 0;
         std::uint32_t peak_tile_occupancy = 0;
+        std::uint64_t tile_candidates = 0; // packed GPU index count
     };
 
     state *get();
