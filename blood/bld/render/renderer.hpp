@@ -36,6 +36,7 @@ namespace bld::render
     };
 
     state *get();
+    bool active();
     // Shader binaries are supplied by the application: no compiler at runtime.
     void init(const std::vector<std::uint32_t> &shader_spirv,
               std::uint32_t frames_in_flight,

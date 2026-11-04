@@ -191,6 +191,14 @@ namespace bld::render
 
     state *get() { return data; }
 
+    bool active()
+    {
+        const auto *surface = surfaces::get();
+        const auto *fluid = simulation::get();
+        return (surface && !surface->decals.empty()) ||
+               (fluid && !fluid->particles.empty());
+    }
+
     void init(const std::vector<std::uint32_t> &spirv,
               std::uint32_t count, std::uint32_t width, std::uint32_t height)
     {
