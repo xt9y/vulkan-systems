@@ -14,11 +14,13 @@ layout(std430,set=0,binding=1) buffer Heads { int heads[]; };
 layout(std430,set=0,binding=2) buffer Next { int next_particle[]; };
 layout(std430,set=0,binding=3) buffer Lambdas { float lambdas[]; };
 layout(std430,set=0,binding=4) buffer Deltas { vec4 deltas[]; };
+layout(std430,set=0,binding=5) buffer SurfaceNormals { vec4 surface_normals[]; };
 
 layout(push_constant) uniform Settings
 {
     vec4 gravity_dt; // xyz gravity, w substep seconds
     vec4 liquid;     // x rest density, y spacing, z h, w floor height
+    vec4 contact;    // x sigma, y cos(theta advancing), z cos(receding), w viscosity
     uvec4 indices;   // x particle count, y bucket count, z iteration count
 } pc;
 
@@ -142,9 +144,80 @@ void main()
     if(p.position.y<=pc.liquid.w+p.position.w+1e-4)
     {
         v.y=max(0.,v.y);
-        v.xz*=.965;
+        float speed=length(v.xz);
+        // Contact-line hysteresis: a pinned contact line resists sliding
+        // until tangential acceleration exceeds the capillary threshold.
+        // This is a bounded approximation pending contact-angle tests.
+        float pin=max(0.,pc.contact.z-pc.contact.y)*
+                  pc.contact.x*6.2831853*p.position.w/
+                  max(p.physical.y,1e-6);
+        float dv=pin*pc.gravity_dt.w;
+        v.xz=speed>dv ? v.xz*(1.-dv/max(speed,1e-7)) : vec2(0);
     }
     p.velocity.xyz=v;
+    particles[id]=p;
+#elif defined(FLD_NORMAL)
+    float h=pc.liquid.z;
+    vec3 gradient=vec3(0);
+    ivec3 at=cell(p.position.xyz);
+    for(int z=-1;z<=1;++z)
+    for(int y=-1;y<=1;++y)
+    for(int x=-1;x<=1;++x)
+    {
+        ivec3 n=at+ivec3(x,y,z);
+        int j=heads[hash_cell(n)];
+        uint visited=0u;
+        while(j!=invalid && visited++<pc.indices.x)
+        {
+            Particle q=particles[j];
+            if(j!=int(id) && all(equal(cell(q.position.xyz),n)))
+            {
+                gradient-=q.physical.x*
+                          spiky(p.position.xyz-q.position.xyz,h);
+            }
+            j=next_particle[j];
+        }
+    }
+    surface_normals[id]=vec4(gradient,length(gradient));
+#elif defined(FLD_CAPILLARY)
+    vec3 n=surface_normals[id].xyz;
+    float magnitude=surface_normals[id].w;
+    if(magnitude<1e-5)return; // liquid interior
+    vec3 n_hat=n/magnitude;
+    float curvature=0.;
+    ivec3 at=cell(p.position.xyz);
+    float h=pc.liquid.z;
+    for(int z=-1;z<=1;++z)
+    for(int y=-1;y<=1;++y)
+    for(int x=-1;x<=1;++x)
+    {
+        ivec3 c=at+ivec3(x,y,z);
+        int j=heads[hash_cell(c)];
+        uint visited=0u;
+        while(j!=invalid && visited++<pc.indices.x)
+        {
+            Particle q=particles[j];
+            if(j!=int(id) && all(equal(cell(q.position.xyz),c)))
+            {
+                vec3 nj=surface_normals[j].xyz;
+                float lj=length(nj);
+                if(lj>1e-5)
+                    curvature+=q.physical.x*
+                               dot(nj/lj-n_hat,
+                                   spiky(p.position.xyz-q.position.xyz,h));
+            }
+            j=next_particle[j];
+        }
+    }
+    // Continuum Surface Force, numerically bounded for real-time PBF.
+    // Not the unified implicit pressure/capillarity formulation.
+    vec3 acceleration=-pc.contact.x/pc.liquid.x*
+                       abs(curvature)*n;
+    float speed=length(acceleration);
+    float bound=.15*pc.liquid.y/
+                max(pc.gravity_dt.w*pc.gravity_dt.w,1e-8);
+    if(speed>bound)acceleration*=bound/speed;
+    p.velocity.xyz+=acceleration*pc.gravity_dt.w;
     particles[id]=p;
 #endif
 #endif
