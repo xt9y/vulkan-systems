@@ -1,5 +1,6 @@
 #include "system.hpp"
 #include "../math/geometry.hpp"
+#include "../network/events.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -86,6 +87,7 @@ namespace bld::system
     void update(float dt, const collision_callback &world)
     {
         if (!data) return;
+        network::dispatch();
         const float bounded = std::max(0.f, std::min(dt, .12f));
         if (bounded == 0) return;
         data->accumulator += bounded;
@@ -139,6 +141,7 @@ namespace bld::system
         wounds::init(options);
         simulation::init(options);
         data->pending_backdrops.clear();
+        network::reset();
         data->accumulator = 0;
     }
 

@@ -145,6 +145,7 @@ namespace bld::network
         const auto value = decode(bytes, count);
         if (!value || !system::get()) return false;
         if (!data) init();
+        std::lock_guard<std::mutex> guard(data->mutex);
         // The source ID is part of the replay key to accommodate multiple peers.
         const std::uint64_t key = value->id ^
             (std::uint64_t(value->source) * 0x9e3779b97f4a7c15ull);
@@ -155,15 +156,31 @@ namespace bld::network
             data->history.pop_front();
         }
         data->history.push_back(key);
-        system::apply(*value);
+        if (data->pending.size() >= data->replay_window)
+            data->pending.pop_front();
+        data->pending.push_back(*value);
         return true;
+    }
+
+    void dispatch()
+    {
+        if (!data) return;
+        std::deque<impact> ready;
+        {
+            std::lock_guard<std::mutex> guard(data->mutex);
+            ready.swap(data->pending);
+        }
+        for (const auto &event : ready)
+            system::apply(event);
     }
 
     void reset()
     {
         if (!data) return;
+        std::lock_guard<std::mutex> guard(data->mutex);
         data->history.clear();
         data->seen.clear();
+        data->pending.clear();
     }
 
     void shutdown()
