@@ -8,7 +8,6 @@ namespace bld::render
 
     struct state
     {
-        float oxygenation=.95f;
         bool owns_renderer=false;
     };
 

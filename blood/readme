@@ -10,4 +10,7 @@ blood
   bld::network::receive(packet, count)
   bld::system::shutdown()
 
-Blood materials, impacts, skinned wounds, cloth wicking, decals and optional network. Uses the independent VulkanFluid solver and renderer.
+Optional blood preset, UV-stain/fabric layer and network event codec.
+All fluid mechanics, splashes, wetting, collisions, and liquid rendering
+are delegated to VulkanFluid. For blood without stains/network, use
+fld::system directly with bld::material::physical().

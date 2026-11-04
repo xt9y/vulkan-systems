@@ -100,17 +100,19 @@ namespace bld::system
                 auto hit=world(from,to,radius);
                 if(!hit.hit)return hit;
                 const auto *surfaces=surface::get();
-                if(!surfaces)
+                // Unregistered scene geometry is a passive hard wall.
+                // Never delete liquid mass because a target has no stain
+                // handler. The host can register a surface at any time.
+                if(!surfaces || !surfaces->targets.count(hit.target))
                 {
-                    hit.absorb=true;
+                    hit.material_response=false;
+                    hit.absorb=false;
+                    hit.deposition_fraction=0.f;
+                    hit.restitution=.02f;
+                    hit.friction=.65f;
                     return hit;
                 }
                 const auto it=surfaces->targets.find(hit.target);
-                if(it==surfaces->targets.end())
-                {
-                    hit.absorb=true;
-                    return hit;
-                }
                 // The blood layer only describes the receiving surface.
                 // Actual wetting, absorption and rebound are solved in fld.
                 hit.surface=material::interaction(it->second.kind);
