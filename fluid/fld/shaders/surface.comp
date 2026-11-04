@@ -105,7 +105,7 @@ void main()
     bool background=(pc.sizes.z&1u)!=0u?d<=.000001:d>=.999999;
     float scene_t=background?inf:dot(unproject(ndc,d)-near_point,ray);
     float spacing=pc.lighting.w;
-    float h=spacing*2.5;
+    float h=spacing*max(1.5,float((pc.sizes.z>>8u)&65535u)/100.0);
     float mass_volume=spacing*spacing*spacing;
     float start_t=inf;
 
@@ -157,7 +157,7 @@ void main()
     t=(a+b)*.5;
     vec3 world=near_point+ray*t;
     vec3 normal=normalize(-gradient(world,tile,h,mass_volume));
-    if(!all(isfinite(normal)))normal=-ray;
+    if(any(isnan(normal)) || any(isinf(normal)))normal=-ray;
     if(dot(normal,ray)>0.0)normal=-normal;
 
     // Integrate approximate volume occupied by the fluid along the ray.

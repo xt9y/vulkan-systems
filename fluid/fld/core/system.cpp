@@ -34,9 +34,15 @@ namespace fld::system
 
     std::uint32_t add_material(const fld::material &m)
     {
-        if (!data || m.density <= 0.f || m.viscosity_infinite <= 0.f ||
+        if (!data || !std::isfinite(m.density) || m.density <= 0.f ||
+            !std::isfinite(m.viscosity_infinite) ||
+            m.viscosity_infinite <= 0.f ||
+            !std::isfinite(m.viscosity_zero) ||
             m.viscosity_zero < m.viscosity_infinite ||
-            m.surface_tension <= 0.f)
+            !std::isfinite(m.surface_tension) ||
+            m.surface_tension <= 0.f ||
+            m.flow_index <= 0.f || m.flow_index > 2.f ||
+            m.relaxation < 0.f)
             throw std::invalid_argument("Invalid fluid material or state");
         data->materials.push_back(m);
         return std::uint32_t(data->materials.size()-1);
@@ -54,7 +60,9 @@ namespace fld::system
         const int reach = std::max(1, int(std::ceil(sphere / space)));
         const float volume = space * space * space;
         const float mass = data->materials[source.phase].density * volume;
-        const auto limit = settings.max_particles - std::uint32_t(data->particles.size());
+        if (data->particles.size() >= settings.max_particles) return 0;
+        const auto limit = settings.max_particles -
+            std::uint32_t(data->particles.size());
         std::uint32_t written = 0;
         auto seed = source.seed ? source.seed : 1u;
 
