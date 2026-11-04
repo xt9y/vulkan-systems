@@ -38,13 +38,27 @@ namespace bld::surface
                    std::cos(x*23.12f)*.02f;
         }
 
-        void rasterize(atlas &image, substrate kind)
+        void rasterize(atlas &image, substrate kind, bool bake=false)
         {
-            std::fill(image.pixels.begin(),image.pixels.end(),0u);
+            auto &pixels=bake?image.baked_pixels:image.pixels;
+            if(bake)
+            {
+                if(pixels.size()!=image.pixels.size())
+                    pixels.assign(image.pixels.size(),0u);
+            }
+            else if(image.baked_pixels.size()==image.pixels.size())
+                pixels=image.baked_pixels;
+            else
+                std::fill(pixels.begin(),pixels.end(),0u);
+
             const int w=int(image.resolution);
             const auto physical=material::surface(kind);
-            for(const auto &mark:image.marks)
+            const std::size_t count=bake?
+                std::min<std::size_t>(1,image.marks.size()):
+                image.marks.size();
+            for(std::size_t i=0;i<count;++i)
             {
+                const auto &mark=image.marks[i];
                 // Textile wicking spreads over seconds; hard surfaces stay
                 // at their contact footprint. No screen-space UV projection.
                 const float wick=physical.absorption *
@@ -88,7 +102,7 @@ namespace bld::surface
                             (edge-radius2)*7.f,0.f,1.f);
                         if(coverage<=0.f)continue;
                         const auto value=std::size_t(y)*w+x;
-                        const std::uint32_t old=image.pixels[value];
+                        const std::uint32_t old=pixels[value];
                         const float old_cov=float(old>>24u)/255.f;
                         const float new_cov=coverage+old_cov*(1.f-coverage);
                         // Normalized film thickness, where 1 means 1 mm.
@@ -103,7 +117,7 @@ namespace bld::surface
                         const std::uint32_t v=std::uint32_t(new_wet*255.f+.5f);
                         const std::uint32_t z=std::uint32_t(new_depth*255.f+.5f);
                         const std::uint32_t a=std::uint32_t(dry*255.f+.5f);
-                        image.pixels[value]=(c<<24u)|(v<<16u)|(z<<8u)|a;
+                        pixels[value]=(c<<24u)|(v<<16u)|(z<<8u)|a;
                     }
             }
             image.generation=++data->generation;
@@ -179,7 +193,12 @@ namespace bld::surface
                 atlas.pixels.assign(std::size_t(atlas.resolution)*
                                     atlas.resolution,0u);
             if(atlas.marks.size()>=data->settings.max_marks)
+            {
+                // Flatten the oldest mark into a persistent pigment/wetness
+                // layer before reclaiming its procedural storage.
+                rasterize(atlas,registered->second.kind,true);
                 atlas.marks.erase(atlas.marks.begin());
+            }
             mark m{};
             m.uv=uv;
             const auto metric=registered->second.metres_per_uv;
@@ -248,20 +267,38 @@ namespace bld::surface
         if(!data || dt<=0.f)return;
         for(auto &[id,image]:data->atlases)
         {
-            if(image.marks.empty())continue;
             bool active=false;
             for(auto &m:image.marks)
             {
                 m.age+=dt;
                 if(m.age<300.f)active=true;
             }
-            if(active)
+            const bool baked_wet=std::any_of(
+                image.baked_pixels.begin(),image.baked_pixels.end(),
+                [](std::uint32_t pixel){return ((pixel>>16u)&255u)!=0u;});
+            if(active || baked_wet)
             {
                 image.update_accumulator+=dt;
                 if(image.update_accumulator>=.20f)
                 {
+                    const float elapsed=image.update_accumulator;
                     image.update_accumulator=0.f;
                     const auto kind=data->targets.at(id).kind;
+                    if(baked_wet)
+                    {
+                        // Pigment coverage is permanent, but excess surface
+                        // wetness dries even after a mark has been flattened.
+                        const auto props=material::surface(kind);
+                        const float decay=std::exp(-elapsed/
+                            std::max(1.f,42.f*props.drying_scale));
+                        for(auto &pixel:image.baked_pixels)
+                        {
+                            const auto wet=(pixel>>16u)&255u;
+                            const auto remaining=std::uint32_t(
+                                std::round(float(wet)*decay));
+                            pixel=(pixel&0xff00ffffu)|(remaining<<16u);
+                        }
+                    }
                     rasterize(image,kind);
                 }
             }
