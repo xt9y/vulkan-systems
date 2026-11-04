@@ -38,12 +38,32 @@ vec4 bld_sample(vec2 uv,int resolution,uint instance_index)
     return mix(a,b,t.y);
 }
 
-void bld_material(vec2 uv,int resolution,uint instance_index,
-                  inout vec3 albedo,inout float roughness,
-                  inout float metallic)
+// Reconstruct bilinear film coverage AND its analytic thickness gradient
+// from four texels. The previous normal shader performed four additional
+// bilinear lookups (16+ storage-buffer reads) for adjacent samples.
+void bld_sample_gradient(vec2 uv,int resolution,uint instance_index,
+                         out vec4 stain,out vec2 gradient)
 {
-    vec4 stain=bld_sample(uv,resolution,instance_index);
+    vec2 p=fract(uv)*float(resolution-1);
+    ivec2 ij=ivec2(floor(p));
+    vec2 w=fract(p);
+    vec4 a=bld_texel(ij,resolution,instance_index);
+    vec4 b=bld_texel(ij+ivec2(1,0),resolution,instance_index);
+    vec4 c=bld_texel(ij+ivec2(0,1),resolution,instance_index);
+    vec4 d=bld_texel(ij+ivec2(1,1),resolution,instance_index);
+    stain=mix(mix(a,b,w.x),mix(c,d,w.x),w.y);
+    gradient=vec2(
+        mix(b.z-a.z,d.z-c.z,w.y),
+        mix(c.z-a.z,d.z-b.z,w.x)
+    )*(.002*float(resolution-1));
+}
+
+void bld_apply_material(vec4 stain,
+                        inout vec3 albedo,inout float roughness,
+                        inout float metallic)
+{
     float coverage=stain.x;
+    if(coverage<=0.0)return;
     float wet=stain.y;
     float depth=stain.z;
     float absorbency=stain.w;
@@ -56,30 +76,12 @@ void bld_material(vec2 uv,int resolution,uint instance_index,
     metallic=mix(metallic,0.0,coverage);
 }
 
- 
-
-vec3 bld_film_normal(vec2 uv,int resolution,uint instance_index,
-                     vec3 world_position,vec3 world_normal)
+void bld_material(vec2 uv,int resolution,uint instance_index,
+                  inout vec3 albedo,inout float roughness,
+                  inout float metallic)
 {
-    // Reconstruct the mobile-film gradient in world metres. The source
-    // normal map remains visible underneath thin mobile layers.
-    vec2 step_uv=vec2(1.0/float(resolution));
-    float hx=(bld_sample(uv+vec2(step_uv.x,0),resolution,instance_index).z-
-              bld_sample(uv-vec2(step_uv.x,0),resolution,instance_index).z)
-             *.002/(2.0*step_uv.x);
-    float hy=(bld_sample(uv+vec2(0,step_uv.y),resolution,instance_index).z-
-              bld_sample(uv-vec2(0,step_uv.y),resolution,instance_index).z)
-             *.002/(2.0*step_uv.y);
-    vec2 dx=dFdx(uv),dy=dFdy(uv);
-    float det=dx.x*dy.y-dx.y*dy.x;
-    if(abs(det)<1e-8)return world_normal;
-    vec3 px=dFdx(world_position),py=dFdy(world_position);
-    vec3 du=(px*dy.y-py*dx.y)/det;
-    vec3 dv=(py*dx.x-px*dy.x)/det;
-    vec3 gradient=du*(hx/max(dot(du,du),1e-8))+
-                  dv*(hy/max(dot(dv,dv),1e-8));
-    return normalize(world_normal-clamp(length(gradient),0.0,1.5)*
-                     normalize(gradient+vec3(1e-8)));
+    bld_apply_material(bld_sample(uv,resolution,instance_index),
+                       albedo,roughness,metallic);
 }
 
 void bld_material_film(vec2 uv,int resolution,uint instance_index,
@@ -87,8 +89,25 @@ void bld_material_film(vec2 uv,int resolution,uint instance_index,
                        inout vec3 albedo,inout float roughness,
                        inout float metallic)
 {
-    normal=bld_film_normal(uv,resolution,instance_index,world_position,normal);
-    bld_material(uv,resolution,instance_index,albedo,roughness,metallic);
+    vec4 stain;
+    vec2 gradient_uv;
+    bld_sample_gradient(uv,resolution,instance_index,stain,gradient_uv);
+    // Derivatives must be evaluated uniformly, before any per-pixel
+    // branching on the stain coverage.
+    vec2 dx=dFdx(uv),dy=dFdy(uv);
+    vec3 px=dFdx(world_position),py=dFdy(world_position);
+    float det=dx.x*dy.y-dx.y*dy.x;
+    if(stain.x>0.0 && abs(det)>1e-8)
+    {
+        vec3 du=(px*dy.y-py*dx.y)/det;
+        vec3 dv=(py*dx.x-px*dy.y)/det;
+        vec3 world_gradient=
+            du*(gradient_uv.x/max(dot(du,du),1e-8))+
+            dv*(gradient_uv.y/max(dot(dv,dv),1e-8));
+        normal=normalize(normal-world_gradient*
+            min(1.0,1.5/max(length(world_gradient),1e-7)));
+    }
+    bld_apply_material(stain,albedo,roughness,metallic);
 }
 
 // Rigid surfaces use metre-sized world-space footprints, not a UV atlas
