@@ -1,9 +1,47 @@
 #include "geometry.hpp"
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace bld::math
 {
+    mat4 inverse(const mat4 &m)
+    {
+        double rows[4][8]{};
+        for (int row = 0; row < 4; ++row)
+        {
+            for (int col = 0; col < 4; ++col)
+                rows[row][col] = m(row, col);
+            rows[row][row + 4] = 1.0;
+        }
+        for (int col = 0; col < 4; ++col)
+        {
+            int pivot = col;
+            for (int row = col + 1; row < 4; ++row)
+                if (std::abs(rows[row][col]) > std::abs(rows[pivot][col]))
+                    pivot = row;
+            if (std::abs(rows[pivot][col]) < 1e-12)
+                throw std::runtime_error("Cannot invert singular matrix");
+            if (col != pivot)
+                for (int n = 0; n < 8; ++n)
+                    std::swap(rows[col][n], rows[pivot][n]);
+            const double d = rows[col][col];
+            for (int n = 0; n < 8; ++n) rows[col][n] /= d;
+            for (int row = 0; row < 4; ++row)
+            {
+                if (row == col) continue;
+                const double factor = rows[row][col];
+                for (int n = 0; n < 8; ++n)
+                    rows[row][n] -= factor * rows[col][n];
+            }
+        }
+        mat4 result{};
+        for (int row = 0; row < 4; ++row)
+            for (int col = 0; col < 4; ++col)
+                result(row, col) = float(rows[row][col + 4]);
+        return result;
+    }
+
     mat4 inverse_affine(const mat4 &m)
     {
         using namespace vk::util::math;

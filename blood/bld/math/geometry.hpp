@@ -3,6 +3,7 @@
 
 namespace bld::math
 {
+    mat4 inverse(const mat4 &matrix);
     mat4 inverse_affine(const mat4 &matrix);
     mat4 projector(vec3 point, vec3 normal, float width, float height, float rotation = 0);
     vec3 position(const mat4 &matrix);
