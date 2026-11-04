@@ -23,7 +23,8 @@ vec4 bld_texel(ivec2 p,int resolution,uint instance_index)
 
 vec4 bld_sample(vec2 uv,int resolution,uint instance_index)
 {
-    vec2 p=clamp(uv,vec2(0),vec2(1))*float(resolution-1);
+    // Match repeat-wrapped glTF UVs, including meshes with tiled (>1) coordinates.
+    vec2 p=fract(uv)*float(resolution-1);
     ivec2 origin=ivec2(floor(p));
     vec2 t=fract(p);
     vec4 a=mix(bld_texel(origin,resolution,instance_index),
