@@ -1,0 +1,474 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{newtxtext,newtxmath}
+\usepackage[margin=18mm,top=18mm,bottom=19mm,columnsep=5.8mm]{geometry}
+\usepackage{microtype}
+\usepackage{amsmath,bm}
+\usepackage{booktabs,multirow,array,tabularx}
+\usepackage{graphicx,xcolor}
+\usepackage{caption,subcaption}
+\usepackage[sort&compress,numbers]{natbib}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{balance}
+\usepackage{float}
+\usepackage{url}
+\usepackage{fancyhdr}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\definecolor{papergray}{HTML}{F3F4F5}
+\definecolor{framegray}{HTML}{B9BDC3}
+\definecolor{inkgray}{HTML}{5A606A}
+\hypersetup{colorlinks=true,linkcolor=black,citecolor=black,urlcolor=black,pdftitle={Scale-Aware GPU-Resident Fluid Simulation and Rendering for Small-Scale Liquids},pdfauthor={},pdfsubject={Research specification and experimental protocol}}
+\captionsetup{font=small,labelfont=bf,justification=justified,singlelinecheck=false}
+\setlength{\parindent}{1.1em}
+\setlength{\parskip}{0.0em}
+\setlength{\columnsep}{5.8mm}
+\setlist{nosep,leftmargin=*}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\footnotesize\itshape Scale-Aware GPU-Resident Fluid Simulation and Rendering}
+\fancyfoot[C]{\footnotesize\thepage}
+\renewcommand{\headrulewidth}{0pt}
+\makeatletter
+\renewcommand{\section}{\@startsection{section}{1}{\z@}{1.35ex plus .5ex minus .1ex}{.7ex}{\normalfont\bfseries\normalsize}}
+\newcommand{\figurebox}[3]{%
+  \IfFileExists{figures/#1.png}{\includegraphics[width=\linewidth,height=#2,keepaspectratio]{figures/#1.png}}{%
+  \IfFileExists{figures/#1.pdf}{\includegraphics[width=\linewidth,height=#2,keepaspectratio]{figures/#1.pdf}}{%
+  \IfFileExists{figures/#1.jpg}{\includegraphics[width=\linewidth,height=#2,keepaspectratio]{figures/#1.jpg}}{%
+  \fcolorbox{framegray}{papergray}{\begin{minipage}[c][#2][c]{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}\centering
+    \sffamily\small\bfseries FIGURE PLACEHOLDER\\[4pt]
+    \normalfont\footnotesize\texttt{figures/#1.png}\\[5pt]
+    \normalfont\footnotesize\color{inkgray}#3\end{minipage}}}}}}
+\makeatother
+\newcommand{\etal}{\emph{et al.}}
+\newcommand{\ms}{\,\mathrm{ms}}
+\newcommand{\micron}{\,\mu\mathrm{m}}
+\newcommand{\mm}{\,\mathrm{mm}}
+\newcommand{\mps}{\,\mathrm{m\,s}^{-1}}
+\newcommand{\unit}[1]{\,\mathrm{#1}}
+\newcommand{\TBD}{\textsf{not measured}}
+\newcommand{\st}{\sigma}
+\begin{document}
+\twocolumn[{%
+\begin{center}
+{\Large\bfseries A Scale-Aware, GPU-Resident Framework for\\[-1pt] Real-Time Small-Scale Liquid Simulation and Rendering\par}
+\vspace{2.0mm}
+{\small Research design, numerical methods, and reproducible evaluation protocol\par}
+\vspace{3mm}
+\begin{minipage}{.95\textwidth}
+\figurebox{teaser}{42mm}{Replace with: microdroplet on inclined glass; coalescence sequence; continuous thin filament; matching final photorealistic render. No results are implied.}
+\captionof{figure}{\textbf{Target phenomena and visual fidelity (illustration pending).} Four proposed evaluations at sub-millimetre to centimetre scales. The panel is intentionally empty until implementations produce measured, reproducible frames. No image in this manuscript is presented as an achieved result.}
+\end{minipage}
+\end{center}
+\vspace{0.5mm}
+\begin{minipage}{\textwidth}
+{\bfseries Abstract}\quad
+Achieving physically plausible, visually continuous liquids on constrained GPUs is especially difficult at small spatial scales, where capillarity, contact-line hysteresis, surface adhesion, and boundary friction can dominate gravity. Particle solvers that appear adequate for large splashes can produce unstable, ballistic microdroplets; conversely, high-fidelity implicit solvers can require computation far beyond a real-time budget. This paper specifies a scale-aware, GPU-resident framework that decouples physical resolution from optical reconstruction, compares position-based and divergence-free pressure projections against a unified pressure--surface-tension--friction formulation, and prioritizes droplet-scale validation before scene-scale optimization. The proposed system uses compact GPU neighbor indexing, persistent simulation buffers, model-based free-surface reconstruction, and a thickness-aware optical compositor. We identify the gap between published offline examples and the desired $60$~Hz frame time, define measurable numerical and rendering acceptance tests, and provide an implementation sequence designed for a minimal Vulkan abstraction with an Apple M2 baseline. The present contribution is a \emph{research-backed design and evaluation protocol}; it does not claim a completed fluid solver, experimental accuracy, or measured real-time performance.\\[2mm]
+{\bfseries CCS Concepts:} Computing methodologies $\rightarrow$ Physical simulation; Rendering; Massively parallel algorithms.\\[-0.2mm]
+{\bfseries Keywords:} smoothed particle hydrodynamics, droplets, capillarity, surface tension, contact-line hysteresis, GPU compute, small-scale fluids, physically based rendering.
+\end{minipage}
+\vspace{3mm}
+}]
+
+\section{Introduction}
+Real-time fluid effects frequently optimize for impressive large-scale motion while under-resolving the liquid interfaces that control tiny droplets, wetting, capillary bridges, and thin streams. At these scales, liquid appearance is a coupled numerical and optical problem. A particle cluster can preserve approximately the correct mass yet look like beads; a smooth reconstructed surface can be visually convincing while violating contact-angle or pressure constraints. Neither compromise is acceptable as the sole success criterion of a physically motivated system.
+
+The design target is a reusable liquid library, not a blood-specific effect. It should support water-like Newtonian liquids first, then measured non-Newtonian materials if the solver and benchmarks warrant the added complexity. Inputs are SI material properties, conservative emission volumes, collider geometry, boundary parameters, and optical coefficients. The simulation must remain independent of game-specific scene generation, collision semantics and control systems.
+
+The requirements are stringent but not contradictory when explicitly bounded: visually continuous isolated droplets and filaments, observable conservation, stable interaction with solid surfaces, and a $60$~Hz display target on a fanless Apple M2-class GPU. What is \emph{not} feasible is a universal guarantee of $60$~Hz for arbitrary numbers of sub-millimetre particles, resolutions, or contact constraints.
+
+We make four design propositions. First, small-scale liquid physics needs measured pressure and capillary behavior, not hand-tuned ejection velocities. Second, all large particle and neighbor arrays should remain GPU-resident. Third, the representation used to shade a droplet may be finer than the simulation sampling without inventing physical mass. Fourth, algorithms should be selected by quantified error and measured cost rather than by the visual quality of a single demonstration.
+
+\section{Related Work}
+\subsection{Incompressible particle solvers}
+Implicit Incompressible SPH (IISPH) derives a pressure projection from the continuity equation and pressure force to improve convergence \citep{ihmsen2014}. Divergence-Free SPH (DFSPH) further applies separate density and velocity-divergence corrections, reducing compressibility and permitting larger timesteps in tested cases \citep{bender2015}. Position Based Fluids (PBF) formulates density correction as a positional constraint and is attractive for parallel real-time systems \citep{macklin2013}. GPU PCISPH implementations demonstrate that indexing and memory layout can be as important as the pressure model \citep{nie2015,isphgpu2018}.
+
+None of these methods alone guarantees realistic small-droplet contact and adhesion: their pressure constraints do not uniquely determine hysteresis, friction, free-surface shape, or the behavior of a thin liquid bridge. Each is therefore a reference to compare, not a complete target implementation.
+
+\subsection{Tension, adhesion, and friction}
+Akinci et al. provide a widely used surface-tension and adhesion SPH treatment \citep{akinci2013}. Probst and Teschner derive a unified implicit pressure, surface-tension, and Coulomb-like boundary-friction solver \citep{probst2024}, building on work on monolithic friction and contact handling \citep{probst2023}. The unified method is a compelling physical target for droplets on tilted or vertical solids.
+
+\textbf{Critical runtime distinction.} The 2024 paper reports large-scale demonstrations whose computation time is measured in seconds \emph{per simulated step}, not $60$ interactive steps per second \citep{probst2024}. Transferring the underlying physics to compact GPU kernels is an unverified engineering research task. We neither claim to reproduce its exact convergence nor use its offline throughput to predict M2 frame rates.
+
+\subsection{Small free surfaces and optical rendering}
+Yu and Turk's anisotropic reconstruction uses local particle covariance to preserve thin streams and sharp features \citep{yuturk2010}. Ando et al. apply adaptive anisotropic resampling to maintain thin sheets in a FLIP context \citep{ando2012}. Screen-space curvature-flow smoothing can reconstruct fluid surfaces efficiently while suppressing sphere-like artifacts \citep{vanderlaan2009}. These studies motivate a hybrid reconstruction that preserves isolated droplets rather than smoothing every particle group equally.
+
+Physical thin films over curved surfaces can alternatively use reduced surface PDEs with conservative transport \citep{vantzos2017}. We do not automatically add a 2-D film solver: its coupling, geometry updates, and small contact physics must be justified against the cost and quality of the primary 3-D approach. APIC is retained as an optional bulk-liquid extension, not the starting point for capillary-dominated droplets \citep{jiang2015}.
+
+\section{Scale Regimes and Dimensional Analysis}
+\subsection{Dimensionless controls}
+Let $\rho$ be density ($\mathrm{kg}/\mathrm{m}^3$), $\mu$ dynamic viscosity ($\mathrm{Pa\,s}$), $\sigma$ surface tension ($\mathrm{N}/\mathrm{m}$), $U$ a characteristic speed, $L$ a characteristic length, and $g$ gravity. We use
+\begin{equation}
+\mathrm{Re}=\frac{\rho U L}{\mu},\qquad
+\mathrm{We}=\frac{\rho U^2 L}{\sigma},
+\label{eq:rewe}
+\end{equation}
+\begin{equation}
+\mathrm{Bo}=\frac{\rho g L^2}{\sigma},\quad
+\mathrm{Oh}=\frac{\mu}{\sqrt{\rho\sigma L}},\quad
+\mathrm{Ca}=\frac{\mu U}{\sigma}.
+\label{eq:booh}
+\end{equation}
+The capillary length
+\begin{equation}
+\ell_c=\sqrt{\frac{\sigma}{\rho g}}
+\label{eq:capillary}
+\end{equation}
+is approximately $2.71\mm$ for water near room temperature using $\rho=998\unit{kg/m^3}$ and $\sigma=0.072\unit{N/m}$. For droplets markedly below that length scale, capillarity is typically important relative to gravity. This is a scaling criterion, not a fixed particle-spacing prescription.
+
+For a static spherical interface, the Young--Laplace pressure jump is
+\begin{equation}
+\Delta p = \frac{2\sigma}{R}.
+\label{eq:laplace}
+\end{equation}
+At $R=0.25\mm$ the prediction for the nominal water properties is $576\unit{Pa}$; at $R=1\mm$, $144\unit{Pa}$. These analytic values are \emph{reference targets}, not simulated measurements.
+
+\subsection{Spatial resolution cannot be hidden}
+A particle simulation only resolves interfaces down to a scale tied to its kernel support and particle spacing $\Delta x$. If a filament becomes thinner than the neighborhood support, smoothing can dissolve it and arbitrary attraction can make it too thick. The renderer can display a plausible sub-pixel droplet at physical volume $V$ using an analytic shape, but this is \emph{not} evidence that internal capillary waves, rupture, or contact-angle dynamics at that scale were numerically resolved.
+
+We therefore report two independent quality measures: \emph{simulation fidelity}, determined by $\Delta x$, solver residual, and interface convergence, and \emph{display fidelity}, determined by projected area, visibility, normals, thickness, and optical sampling.
+
+\subsection{Time-step constraints}
+A physical substep is controlled by advection, pressure response and capillary dynamics. Useful \emph{diagnostic} scales are
+\begin{equation}
+\Delta t_{\mathrm{adv}} \sim \frac{h}{\|\mathbf v\|+\epsilon},\qquad
+\Delta t_{\sigma}\sim\sqrt{\frac{\rho h^3}{\sigma}},
+\label{eq:dt}
+\end{equation}
+where $h$ is characteristic kernel support. Constants and stability limits depend on discretization and implicitness; Eq.~\eqref{eq:dt} is not an asserted stable timestep for the proposed solver. A stiff implicit capillary solve may tolerate larger steps, but must prove convergence rather than silently dropping steps to meet frame rate.
+
+\begin{figure}[t]
+\figurebox{scale-regimes}{33mm}{Add a log-scale plot of Bo and Oh versus droplet radius, marking the intended resolution bands and the measured numerical stability limits.}
+\caption{\textbf{Scale regimes and solver resolution (planned).} Analytic dimensionless curves are distinct from measured stability and error. Figure must be populated from reproducible scripts.}
+\label{fig:scales}
+\end{figure}
+
+\section{Proposed GPU Architecture}
+\subsection{System boundary}
+The implementation should remain a static C++17 library under \texttt{fluid/fld/}, with Vulkan operations expressed through the existing VulkanEngine abstraction. Public code supplies material properties, emission requests, collider state, camera matrices, and command recording. No CUDA dependency, engine-embedded game controls, or user-facing blood-specific API is permitted.
+
+At steady state, the CPU should allocate no per-particle arrays, traverse no particle neighborhoods, and read back no positions to construct rendering bins. GPU buffers are persistent, capacity-aware, and bound per frame. Host uploads consist of small emission, material, and camera parameter queues.
+
+\subsection{Compact particle representation}
+The core state is a structure-of-arrays (SoA): positions, velocities, masses, phases, local pressure, boundary/contact state, and sorted IDs. One plausible minimal layout stores two \texttt{vec4} buffers for position/radius and velocity/phase, with scalar state in aligned arrays. Encoding a phase as floating-point data without integer round-trip guarantees is avoided. An initial implementation can use 32-bit floats with a local scene origin; large-coordinate worlds require rebasing.
+
+The pipeline is
+\begin{equation}
+\boxed{\begin{gathered}
+\text{Emit/Compact}\to\text{Build Cell Keys}\to\text{Count/Scan/Scatter}\\
+\to\text{Neighbors}\to\text{Implicit Fluid Step}\to\text{Contact}\\
+\to\text{Surface Classification}\to\text{Optical Passes}.
+\end{gathered}}
+\label{eq:pipeline}
+\end{equation}
+
+\begin{figure*}[t]
+\figurebox{pipeline}{48mm}{Insert implementation block diagram: GPU buffers, emission, compact hash, scan, pressure/tension/friction iterations, render passes, with explicit synchronization edges.}
+\caption{\textbf{GPU-resident simulation and rendering pipeline (architecture placeholder).} Colored regions should eventually indicate measured stage costs and buffer ownership. No implementation timings are currently available.}
+\label{fig:pipeline}
+\end{figure*}
+
+\subsection{Neighbor indexing: dense versus sparse domains}
+For bounded uniform-resolution neighborhoods, choose cell width $c\ge h$ and inspect the current plus up to $26$ adjacent cells. A dense index uses one count per active-domain grid cell, an exclusive prefix scan over counts, and one scatter pass to sort particle IDs into contiguous ranges. This permits contiguous iteration and avoids CPU-managed lists \citep{nie2015,fluidgpu2025}.
+
+A naive dense grid is unsuitable for extremely sparse, spatially dispersed microdroplets. The indexer must therefore expose either (a) a tightly bounded active region with measured occupancy or (b) a sorted sparse key stream and cell-range table, with a direct comparison of both options. Hash collisions must be resolved by comparing \emph{full cell coordinates}, never silently combining unrelated cells.
+
+Let $N$ be live particles and $K$ candidate cell entries. In a practical implementation, indexing is approximately $O(N+K)$ for a bounded histogram, while neighbor evaluation remains $O(N\bar n)$ for mean neighborhood size $\bar n$. Claims of globally $O(N)$ fluid simulation are misleading if $\bar n$ grows with compression, multiscale support, or dense surface packing.
+
+A work-efficient scan, e.g., a hierarchical Blelloch-style scan or decoupled look-back subject to cross-workgroup progress assumptions, is suitable for the prefix stage \citep{merrill2016}. We begin with a portable multi-dispatch scan; more aggressive device-wide scans are adopted only after validating memory-order semantics and measuring benefit on MoltenVK.
+
+\subsection{Deterministic GPU stages}
+An optional validation mode uses stable keys and a deterministic sort order to reproduce neighbor sets across runs. Floating-point reductions can still vary across devices, so bitwise identity between unrelated GPUs is not an acceptance criterion. For release mode, atomics and scatter order may differ, but the simulator must bound the change in physical outputs.
+
+Each active buffer records count, capacity, overflow status, and generation. Overflow may reject a new emission \emph{with its physical mass still pending}, never silently truncate existing liquid. The emitter can implement backpressure or report a refused volume.
+
+\section{Numerical Solver}
+\subsection{Reference incompressibility}
+SPH estimates density at particle $i$ by
+\begin{equation}
+\rho_i=\sum_j m_j W(\mathbf x_i-\mathbf x_j,h),
+\label{eq:density}
+\end{equation}
+with a normalized compact-support kernel $W$. The pressure constraint targets $\rho_i/\rho_0-1\approx 0$ away from free-surface deficits. Density and velocity-divergence residuals are separate acceptance metrics. We first implement an inexpensive GPU PBF baseline, followed by DFSPH/IISPH comparisons \citep{macklin2013,bender2015,ihmsen2014}.
+
+The baseline is a \emph{measurement instrument}: identical particles, scenes, neighbor index, contact geometry, time budget, and residual tolerances are used for all candidates. Iterations are not compared without reporting their actual convergence and memory traffic.
+
+\subsection{Coupled capillarity and friction}
+The desired physical extension follows the motivation of Probst and Teschner \citep{probst2024}. The normal pressure response, cohesive interface forces, and solid-boundary friction should be solved in a coupled way whenever the interface is capillary-dominated. A simple explicit attraction between particles is \emph{not} treated as a validated substitute for this method.
+
+At a solid, static wetting requires both advancing and receding contact angles. The pinning resistance scales with a contact-line factor of the form
+\begin{equation}
+F_{\mathrm{pin}}\sim \sigma w\left(\cos\theta_R-\cos\theta_A\right),
+\label{eq:pinning}
+\end{equation}
+where $w$ is an effective contact-line width. This is a Furmidge-type macroscopic scaling law \citep{furmidge1962}, not a direct prescription for the per-particle friction impulse. Mapping the law to a consistent discretization must be calibrated on resting and sliding droplets.
+
+For each collider, the interface supplies signed distance or closest-point queries, normal, relative surface velocity, material identity, advancing/receding angles, and friction parameters. Two-way momentum exchange with moving rigid bodies is optional but, when enabled, must conserve equal and opposite impulses within numerical tolerance.
+
+\subsection{Convergence and stability gates}
+For a candidate step, require finite state, bounded density residual, bounded divergence, nonnegative mass, reasonable energy growth, and low penetration. If any condition fails, retry with smaller $\Delta t$ or report an invalid simulation step; do not render corrupted state as a valid result. We explicitly retain a validation reference on the CPU for a \emph{small} deterministic particle configuration, but not as a per-frame production solver.
+
+A droplet that stands still on an incline is not necessarily correct: artificial velocity damping can mimic pinning. Compare sliding onset across droplet sizes and surface angles with a contact-angle hysteresis model. A spherical droplet passing Eq.~\eqref{eq:laplace} but failing merging is likewise insufficient.
+
+\begin{figure}[t]
+\figurebox{laplace-validation}{35mm}{Insert measured mean pressure jump versus inverse droplet radius for at least three spatial resolutions; overlay Young--Laplace reference.}
+\caption{\textbf{Laplace-pressure validation (results pending).} The diagonal reference must use Eq.~\eqref{eq:laplace}; measured points are to be inserted only after pressure sampling and convergence testing.}
+\label{fig:laplace}
+\end{figure}
+
+\section{Microscopic Droplets and Filaments}
+\subsection{Isolated droplet mode}
+Rendering an isolated droplet as a pixel-sized sphere of fixed radius is visually misleading. Instead, infer its displayed diameter from conserved volume and a shape family constrained by contact angle and substrate orientation. For a freely suspended spherical drop, $R=(3V/4\pi)^{1/3}$. For a sessile drop, use a spherical-cap solution only where gravity is negligible; for larger Bo, numerical Young--Laplace profiles are a better reference \citep{furmidge1962}.
+
+This is a \emph{render-side reconstruction}, not an exemption from physics. If the particle solver has insufficient samples to model coalescence or breakup, those interactions must be labeled approximate. The renderer must never transform an arbitrary particle cluster into an unsupported physical claim.
+
+\subsection{Thin-thread survival}
+A stream one or two particle layers across can disappear under isotropic density smoothing. Adaptive anisotropic kernels \citep{yuturk2010} offer a means to preserve narrow geometry. For each surface candidate, compute a local covariance
+\begin{equation}
+\mathbf C_i=\sum_j w_{ij}(\mathbf x_j-\bar{\mathbf x}_i)
+(\mathbf x_j-\bar{\mathbf x}_i)^T,
+\label{eq:covariance}
+\end{equation}
+whose regularized eigensystem defines an ellipsoidal reconstruction kernel. Extreme aspect ratios are clamped to avoid exploding surface normals or connecting physically disjoint drops.
+
+Adaptive particle splitting, as in the FLIP work of Ando et al. \citep{ando2012}, is an option only when each split preserves parent mass and momentum and the increased particle count is tracked. It must not be activated merely because a thin stream is visible on screen.
+
+\subsection{Coalescence versus separation}
+Two nearby droplets should merge when their free surfaces establish a genuine liquid bridge under the chosen physical model. Conversely, distinct small drops must remain distinct when separated by a non-negligible air gap. The renderer's connectivity classifier must therefore use particle-neighbor geometry, narrow-gap heuristics and phase identity; screen-space overlap alone is insufficient.
+
+\begin{figure*}[t]
+\figurebox{microdrop-sequence}{46mm}{Insert paired quantitative+visual sequences: (a) isolated 0.5 mm droplet, (b) two-drop coalescence, (c) contact-line pinning, (d) 1 mm filament. Include time labels and scale bars.}
+\caption{\textbf{Small-scale physics comparison (images pending).} Each panel should show a simulation frame and a reference photograph or validated offline solution using the same physical scale and material parameters.}
+\label{fig:microdrops}
+\end{figure*}
+
+\section{Photorealistic Surface Reconstruction}
+\subsection{Reconstruction classes}
+The renderer treats isolated microdroplets and connected free liquid differently. The first class uses an analytic or tightly fitted meniscus contour with stable normals and an explicit volume-to-shape relationship. The second class uses covariance-aware particle kernels or a screen-space surface representation appropriate to the projected footprint \citep{yuturk2010,vanderlaan2009}.
+
+We require explicit guards for (i) single-particle drops, (ii) filament-like neighborhoods, (iii) merging sheets, (iv) disocclusion, and (v) very shallow fluid against scene geometry. An isotropic gaussian field cannot simultaneously preserve all five cases without tuned, view-dependent artifacts.
+
+\subsection{Optics}
+We distinguish front-surface depth, back-surface depth (or integrated thickness), scene depth and scene color. Transmittance is approximated with the Beer--Lambert law,
+\begin{equation}
+\mathbf T=\exp(-\bm\sigma_a d),
+\label{eq:beer}
+\end{equation}
+where $d$ is liquid path length and $\bm\sigma_a$ is spectral or three-channel absorption. Refraction uses the liquid's index of refraction and available scene color/depth; screen-space refraction cannot see obscured off-screen geometry and must have a documented fallback. Reflection uses Fresnel terms, consistent roughness and environment lighting. This is an \emph{approximate real-time optical model}, not full path tracing.
+
+Normal smoothing is edge-aware. Do not blur across a droplet/background boundary or fuse independent drops solely because their depth buffers overlap. We initially target temporal stability without mandatory TAA, since accumulated history can smear small fast features.
+
+\begin{figure}[t]
+\figurebox{rendering-ablation}{39mm}{Insert 2 x 2 comparison: raw spheres, isotropic reconstruction, anisotropic reconstruction, final Beer--Lambert + Fresnel render, matched camera and volume.}
+\caption{\textbf{Rendering ablation (images pending).} The figure must isolate the benefit of each reconstruction and optical stage; no unmeasured quality rankings are asserted.}
+\label{fig:rendering}
+\end{figure}
+
+\section{Real-Time GPU Engineering}
+\subsection{Memory and bandwidth}
+The main stage costs are sorted-neighbor traffic, iterative field evaluation, boundary queries, and optical images. Assume, provisionally, that a particle consumes $64$--$128$ bytes of persistent working state across buffers. At $100{,}000$ particles, this corresponds to approximately $6.4$--$12.8$ MB, \emph{excluding} ping-pong arrays, sort buffers, image targets, material tables, allocator metadata and geometry acceleration. Actual footprint will be recorded from allocations, not estimated from structure sizes alone.
+
+Particles are emitted and removed via GPU compaction and free-list accounting. Fixed-size allocations avoid per-frame churn; the graphics system may grow capacity between frames after ensuring frame safety. If buffers are shared by compute and render, synchronization must explicitly enforce writes-before-reads with the correct stages and access masks \citep{vulkanSync}.
+
+\subsection{M2 and MoltenVK considerations}
+Apple GPUs are tile-based renderers; Apple documents local tile-processing and traffic reduction principles \citep{appleTile,appleMetal}. A Vulkan renderer running through MoltenVK may not expose every Metal-specific optimization, so no Metal imageblock feature is assumed usable from the generic engine API. Workgroup size, subgroup support, buffer memory model and storage-image formats are queried from the actual device, not hardcoded from desktop GPUs.
+
+The initial GPU indexer should have a portable baseline using 64 or 128 threads per workgroup and independent prefix-scan dispatches. The best configuration is selected from measurements, with barriers between histogram, scan, scatter, pressure iterations, and rendering. Avoid full-device waits and unnecessary CPU readbacks. Queries and frame-safe delayed readback report GPU timings without introducing permanent stalls.
+
+\subsection{Quality preserving adaptation}
+If the physics solver cannot complete the required substeps, the system should \emph{not} silently lower pressure iterations, discard liquid or coarsen particles. Instead, the host receives simulation backlog and quality status. Separately adjustable rendering-resolution and anisotropy quality may be reduced if screen-space error metrics remain below thresholds; these adaptations must not change physical mass or accepted pressure residuals.
+
+The $60$~Hz target is defined for an explicit bounded scene, viewport, liquid volume and hardware temperature range. The measured p99 frame time must be below $16.67\ms$, with sustained simulation-time progression and no dropped physical steps. For some micro-scale scenes this may be impossible with the chosen exact solver; that negative finding must be reported rather than hidden.
+
+\section{Evaluation Protocol}
+\subsection{Reproducibility}
+Every run records commit hash, compiler flags, GPU device/driver, MoltenVK and Vulkan versions, shader hashes, resolution, render scale, material constants, particle spacing/support, timestep policy, input seed, warmed-up interval, and an explicit workload description. The test harness saves a simulation trace or deterministic input sequence and exports numeric errors and GPU timings as machine-readable data.
+
+Measurements use GPU timestamp intervals per stage and CPU frame timestamps, with at least 60 seconds of sustained load after warm-up. Report medians, p95, p99, allocation footprint, and failure rates. FPS averages alone can hide stutter. For an M2 Air, repeat after reaching stable thermals; use an external Vulkan GPU as a distinct platform, not a replacement for M2 measurements.
+
+\begin{table}[t]
+\centering\footnotesize
+\caption{\textbf{Required tests and status.} All performance cells are intentionally unfilled until measurements exist.}
+\label{tab:tests}
+\begin{tabularx}{\columnwidth}{@{}p{.36\columnwidth}X@{}}
+\toprule
+Test & Required observation / measurement\\
+\midrule
+Drop, $R=0.25$--$1\mm$ & $\Delta p(R)$, radius drift, density residual \\
+Inclined drop & $\theta_A,\theta_R$, onset angle, sliding speed\\
+Two-drop merge & mass/impulse conservation, bridge timing\\
+Thin filament & survival and breakup radius/time\\
+Curved solid contact & penetration, slip/pinning threshold\\
+$1$k/$10$k/$50$k/$100$k & GPU scan, neighbor, solver and render times\\
+720p / 900p / 1440p & p50/p95/p99 frame time and optical error\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Numerical error measures}
+A reference pressure error is evaluated as $|\widehat{\Delta p}-2\sigma/R|/(2\sigma/R)$ for validated spherical droplets. Volume drift is $|V(t)-V(0)-V_{\mathrm{in}}+V_{\mathrm{out}}|/\max(V(0),\epsilon)$, with the error normalization and emission bookkeeping reported. Contact angles are estimated from the reconstructed interface against measured or published surfaces, not by reading the input material parameter back.
+
+An isolated-drop rendering comparison must match the same physical radius, view, lighting and material coefficients as a reference or trusted offline renderer. Report silhouette IoU or chamfer distance, normal deviation where ground truth exists, and perceptual metrics only where images are registered. A lower LPIPS score does not prove physical accuracy.
+
+\subsection{Ablations}
+Minimum ablations are: (A) naive unsorted neighbors versus sorted neighbors, (B) PBF versus DFSPH/IISPH, (C) explicit tension versus coupled implicit tension/friction, (D) isotropic versus anisotropic reconstruction, (E) no thickness versus Beer--Lambert, and (F) global resolution versus view-adaptive rendering. For each, hold resolution, particle count, input trajectory and stopping tolerance fixed when possible.
+
+\begin{figure}[t]
+\figurebox{performance}{40mm}{Insert GPU-stage timing stacks versus particle count (1k, 10k, 50k, 100k) for an M2 Air. Include 16.67 ms frame-budget line.}
+\caption{\textbf{Frame-time breakdown (not measured).} Future real traces should include particle indexing, solve, contacts, surface reconstruction, shading, and graphics-system overhead.}
+\label{fig:perf}
+\end{figure}
+
+\begin{figure}[t]
+\figurebox{hardware-comparison}{40mm}{Insert qualitative comparison at matched physics resolution: M2 Air vs discrete Vulkan GPU, with p99 frame time and energy/thermal notes.}
+\caption{\textbf{Cross-device quality/cost (not measured).} Hardware-specific speedups must not be inferred from unrelated published GPU measurements.}
+\label{fig:hardware}
+\end{figure}
+
+\subsection{Decision gates}
+\textbf{Gate 0:} exact physical formulas and units pass deterministic tests. \textbf{Gate 1:} GPU indexing preserves all IDs, works for sparse and clustered domains, and gives correct neighbor lists. \textbf{Gate 2:} a one-drop GPU solve passes Laplace and mass benchmarks with increasing resolution. \textbf{Gate 3:} contact hysteresis and coalescence pass their targeted tests. \textbf{Gate 4:} optical reconstruction resolves a tiny drop and a thin stream with stable silhouettes. \textbf{Gate 5:} the bounded M2 scene meets numerical gates while sustaining p99 below $16.67\ms$. A negative gate result blocks claims of completion.
+
+\begin{table}[t]
+\centering\footnotesize
+\caption{\textbf{Evidence ledger, current repository state.} Checks marked \emph{not measured} must not be presented as experimental results.}
+\label{tab:status}
+\begin{tabularx}{\columnwidth}{@{}p{.46\columnwidth}X@{}}
+\toprule
+Component & Verified status (2026-11-04)\\
+\midrule
+SI property reference functions & Unit tests passed on clean reset branch\\
+GPU particle storage / scan & Not implemented / not measured\\
+Coupled implicit drop physics & Not implemented / not measured\\
+GPU boundary contact & Not implemented / not measured\\
+Optical droplet reconstruction & Not implemented / not measured\\
+M2 GPU workload / p99 FPS & Not measured\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Algorithmic Implementation Contracts}
+\subsection{The indexing contract}
+The first integration milestone is not a fluid surface but a verifiable spatial index. Its dispatch inputs are a bounded particle count $N$, an origin $\mathbf o$, cell width $c$, and positive cell dimensions $\mathbf D$. For particle $i$, the unsigned cell coordinate is
+\begin{equation}
+\mathbf q_i=\left\lfloor\frac{\mathbf x_i-\mathbf o}{c}\right\rfloor,
+\quad k_i=q_x+D_x(q_y+D_yq_z),
+\label{eq:key}
+\end{equation}
+provided $0\le q_d<D_d$ for each axis. Out-of-domain particles must carry an invalid sentinel and an explicit counter. Naively casting a negative coordinate to \texttt{uint} before checking bounds can alias distant particles into a valid cell and contaminate every subsequent neighborhood computation.
+
+\textbf{Pass 0 (clear).} Reset the active cell histogram, scatter cursors, and live diagnostic counters. A dynamically allocated index domain must not leave stale counts from the previous frame. \textbf{Pass 1 (keys/count).} One invocation validates each particle and computes $k_i$, incrementing the histogram for valid cells. \textbf{Pass 2 (exclusive scan).} Convert cell counts into monotonic offsets with final offset equal to the number of in-domain particles. \textbf{Pass 3 (scatter).} Each valid particle obtains an atomic slot from a \emph{separate} cursor buffer and writes its own ID into the sorted array. \textbf{Pass 4 (density check).} Each particle enumerates its 27-cell neighborhood, performing a strict full-coordinate check and comparing candidates against its kernel support.
+
+These passes require synchronization with the proper shader-write and shader-read access masks \citep{vulkanSync}. The count, offsets, cursor, and sorted-ID buffers must have bounded capacities; an overflow condition is a detected error, never undefined GPU memory access. The exclusive scan's terminal value is checked against $N$ minus invalid particles. If the sum differs, the solver must not consume the array.
+
+\begin{table}[t]
+\centering\footnotesize
+\caption{\textbf{Index invariants.} These are pass/fail requirements for GPU and CPU reference implementations.}
+\begin{tabularx}{\columnwidth}{@{}p{.37\columnwidth}X@{}}
+\toprule
+Invariant & Acceptance condition\\
+\midrule
+Count & $\sum_c n_c=N_{\rm valid}$\\
+Offsets & $s_0=0$, $s_{c+1}=s_c+n_c$\\
+Scatter & Every valid ID occurs exactly once\\
+Cell identity & $k(\mathbf q_i)$ agrees with CPU reference\\
+Neighbor set & Exact pair set for $\|x_i-x_j\|<h$\\
+Overflow & Counter set; no out-of-range write\\
+\bottomrule
+\end{tabularx}
+\label{tab:index}
+\end{table}
+
+An important cost comparison is $D_xD_yD_z$ versus $N$: in a mostly empty one-metre cube with millimetre cells, a dense histogram would be enormous relative to a few isolated droplets. The implementation must select a compact active domain, use a hashed/sparse cell index, or reject the request with a reported memory requirement. It must not allocate an unbounded dense grid from the world size alone. The first pass may support only explicitly bounded scenes while the sparse representation is built and tested.
+
+\subsection{Pressure projection: baseline equations}
+For a PBF reference, let the normalized density constraint be
+\begin{equation}
+C_i=\frac{\rho_i}{\rho_0}-1,\quad
+\lambda_i=-\frac{\max(0,C_i)}{\sum_k\|\nabla_{x_k}C_i\|^2+\varepsilon}.
+\label{eq:pbf}
+\end{equation}
+This one-sided form avoids demanding a full bulk density at the free surface but must be paired with surface-specific forces rather than assuming all deficits are compressibility errors. The position correction is assembled from the symmetric gradients and applied in Jacobi iterations to avoid processing-order bias. A constant number of passes per frame is not acceptable evidence of convergence: the maximum density error, mean error, and the residual of velocity divergence must be tracked separately.
+
+A DFSPH comparison then adds a projection based on velocity divergence and can reuse neighbor structure while its positions remain within the validated support. Rebuilding the grid at every sub-iteration without measuring displacement wastes bandwidth, but reusing a stale grid can omit newly adjacent neighbors. The decision criterion is whether the maximum corrected displacement exceeds a conservative safety margin, with diagnostics for missed potential pairs.
+
+\subsection{Unified solver feasibility}
+The coupled pressure/tension/friction formulation in \citep{probst2024} solves a substantially harder system than PBF. Treating its published \emph{offline} examples as evidence of real-time feasibility would be misleading. We therefore separate correctness targets from practical execution: (1) implement and validate the energy/force components in a small deterministic reference, (2) port a GPU matrix-vector product or equivalent coupled iteration, (3) compare its residual and work per substep with DFSPH, and (4) choose a bounded-quality option for the M2 only if the measured error remains acceptable.
+
+Preconditioning and termination matter more than the nominal solver name. Iterations must stop based on a convergence threshold or an explicitly flagged iteration limit. An aggressive fixed iteration count may create small droplets that appear frozen, jitter, or explode even when the main bulk remains incompressible. Any iterative method requires an error trace over at least two spatial refinements and multiple capillary numbers.
+
+\subsection{GPU memory ownership}
+We divide memory into (i) immutable material constants, (ii) live particle state, (iii) temporary sort/scan arrays, (iv) iterative solver scratch, (v) boundary acceleration, and (vi) optical image targets. Multiple in-flight frames must never overwrite a state buffer still consumed by a render pass. The simplest safe implementation serializes physics update and rendering within a frame using precise compute-to-graphics barriers, with a separate camera/scene uniform allocation per in-flight frame. Later overlap is optional, provided the extra buffered state and synchronization do not exceed the hardware budget.
+
+The \texttt{VulkanFluid} API should surface three distinct outcomes: an accepted physical substep, a nonfatal capacity/backpressure event, and a solver failure that invalidates the state. A high FPS result is not acceptable if an overloaded run silently drops pending volume. Assertions and instrumented counters are retained in release builds where a GPU memory overrun would otherwise escape detection.
+
+\section{Optical and Perceptual Validation}
+\subsection{Optical reconstruction is an inverse problem}
+The true visible interface is not directly stored by an SPH particle cloud. Screen-space methods infer a smooth front surface from projected particle coverage, often with thickness-dependent filtering \citep{vanderlaan2009}. The surface estimate must respect the 3-D geometry: two droplets at different depths should not be merged merely because their masks overlap on the display. Foreground geometry, water contact with a wall, and thin gaps require depth-aware neighborhood rejection.
+
+The anisotropic reconstruction of \citet{yuturk2010} suggests using local eigenvalues to classify a neighborhood. A nearly isotropic covariance often indicates a bulk-like sample; one small eigenvalue may indicate a thin sheet; two small eigenvalues suggest a filament. These are only statistical features and should be combined with the estimated particle support and boundary distance. A solitary particle has no reliable covariance, hence the analytic isolated-drop path.
+
+\subsection{Thickness and energy accounting}
+For a front-facing interface, refracted background light and reflected environment light should be weighted by a Fresnel term $F(\theta,\eta)$; the transmitted contribution is then attenuated by Eq.~\eqref{eq:beer}. A minimum useful compositor has separately stored front depth, integrated or backface thickness, normal, phase ID, and motion. Compositing in a linear-light space avoids exaggerated darkening or blown-out highlights from applying Beer--Lambert directly in display gamma.
+
+The apparent refractive distortion of thin droplets is strongly influenced by their curvature. A fake uniform normal map can make a physically flat film appear raised. Conversely, excessive depth smoothing can make a tiny spherical droplet look like a featureless smudge. We therefore measure projected silhouette and estimate the normal field independently; an attractive specular highlight alone is not evidence of correct meniscus geometry.
+
+A practical rendering-resolution fallback may produce the liquid at full-resolution depth and quarter/half-resolution diffuse thickness, with edge-aware reconstruction. This is only a candidate: whether it saves time without erasing sub-pixel droplets must be demonstrated. For microscopic dots, a conservative full-resolution analytic draw may be cheaper and more stable than processing them through a globally downsampled volumetric pass.
+
+\subsection{Color and display assumptions}
+The default material should use measured or explicit linear absorption and refractive index, not a color-tint parameter standing in for optics. A three-channel approximation is sufficient for the first real-time baseline, but it cannot model dispersion or wavelength-dependent scattering in detail. HDR scene color should remain linear until the host tonemap stage. Reflections and transmission must use correct surface orientation and background-depth rejection when the refracted ray would sample an occluding foreground object.
+
+If no valid background sample exists, use a documented environment fallback instead of leaking unrelated screen pixels. Transparent geometry behind the fluid is not necessarily represented in an opaque scene-color buffer, so the compositor's treatment of other transparent objects must be stated. These limitations matter most for tiny droplets on bright high-contrast surfaces, where a one-pixel error is visually obvious.
+
+\section{Performance Falsification Strategy}
+The first useful benchmark is deliberately uninteresting visually: one thousand identical particles, held in a bounded domain, with the render pass disabled. This isolates the cost of GPU emission, cell indexing, scan, neighbor traversal and a single solver iteration. The next step increases particles while holding average neighbors constant. Only then should clustering, multi-scale dispersion, small droplets contacting surfaces, and the full optical pipeline be enabled.
+
+\begin{table}[t]
+\centering\footnotesize
+\caption{\textbf{Performance interpretation rules.} Each pattern suggests a distinct bottleneck, rather than an automatic reduction in physical detail.}
+\begin{tabularx}{\columnwidth}{@{}p{.34\columnwidth}X@{}}
+\toprule
+Observed regression & Investigate first\\
+\midrule
+Index time scales with empty volume & Dense-grid histogram waste\\
+Neighbor time grows superlinearly & Cell-size mismatch / clustering\\
+Pressure time high at low $N$ & Dispatch count / solver iterations\\
+GPU idle while CPU busy & Allocation, readback, submission\\
+Fluid time grows with screen area & Optical pass, not SPH\\
+P99 spikes, median stable & Resource lifetime / barriers / thermal\\
+\bottomrule
+\end{tabularx}
+\label{tab:diagnosis}
+\end{table}
+
+\textbf{For a minimal GPU, reducing work is more important than maximizing arithmetic occupancy.} Skip inactive cells, reuse allocations, schedule only accepted physical substeps, and distinguish physics work from screen-space shading work. Do not assume that changing an SPH kernel from eight to sixteen iterations has a fixed cost; neighbor-list regularity and memory traffic can dominate. Likewise, do not apply desktop-specific subgroup tricks before querying the actual device. The resource and synchronization constraints are grounded in the Vulkan specification \citep{vulkanSync} and target-GPU memory principles \citep{appleTile}.
+
+We define a falsification rule for the proposed architecture: if a correct, bounded small-droplet GPU solve already exceeds the whole frame interval at the minimum target sample resolution, moving it to asynchronous compute or hiding it behind graphics does not make the simulation fundamentally real-time. The research program must then report a narrower supported scene or evaluate a different numerical model. The result should be documented as a limitation, not concealed by lower solver accuracy.
+
+
+\section{Implementation Plan and Scope}
+The existing \texttt{VulkanFluid} public namespace and \texttt{c build} static-library pattern are retained. The previous experimental blood and CPU-film implementation is archived separately and is \emph{not} part of the proposed baseline. A small, headless material-property module, with formulas for capillary length, pressure and dimensionless numbers, is the first verified code artifact. Nothing in this paper implies that the proposed GPU kernels, render images or benchmark values have already been obtained.
+
+\textbf{Phase I: GPU data path.} Implement persistent storage, emission queue, compaction, cell keys, histogram, exclusive scan, scatter, GPU correctness validation and timestamps. Prove no particle loss when capacity is reached.
+
+\textbf{Phase II: solver comparison.} Implement PBF baseline and DFSPH/IISPH comparison with identical neighborhood data and time budgets. Quantify pressure residual, volume drift and divergent velocity. Only then implement a coupled capillary/contact solver adapted from the relevant literature.
+
+\textbf{Phase III: microdrop physics.} Validate spherical-drop pressure, adhesion/pinning, two-drop coalescence and filaments. Ensure the GPU solver passes at more than one spatial resolution. Add conservation assertions for emission and detachment.
+
+\textbf{Phase IV: renderer.} Add analytic isolated-drop shading, anisotropic connected-liquid surfaces, depth/thickness passes, Beer--Lambert absorption, Fresnel reflection and screen-space refraction. Check visual stability without relying on TAA or manufactured noise.
+
+\textbf{Phase V: bounded real-time gate.} Measure M2 GPU passes, optimize sort and contact divergence, stage memory barriers accurately, and retain only changes that preserve numerical quality. Release to \texttt{vulkan-game} only after the integration runs cleanly on actual hardware.
+
+\section{Limitations and Threats to Validity}
+The proposed solver is not a full molecular-scale simulation, nor can it represent arbitrary film rupture below its particle resolution. Contact-line hysteresis is strongly material- and contamination-dependent; validated constants must be measured or sourced. A mesoscopic SPH surface tension model can produce plausible images while failing the true Laplace pressure jump. A smooth reconstructed meniscus may hide an inaccurate solver. Screenspace refraction cannot reconstruct missing background radiance. Sparse neighbor grids can suffer from cell collisions, load imbalance and pathological clustering; benchmark suites must deliberately include these conditions.
+
+Power, memory bandwidth and thermal throttling create different bottlenecks on fanless Apple Silicon and discrete GPUs. Published frame times from an RTX-class GPU or offline SPH paper cannot be relabeled as M2 expectations. Our proposed performance gates are aspirational until recorded on the named device. The detailed design deliberately exposes such gaps to prevent another visually attractive but numerically unreliable implementation.
+
+\section{Conclusion}
+A practical small-scale fluid simulator must be founded on capillarity, incompressibility and boundary hysteresis, then engineered for high-throughput GPU neighborhoods and physically credible rendering. We propose a GPU-resident pipeline in which a measured inexpensive pressure baseline is compared against strongly coupled pressure--surface-tension--friction models, while optical reconstruction treats isolated microdroplets differently from connected streams. The central engineering principle is to preserve physical state across quality/performance decisions: render LOD can change without liquid mass changing. The central scientific principle is equally strict: only reproducible pressure, contact, mass, image and frame-time measurements justify an accuracy or real-time claim. The open challenge is to achieve the desired error bounds within the M2's sustained rendering budget.
+
+\balance
+\bibliographystyle{unsrtnat}
+\bibliography{references}
+\end{document}
