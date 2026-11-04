@@ -21,15 +21,24 @@ jobs:
           git clone --depth 1 https://github.com/xt9y/build.c.git /tmp/cbuild
           make -C /tmp/cbuild
           sudo make -C /tmp/cbuild install
+      - name: Compile GLSL
+        run: |
+          glslangValidator -V fluid/fld/shaders/surface.comp -o /tmp/fluid.spv
+      - name: Configure private sibling dependencies
+        env:
+          DEPENDENCY_TOKEN: ${{ secrets.VULKAN_DEPS_TOKEN }}
+        run: |
+          if [ -z "$DEPENDENCY_TOKEN" ]; then
+            echo "::error::VULKAN_DEPS_TOKEN with read access to xt9y/vulkan-engine and xt9y/vulkan-systems is required for independent library builds"
+            exit 1
+          fi
+          git config --global url."https://x-access-token:${DEPENDENCY_TOKEN}@github.com/".insteadOf "https://github.com/"
       - name: Build independent libraries
         run: |
           cd fluid
           c build
           cd ../blood
           c build
-      - name: Compile GLSL
-        run: |
-          glslangValidator -V fluid/fld/shaders/surface.comp -o /tmp/fluid.spv
       - name: Standalone deterministic physics test
         run: |
           git clone --depth 1 https://github.com/xt9y/vulkan-engine.git /tmp/vkengine
