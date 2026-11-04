@@ -11,12 +11,13 @@ namespace bld::material
         // Published human-blood Carreau-Yasuda fit (ETH 2020, section
         // 4.1): mu0=.16 Pa*s, mu_infinity=.0035 Pa*s, lambda=8.2 s,
         // inner exponent=.64, outer exponent=-1.23.
-        blood.viscosity_zero=.160f;
-        blood.viscosity_infinite=.0035f;
+        // Slightly stronger low-/high-shear viscosity for coherent sheets.
+        blood.viscosity_zero=.220f;
+        blood.viscosity_infinite=.0045f;
         blood.relaxation=8.2f;
         blood.flow_index=.2128f;
         blood.yasuda_exponent=.64f;
-        blood.surface_tension=.05f;
+        blood.surface_tension=.058f;
         blood.contact_angle=1.05f;
         blood.optical=optical();
         return blood;
