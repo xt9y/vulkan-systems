@@ -8,6 +8,8 @@ blood
   bld::wounds::get()->...
   bld::render::init(shader_spirv, frames_in_flight)
   bld::render::record(command, frame, inputs)
+  bld::render::wound::descriptor(instance, frame)
+  bld::network::init()
   bld::network::encode(event)
   bld::network::receive(packet, bytes)
   bld::system::shutdown()

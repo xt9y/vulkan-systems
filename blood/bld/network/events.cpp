@@ -144,7 +144,7 @@ namespace bld::network
     {
         const auto value = decode(bytes, count);
         if (!value || !system::get()) return false;
-        if (!data) init();
+        if (!data) return false;
         std::lock_guard<std::mutex> guard(data->mutex);
         // The source ID is part of the replay key to accommodate multiple peers.
         const std::uint64_t key = value->id ^

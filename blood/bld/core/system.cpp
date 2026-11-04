@@ -147,6 +147,7 @@ namespace bld::system
 
     void shutdown()
     {
+        network::shutdown();
         simulation::shutdown();
         wounds::shutdown();
         surfaces::shutdown();
