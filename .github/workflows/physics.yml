@@ -1,0 +1,21 @@
+name: fluid-physical-units
+on:
+  push:
+    branches:
+      - research/nextgen-fluid
+  pull_request:
+    paths:
+      - "fluid/**"
+      - "tests/**"
+      - ".github/workflows/physics.yml"
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate SI-scale material primitives
+        run: |
+          c++ -std=c++17 -O2 -Wall -Wextra -pedantic \
+            tests/physical_units.cpp fluid/fld/material/properties.cpp \
+            -o /tmp/fluid_physics
+          /tmp/fluid_physics
