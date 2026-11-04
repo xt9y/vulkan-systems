@@ -350,80 +350,87 @@ namespace bld::render
             bin_decal(decal_tiles, id, source, target);
         }
 
+        // Submit WORLD-space liquid capsules, never camera-facing 2D lines.
+        // The compute shader ray-intersects them and depth-tests each pixel
+        // against the actual reconstructed scene surface.
+        const auto append_spray = [&](vec3 a, vec3 b, float radius,
+                                      float wetness, std::uint32_t seed)
+        {
+            if (gpu_drops.size() >= data->max_drops) return;
+            bool a_ok = false, b_ok = false;
+            const auto ap = screen(target.view_projection, a,
+                                   target.width, target.height, a_ok);
+            const auto bp = screen(target.view_projection, b,
+                                   target.width, target.height, b_ok);
+            if (!a_ok && !b_ok) return;
+            if (a_ok && b_ok &&
+                (ap.z < 0.f && bp.z < 0.f || ap.z > 1.f && bp.z > 1.f))
+                return;
+
+            const auto clip_a = target.view_projection * vec4{a, 1};
+            const auto clip_b = target.view_projection * vec4{b, 1};
+            const float near_w = std::max(.01f,
+                std::min(std::abs(clip_a.w), std::abs(clip_b.w)));
+            const float pixels = std::clamp(
+                radius * std::abs(target.view_projection(1, 1)) *
+                .5f * float(target.height) / near_w, 1.0f, 45.f);
+
+            gpu_drop entry{};
+            entry.start = {a.x, a.y, a.z, radius};
+            entry.end = {b.x, b.y, b.z, radius};
+            entry.properties = {wetness, float(seed & 0xffffu), 0, 0};
+            const auto id = std::uint32_t(gpu_drops.size());
+            gpu_drops.push_back(entry);
+
+            if (!a_ok || !b_ok)
+                drop_tiles.add(id, 0, 0, float(target.width), float(target.height));
+            else
+            {
+                const float padding = pixels + 2.f;
+                drop_tiles.add(id, std::min(ap.x, bp.x) - padding,
+                               std::min(ap.y, bp.y) - padding,
+                               std::max(ap.x, bp.x) + padding,
+                               std::max(ap.y, bp.y) + padding);
+            }
+        };
+
         for (const auto &d : particles)
         {
-            if (gpu_drops.size() >= data->max_drops) break;
-            bool a_ok = false, b_ok = false;
-            const auto a = screen(target.view_projection, d.previous,
-                                  target.width, target.height, a_ok);
-            const auto b = screen(target.view_projection, d.position,
-                                  target.width, target.height, b_ok);
-            if (!a_ok || !b_ok || b.z < 0.f || b.z > 1.f) continue;
-            const float width = std::abs(target.view_projection(1, 1));
-            const auto clip = target.view_projection * vec4{d.position, 1};
-            const float radius = std::clamp(
-                d.radius * width * .5f * target.height /
-                    std::max(.01f, clip.w), 1.5f, 20.f);
-            gpu_drop item{};
-            item.endpoints = {a.x, a.y, b.x, b.y};
-            item.properties = {radius, b.z,
-                               std::max(0.f, 1.f - d.age / d.lifetime),
-                               float(d.seed % 1024u)};
-            const auto id = std::uint32_t(gpu_drops.size());
-            gpu_drops.push_back(item);
-            const float padding = radius + 2.f;
-            drop_tiles.add(id, std::min(a.x, b.x) - padding,
-                           std::min(a.y, b.y) - padding,
-                           std::max(a.x, b.x) + padding,
-                           std::max(a.y, b.y) + padding);
+            // Short movement trails remain physically positioned in 3D.
+            // They cannot float over unrelated surfaces when the camera turns.
+            const vec3 tail = d.position - d.velocity * .018f;
+            const float wet = std::clamp(1.f - d.age / d.lifetime, .16f, 1.f);
+            append_spray(tail, d.position, d.radius, wet, d.seed);
         }
 
-        // Join nearby droplets from the same burst into sparse viscous strands.
-        // Only one short bridge per particle; no independent particle spawning.
-        for (std::size_t i = 0; i < particles.size() &&
-             gpu_drops.size() < data->max_drops; ++i)
+        // Cohesive liquid bridges join neighbors within the same shot.
+        // These are physical world-space capsules, not perspective-corrected
+        // 2D connectors, so they stay attached to the moving fluid.
+        for (std::size_t k = 0; k < particles.size() &&
+             gpu_drops.size() < data->max_drops; ++k)
         {
-            const auto &source = particles[i];
-            if (!source.group) continue;
-            std::size_t closest = particles.size();
-            float best = .012f;
-            for (std::size_t j = i + 1; j < particles.size(); ++j)
+            const auto &a = particles[k];
+            if (!a.group) continue;
+            float best = .010f;
+            std::size_t nearest = particles.size();
+            for (std::size_t n = k + 1; n < particles.size(); ++n)
             {
-                if (particles[j].group != source.group) continue;
+                if (particles[n].group != a.group) continue;
                 const auto distance = vk::util::math::length_squared(
-                    particles[j].position - source.position);
-                if (distance > .0001f && distance < best)
+                    particles[n].position - a.position);
+                if (distance > .00005f && distance < best)
                 {
                     best = distance;
-                    closest = j;
+                    nearest = n;
                 }
             }
-            if (closest == particles.size()) continue;
-
-            bool a_ok = false, b_ok = false;
-            const auto a = screen(target.view_projection, source.position,
-                                  target.width, target.height, a_ok);
-            const auto b = screen(target.view_projection,
-                                  particles[closest].position,
-                                  target.width, target.height, b_ok);
-            if (!a_ok || !b_ok || b.z < 0.f || b.z > 1.f) continue;
-            const auto clip = target.view_projection * vec4{source.position, 1};
-            const float radius = std::clamp(
-                source.radius * std::abs(target.view_projection(1, 1)) *
-                    .3f * target.height / std::max(.01f, clip.w),
-                1.0f, 12.f);
-            gpu_drop link{};
-            link.endpoints = {a.x, a.y, b.x, b.y};
-            link.properties = {radius, std::max(a.z, b.z),
-                               std::max(0.f, 1.f - source.age/source.lifetime),
-                               float(source.seed % 1024u)};
-            const auto id = std::uint32_t(gpu_drops.size());
-            gpu_drops.push_back(link);
-            const auto pad = radius + 2.f;
-            drop_tiles.add(id, std::min(a.x, b.x) - pad,
-                           std::min(a.y, b.y) - pad,
-                           std::max(a.x, b.x) + pad,
-                           std::max(a.y, b.y) + pad);
+            if (nearest == particles.size()) continue;
+            const auto &b = particles[nearest];
+            append_spray(a.position, b.position,
+                         std::min(a.radius, b.radius) * .62f,
+                         std::clamp(1.f - std::max(a.age / a.lifetime,
+                                                  b.age / b.lifetime), .12f, 1.f),
+                         a.seed ^ b.seed);
         }
 
         if (!gpu_decals.empty())
