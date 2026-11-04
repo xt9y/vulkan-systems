@@ -71,13 +71,13 @@ namespace bld::system
         source.phase=data->phase;
         source.seed=event.seed;
         source.lifetime=4.f;
-        if(const auto *surfaces=surface::get())
-        {
-            const auto owner=surfaces->targets.find(event.target);
-            if(owner!=surfaces->targets.end())
-                source.surface=material::interaction(owner->second.kind);
-        }
-        // Both blood and other liquids use EXACTLY this generic solver path.
+        // The source is bleeding tissue, not the clothing which may cover
+        // that tissue. Treat ejection at the wound as skin; the generic
+        // fluid solver subsequently applies the actual receiving material
+        // (textile, skin, metal, etc.) to every secondary collision.
+        // Modeling the source as textile caused all blood to be absorbed
+        // before ANY free-flowing particles could be emitted.
+        source.surface=material::interaction(substrate::skin);
         const auto splash=fld::system::splash(source);
         if(event.target && splash.retained_volume>0.f)
             surface::deposit(event.target,event.position,event.normal,
