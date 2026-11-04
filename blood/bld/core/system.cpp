@@ -61,23 +61,30 @@ namespace bld::system
             !std::isfinite(event.energy) || event.energy <= 0.f) return;
 
         simulation::emit(event);
-        if (event.uv_valid && event.target)
+        if (event.target && surfaces::is_skinned(event.target))
         {
-            auto seed = event.seed;
-            wounds::stamp(event.target, event.uv,
-                          .012f + math::unit(seed) * .016f,
-                          .85f + math::unit(seed)*.15f, seed);
-            const auto attached = surfaces::get()->transforms.find(event.target);
-            if (attached != surfaces::get()->transforms.end())
+            // UV marks are only meaningful on a skinned surface. Rigid mesh UV
+            // hits belong in the projected surface-decal system instead.
+            if (event.uv_valid)
             {
-                const auto local = math::transform_point(
-                    math::inverse_affine(attached->second), event.position);
-                wounds::source_at(event.target, local, event.energy, seed);
+                auto seed = event.seed;
+                wounds::stamp(event.target, event.uv,
+                              .012f + math::unit(seed) * .016f,
+                              .85f + math::unit(seed)*.15f, seed);
+                const auto attached = surfaces::get()->transforms.find(event.target);
+                if (attached != surfaces::get()->transforms.end())
+                {
+                    const auto local = math::transform_point(
+                        math::inverse_affine(attached->second), event.position);
+                    wounds::source_at(event.target, local, event.energy, seed);
+                }
             }
         }
         else if (event.target)
+        {
             surfaces::add(event.target, event.position, event.normal,
                           .10f, event.seed, false, 1.2f);
+        }
 
         if (data->pending_backdrops.size() >= 32)
             data->pending_backdrops.erase(data->pending_backdrops.begin());
