@@ -27,6 +27,7 @@ namespace fld::render
         vk::ImageLayout depth_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
         vk::ImageLayout color_layout = vk::ImageLayout::eShaderReadOnlyOptimal;
         bool reversed_depth = false;
+        std::uint32_t phase = 0xffffffffu; // all phases by default
         appearance liquid{};
     };
 

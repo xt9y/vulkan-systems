@@ -243,6 +243,7 @@ namespace fld::render
                 world->particles.size(),std::size_t(data->max_particles)));
             for(const auto &p:world->particles)
             {
+                if(target.phase!=0xffffffffu && p.phase!=target.phase)continue;
                 if(points.size()>=data->max_particles)break;
                 const auto clip=target.view_projection *
                     vec4{p.position.x,p.position.y,p.position.z,1.f};
