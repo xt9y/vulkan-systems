@@ -17,12 +17,17 @@ namespace bld::render::wounds
         vk::buffer::resource fallback;
         std::unordered_map<instance_id,cache> actors;
         std::unordered_map<std::uint32_t,cache> batches;
+        std::unordered_map<std::uint32_t,cache> projected_batches;
     };
     state *get();
     void init(std::uint32_t frames);
     bool visible(instance_id id);
     vk::DescriptorBufferInfo descriptor(instance_id id,std::uint32_t frame);
     vk::DescriptorBufferInfo descriptor_batch(
+        std::uint32_t mesh_id,const std::vector<instance_id> &instances,
+        std::uint32_t frame);
+    // Sparse, world-space projected footprints for rigid surfaces.
+    vk::DescriptorBufferInfo descriptor_projected_batch(
         std::uint32_t mesh_id,const std::vector<instance_id> &instances,
         std::uint32_t frame);
     void clear_batches();
