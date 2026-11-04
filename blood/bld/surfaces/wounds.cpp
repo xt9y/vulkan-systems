@@ -7,7 +7,13 @@
 
 namespace bld::wounds
 {
-    namespace { state *data = nullptr; }
+    namespace
+    {
+        state *data = nullptr;
+        // Survives system::clear(): GPU buffers must recognize a newly
+        // created wound atlas even if the actor ID is reused.
+        std::uint64_t revision = 1;
+    }
 
     state *get() { return data; }
 
@@ -72,7 +78,7 @@ namespace bld::wounds
                                      ((next*16u + wet) << shift);
             }
         }
-        ++atlas.generation;
+        atlas.generation = ++revision;
         if (data->marks < data->max_marks) ++data->marks;
     }
 
@@ -116,7 +122,7 @@ namespace bld::wounds
                     if (wet) word -= (1u << bit);
                 }
             }
-            ++a.generation;
+            a.generation = ++revision;
         }
         return emission;
     }
