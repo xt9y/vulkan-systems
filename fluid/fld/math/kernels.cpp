@@ -1,6 +1,8 @@
 #include "kernels.hpp"
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
+#include <utility>
 
 namespace fld::math
 {
@@ -37,6 +39,43 @@ namespace fld::math
     {
         const auto r = norm(v);
         return r > 1e-9f ? v / r : vec3{0, 1, 0};
+    }
+
+    mat4 inverse(const mat4 &matrix)
+    {
+        double rows[4][8]{};
+        for(int row=0;row<4;++row)
+        {
+            for(int col=0;col<4;++col)
+                rows[row][col]=matrix(row,col);
+            rows[row][row+4]=1.0;
+        }
+        for(int col=0;col<4;++col)
+        {
+            int pivot=col;
+            for(int row=col+1;row<4;++row)
+                if(std::abs(rows[row][col])>std::abs(rows[pivot][col]))
+                    pivot=row;
+            if(std::abs(rows[pivot][col])<1e-12)
+                throw std::invalid_argument("Singular view-projection matrix");
+            if(pivot!=col)
+                for(int c=0;c<8;++c)
+                    std::swap(rows[col][c],rows[pivot][c]);
+            const double coefficient=rows[col][col];
+            for(int c=0;c<8;++c)rows[col][c]/=coefficient;
+            for(int row=0;row<4;++row)
+            {
+                if(row==col)continue;
+                const double coefficient=rows[row][col];
+                for(int c=0;c<8;++c)
+                    rows[row][c]-=coefficient*rows[col][c];
+            }
+        }
+        mat4 inverse{};
+        for(int row=0;row<4;++row)
+            for(int col=0;col<4;++col)
+                inverse(row,col)=float(rows[row][col+4]);
+        return inverse;
     }
 
     std::uint32_t random(std::uint32_t &seed)

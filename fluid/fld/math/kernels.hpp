@@ -8,6 +8,8 @@ namespace fld::math
     float viscosity_laplacian(float distance, float smoothing_radius);
     float norm(vec3 value);
     vec3 safe_normal(vec3 value);
+    // Full projective inverse for Vulkan depth reconstruction.
+    mat4 inverse(const mat4 &matrix);
     std::uint32_t random(std::uint32_t &seed);
     float random01(std::uint32_t &seed);
 }
