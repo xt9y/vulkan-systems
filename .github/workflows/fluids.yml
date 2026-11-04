@@ -1,0 +1,32 @@
+name: fluids
+on:
+  push:
+    branches:
+      - research/fluids-blood
+  pull_request:
+    paths:
+      - "fluid/**"
+      - "blood/**"
+      - ".github/workflows/fluids.yml"
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang make git glslang-tools libvulkan-dev
+          git clone --depth 1 https://github.com/xt9y/build.c.git /tmp/cbuild
+          make -C /tmp/cbuild
+          sudo make -C /tmp/cbuild install
+      - name: Build independent libraries
+        run: |
+          cd fluid
+          c build
+          cd ../blood
+          c build
+      - name: Compile GLSL
+        run: |
+          glslangValidator -V fluid/fld/shaders/surface.comp -o /tmp/fluid.spv
