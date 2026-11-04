@@ -8,7 +8,8 @@ namespace bld::surface
     struct mark
     {
         vec2 uv{};
-        float radius=.015f, age=0, volume_ml=.1f;
+        vec2 radius_uv{.015f,.015f};
+        float age=0, volume_ml=.1f;
         float angle=0, wetness=1;
         std::uint32_t seed=1;
     };
@@ -39,6 +40,9 @@ namespace bld::surface
         substrate kind=substrate::painted;
         mat4 transform=mat4::identity();
         bool skinned=false;
+        // World-space distance covered by one UV unit on this mesh.
+        // Supply the local hit-triangle metric to prevent oversized marks.
+        vec2 metres_per_uv{1.f,1.f};
     };
 
     struct state
@@ -53,7 +57,8 @@ namespace bld::surface
     state *get();
     void init(const options &settings);
     void register_target(instance_id id, substrate kind, mat4 transform,
-                         bool skinned=false);
+                         bool skinned=false,
+                         vec2 metres_per_uv={1.f,1.f});
     void set_transform(instance_id id, mat4 transform);
     void remove_target(instance_id id);
     void deposit(instance_id id, vec3 position, vec3 normal, vec2 uv,

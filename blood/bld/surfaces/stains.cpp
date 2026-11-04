@@ -52,12 +52,20 @@ namespace bld::surface
                 // at their contact footprint. No screen-space UV projection.
                 const float wick=physical.absorption *
                     (1.f-std::exp(-std::max(0.f,mark.age)*.11f));
-                const float radius=std::clamp(
-                    mark.radius*physical.spread*(1.f+wick),.001f,.25f);
+                // Porous cloth expands anisotropically along yarn axes.
+                // Radius is expressed in actual mesh UV coordinates,
+                // calibrated from the impacted triangle's metre/UV metric.
+                const float ux=std::clamp(
+                    mark.radius_uv.x*physical.spread*(1.f+wick*1.35f),
+                    .0005f,.25f);
+                const float uy=std::clamp(
+                    mark.radius_uv.y*physical.spread*(1.f+wick*.75f),
+                    .0005f,.25f);
                 const float cx=mark.uv.x*float(w-1);
                 const float cy=mark.uv.y*float(w-1);
-                const float r=radius*float(w);
-                const int reach=int(std::ceil(r*1.5f));
+                const float rx=std::max(1.f,ux*float(w));
+                const float ry=std::max(1.f,uy*float(w));
+                const int reach=int(std::ceil(std::max(rx,ry)*1.5f));
                 const float wet=std::clamp(
                     mark.wetness*std::exp(-mark.age/
                         (42.f*physical.drying_scale)),0.f,1.f);
@@ -66,8 +74,8 @@ namespace bld::surface
                 for(int y=y0;y<=y1;++y)
                     for(int x=x0;x<=x1;++x)
                     {
-                        const float dx=(float(x)+.5f-cx)/r;
-                        const float dy=(float(y)+.5f-cy)/r;
+                        const float dx=(float(x)+.5f-cx)/rx;
+                        const float dy=(float(y)+.5f-cy)/ry;
                         const float angle=std::atan2(dy,dx);
                         const float edge=.88f+
                             noise(angle+mark.angle+float(mark.seed%31u)) *
@@ -81,7 +89,7 @@ namespace bld::surface
                         const float old_cov=float(old>>24u)/255.f;
                         const float new_cov=coverage+old_cov*(1.f-coverage);
                         const float amount=std::clamp(
-                            mark.volume_ml/(pi*radius*radius*1000.f),
+                            mark.volume_ml/(pi*ux*uy*1000.f),
                             .02f,1.f);
                         const auto old_depth=float((old>>8u)&255u)/255.f;
                         const auto new_depth=std::max(old_depth,coverage*amount);
@@ -112,10 +120,13 @@ namespace bld::surface
         data->settings=settings;
     }
 
-    void register_target(instance_id id,substrate kind,mat4 transform,bool skinned)
+    void register_target(instance_id id,substrate kind,mat4 transform,
+                         bool skinned,vec2 metres_per_uv)
     {
         if(!data || !id)return;
-        data->targets[id]={kind,transform,skinned};
+        metres_per_uv.x=std::max(.001f,metres_per_uv.x);
+        metres_per_uv.y=std::max(.001f,metres_per_uv.y);
+        data->targets[id]={kind,transform,skinned,metres_per_uv};
     }
 
     void set_transform(instance_id id,mat4 transform)
@@ -138,7 +149,12 @@ namespace bld::surface
     void deposit(instance_id id,vec3 position,vec3 normal,vec2 uv,
                  bool uv_valid,float volume_ml,float velocity,std::uint32_t seed)
     {
-        if(!data || !id || volume_ml<=0.f)return;
+        if(!data || !id || !std::isfinite(volume_ml) || volume_ml<=0.f ||
+           !std::isfinite(position.x) || !std::isfinite(position.y) ||
+           !std::isfinite(position.z) ||
+           (uv_valid && (!std::isfinite(uv.x) || !std::isfinite(uv.y) ||
+                        uv.x<0.f || uv.y<0.f || uv.x>1.f || uv.y>1.f)))
+            return;
         const auto registered=data->targets.find(id);
         if(registered==data->targets.end())return;
         const auto props=material::surface(registered->second.kind);
@@ -163,7 +179,12 @@ namespace bld::surface
                 atlas.marks.erase(atlas.marks.begin());
             mark m{};
             m.uv=uv;
-            m.radius=std::clamp(diameter*.8f*spread,.003f,.065f);
+            const auto metric=registered->second.metres_per_uv;
+            const float world_radius=diameter*.5f*spread;
+            m.radius_uv={
+                std::clamp(world_radius/metric.x,.0005f,.12f),
+                std::clamp(world_radius/metric.y,.0005f,.12f)
+            };
             m.volume_ml=volume_ml;
             m.angle=float(seed%628u)/100.f;
             m.seed=seed;
