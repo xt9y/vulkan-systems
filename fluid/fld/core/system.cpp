@@ -55,50 +55,65 @@ namespace fld::system
 
     std::uint32_t emit(const fld::emission &source)
     {
-        if (!data || source.phase >= data->materials.size() ||
-            source.volume <= 0.f || !std::isfinite(source.volume))
+        if(!data || source.phase>=data->materials.size() ||
+           !std::isfinite(source.volume) || source.volume<=0.f ||
+           !std::isfinite(source.position.x) ||
+           !std::isfinite(source.position.y) ||
+           !std::isfinite(source.position.z) ||
+           !std::isfinite(source.velocity.x) ||
+           !std::isfinite(source.velocity.y) ||
+           !std::isfinite(source.velocity.z) ||
+           data->particles.size()>=data->settings.max_particles)
             return 0;
 
-        const auto &settings = data->settings;
-        const auto space = settings.spacing;
-        const float sphere = std::cbrt(source.volume * 3.f / (4.f*pi));
-        const int reach = std::max(1, int(std::ceil(sphere / space)));
-        const float volume = space * space * space;
-        const float mass = data->materials[source.phase].density * volume;
-        if (data->particles.size() >= settings.max_particles) return 0;
-        const auto limit = settings.max_particles -
-            std::uint32_t(data->particles.size());
-        std::uint32_t written = 0;
-        auto seed = source.seed ? source.seed : 1u;
-
-        for (int z = -reach; z <= reach && written < limit; ++z)
-            for (int y = -reach; y <= reach && written < limit; ++y)
-                for (int x = -reach; x <= reach && written < limit; ++x)
+        const auto &settings=data->settings;
+        const float space=settings.spacing;
+        const float sphere=std::cbrt(source.volume*3.f/(4.f*pi));
+        const int reach=std::max(1,int(std::ceil(sphere/space)));
+        const std::size_t limit=settings.max_particles-data->particles.size();
+        if(reach>int(std::cbrt(double(settings.max_particles))*4.+8.))
+            return 0;
+        std::vector<vec3> positions;
+        positions.reserve(std::min<std::size_t>(limit,512));
+        for(int z=-reach;z<=reach;++z)
+            for(int y=-reach;y<=reach;++y)
+                for(int x=-reach;x<=reach;++x)
                 {
-                    const vec3 base{float(x)*space, float(y)*space, float(z)*space};
-                    if (vk::util::math::length_squared(base) > sphere*sphere)
+                    const vec3 v{float(x)*space,float(y)*space,float(z)*space};
+                    if(vk::util::math::length_squared(v)>sphere*sphere)
                         continue;
-                    const vec3 jitter{
-                        (math::random01(seed)-.5f)*space*.12f,
-                        (math::random01(seed)-.5f)*space*.12f,
-                        (math::random01(seed)-.5f)*space*.12f
-                    };
-                    const vec3 outward = math::safe_normal(
-                        base + vec3{0.f, space*.002f, 0.f});
-                    particle p{};
-                    p.position = source.position + base + jitter;
-                    p.previous = p.predicted = p.position;
-                    p.velocity = source.velocity + outward *
-                        (source.spread * math::random01(seed));
-                    p.radius = space*.5f;
-                    p.mass = mass;
-                    p.lifetime = std::max(.01f, source.lifetime);
-                    p.group = source.group;
-                    p.phase = source.phase;
-                    data->particles.push_back(p);
-                    ++written;
+                    if(positions.size()==limit)
+                        return 0;  // No partially represented volume.
+                    positions.push_back(v);
                 }
-        return written;
+        if(positions.empty())positions.push_back({});
+        const float volume_each=source.volume/float(positions.size());
+        const float density=data->materials[source.phase].density;
+        const float radius=std::cbrt(
+            volume_each*3.f/(4.f*pi));
+        std::uint32_t seed=source.seed ? source.seed : 1;
+        for(auto position:positions)
+        {
+            const vec3 jitter{
+                (math::random01(seed)-.5f)*space*.12f,
+                (math::random01(seed)-.5f)*space*.12f,
+                (math::random01(seed)-.5f)*space*.12f
+            };
+            const vec3 direction=math::safe_normal(
+                position+vec3{0.f,space*.002f,0.f});
+            particle p{};
+            p.position=source.position+position+jitter;
+            p.previous=p.predicted=p.position;
+            p.velocity=source.velocity+direction*
+                (source.spread*math::random01(seed));
+            p.radius=radius;
+            p.mass=density*volume_each;
+            p.lifetime=std::max(.01f,source.lifetime);
+            p.group=source.group;
+            p.phase=source.phase;
+            data->particles.push_back(p);
+        }
+        return std::uint32_t(positions.size());
     }
 
     splash_result splash(const fld::splash_source &source)
