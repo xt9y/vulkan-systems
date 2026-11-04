@@ -7,6 +7,8 @@ void build(C_Build *b)
     c_sources(fluid, "fld/math/*.cpp");
     c_sources(fluid, "fld/material/*.cpp");
     c_sources(fluid, "fld/simulation/*.cpp");
+    c_sources(fluid, "fld/surface/*.cpp");
+    c_sources(fluid, "fld/porous/*.cpp");
     c_sources(fluid, "fld/render/*.cpp");
     c_include(fluid, ".");
     c_flag(fluid, "-std=c++17");
