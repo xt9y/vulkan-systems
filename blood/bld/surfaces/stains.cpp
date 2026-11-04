@@ -295,7 +295,7 @@ namespace bld::surface
                         {
                             const auto wet=(pixel>>16u)&255u;
                             const auto remaining=std::uint32_t(
-                                std::round(float(wet)*decay));
+                                std::floor(float(wet)*decay));
                             pixel=(pixel&0xff00ffffu)|(remaining<<16u);
                         }
                     }
