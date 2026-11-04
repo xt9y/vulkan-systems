@@ -1,5 +1,6 @@
 #include "stains.hpp"
 #include "../material/blood.hpp"
+#include <fld/material/rheology.hpp>
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
