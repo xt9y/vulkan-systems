@@ -1,6 +1,5 @@
 #include "stains.hpp"
 #include "../material/blood.hpp"
-#include "../core/system.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -76,12 +75,11 @@ namespace bld::surface
             return length>1e-8f?p/length:fallback;
         }
 
-        void drip(fld::surface::grid &film)
+        void drip(fld::surface::grid &film,
+                  const release_callback &release)
         {
-            if(!film.open_edges || !bld::system::get() ||
-               !fld::system::get())return;
-            const auto &material=fld::system::get()->materials.at(
-                bld::system::get()->phase);
+            if(!film.open_edges || !release)return;
+            const auto material=bld::material::physical();
             const float length=std::sqrt(material.surface_tension/
                 std::max(.001f,material.density*9.81f));
             const float area=fld::surface::cell_area(film);
@@ -101,10 +99,9 @@ namespace bld::surface
                     e.position=fld::surface::world_position(film,x,y);
                     e.velocity={0,-.18f,0};
                     e.volume=volume;
-                    e.phase=bld::system::get()->phase;
                     e.lifetime=5.f;
                     // Preserve liquid in the film on budget exhaustion.
-                    if(fld::system::emit(e))
+                    if(release(e))
                         fld::surface::take(film,x,y,volume);
                 }
         }
@@ -306,7 +303,7 @@ namespace bld::surface
         ++data->generation;
     }
 
-    void update(float dt)
+    void update(float dt,const release_callback &release)
     {
         if(!data || !std::isfinite(dt) || dt<=0.f)return;
         const auto fluid=material::physical();
@@ -316,7 +313,7 @@ namespace bld::surface
             if(target==data->targets.end() || image.film.cells.empty())continue;
             fld::surface::update(image.film,dt,fluid,
                                   porous_properties(target->second.kind));
-            drip(image.film);
+            drip(image.film,release);
             image.update_accumulator+=dt;
             if(image.update_accumulator>=1.f/30.f)
             {
@@ -330,7 +327,7 @@ namespace bld::surface
         {
             fld::surface::update(stain.film,dt,fluid,
                                   porous_properties(stain.kind));
-            drip(stain.film);
+            drip(stain.film,release);
             stain.age+=dt;
             const auto properties=material::surface(stain.kind);
             stain.wetness=std::exp(-stain.age/
