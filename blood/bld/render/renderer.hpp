@@ -10,10 +10,11 @@ namespace bld::render
         std::uint32_t width = 0, height = 0;
         mat4 view_projection = mat4::identity();
         mat4 inverse_view_projection = mat4::identity();
-        vk::ImageView depth{}, normals{}, output{};
+        vk::ImageView depth{}, normals{}, receiver_ids{}, output{};
         vk::Sampler sampler{};
         vk::ImageLayout depth_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
         vk::ImageLayout normal_layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        vk::ImageLayout receiver_layout = vk::ImageLayout::eShaderReadOnlyOptimal;
         bool reverse_depth = false;
         bool encoded_normals = true;
     };
@@ -29,6 +30,7 @@ namespace bld::render
     {
         vk::DescriptorSetLayout descriptor_layout{};
         vk::DescriptorPool descriptor_pool{};
+        vk::Sampler receiver_sampler{};
         vk::PipelineLayout layout{};
         vk::Pipeline pipeline{};
         std::vector<frame> frames;

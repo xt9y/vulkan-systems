@@ -27,10 +27,11 @@ namespace bld::render
 
         struct gpu_drop
         {
-            vec4 endpoints;
-            vec4 properties;
+            vec4 start;      // world position, radius in metres
+            vec4 end;        // world position, radius in metres
+            vec4 properties; // wetness, seed, unused, unused
         };
-        static_assert(sizeof(gpu_drop) == 32);
+        static_assert(sizeof(gpu_drop) == 48);
 
         struct parameters
         {
@@ -153,29 +154,31 @@ namespace bld::render
 
         void write_descriptors(frame &frame, const input &target)
         {
-            std::array<vk::DescriptorImageInfo, 3> images{};
+            std::array<vk::DescriptorImageInfo, 4> images{};
             images[0] = {target.sampler, target.depth, target.depth_layout};
             images[1] = {target.sampler, target.normals, target.normal_layout};
             images[2] = {{}, target.output, vk::ImageLayout::eGeneral};
+            images[3] = {data->receiver_sampler, target.receiver_ids,
+                         target.receiver_layout};
             const std::array<vk::Buffer, 6> handles{{
                 frame.decals.handle, frame.decal_counts.handle,
                 frame.decal_indices.handle, frame.drops.handle,
                 frame.drop_counts.handle, frame.drop_indices.handle
             }};
             std::array<vk::DescriptorBufferInfo, 6> buffers{};
-            std::array<vk::WriteDescriptorSet, 9> writes{};
-            for (std::uint32_t i = 0; i < 9; ++i)
+            std::array<vk::WriteDescriptorSet, 10> writes{};
+            for (std::uint32_t i = 0; i < 10; ++i)
             {
                 auto &write = writes[i];
                 write.dstSet = frame.set;
                 write.dstBinding = i;
                 write.descriptorCount = 1;
-                if (i < 3)
+                if (i < 3 || i == 9)
                 {
                     write.descriptorType = i == 2 ?
                         vk::DescriptorType::eStorageImage :
                         vk::DescriptorType::eCombinedImageSampler;
-                    write.pImageInfo = &images[i];
+                    write.pImageInfo = &images[i == 9 ? 3 : i];
                 }
                 else
                 {
@@ -219,13 +222,13 @@ namespace bld::render
         const auto device = vk::device::get()->handle;
         try
         {
-            std::array<vk::DescriptorSetLayoutBinding, 9> bindings{};
+            std::array<vk::DescriptorSetLayoutBinding, 10> bindings{};
             for (std::uint32_t i = 0; i < bindings.size(); ++i)
             {
                 bindings[i].binding = i;
                 bindings[i].descriptorCount = 1;
                 bindings[i].stageFlags = vk::ShaderStageFlagBits::eCompute;
-                bindings[i].descriptorType = i < 2 ?
+                bindings[i].descriptorType = i < 2 || i == 9 ?
                     vk::DescriptorType::eCombinedImageSampler :
                     i == 2 ? vk::DescriptorType::eStorageImage :
                              vk::DescriptorType::eStorageBuffer;
@@ -234,6 +237,13 @@ namespace bld::render
             layout.bindingCount = bindings.size();
             layout.pBindings = bindings.data();
             data->descriptor_layout = vk::descriptor_layout::create(layout);
+            vk::SamplerCreateInfo sampler{};
+            sampler.magFilter = vk::Filter::eNearest;
+            sampler.minFilter = vk::Filter::eNearest;
+            sampler.mipmapMode = vk::SamplerMipmapMode::eNearest;
+            sampler.addressModeU = sampler.addressModeV =
+                sampler.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+            data->receiver_sampler = device.createSampler(sampler);
 
             vk::PushConstantRange push{};
             push.stageFlags = vk::ShaderStageFlagBits::eCompute;
@@ -263,7 +273,7 @@ namespace bld::render
             vk::shader::destroy(shader);
 
             std::array<vk::DescriptorPoolSize, 3> sizes{{
-                {vk::DescriptorType::eCombinedImageSampler, count * 2},
+                {vk::DescriptorType::eCombinedImageSampler, count * 3},
                 {vk::DescriptorType::eStorageImage, count},
                 {vk::DescriptorType::eStorageBuffer, count * 6}
             }};
@@ -305,7 +315,8 @@ namespace bld::render
                 const input &target)
     {
         if (!data || index >= data->frames.size() || !command ||
-            !target.depth || !target.normals || !target.output ||
+            !target.depth || !target.normals || !target.receiver_ids ||
+            !target.output ||
             !target.sampler || !target.width || !target.height ||
             target.width > data->max_width || target.height > data->max_height)
             throw std::invalid_argument("Invalid blood render targets");
@@ -333,7 +344,8 @@ namespace bld::render
             item.normal_kind = {source.normal.x, source.normal.y,
                 source.normal.z, float(source.variant + (source.pool ? 8u : 0u))};
             item.properties = {source.wetness,
-                               float(id) * 2.126f + source.variant * 1.17f, 0, 0};
+                               float(id) * 2.126f + source.variant * 1.17f,
+                               float(source.target), 0};
             gpu_decals.push_back(item);
             bin_decal(decal_tiles, id, source, target);
         }
@@ -465,6 +477,8 @@ namespace bld::render
         if (data->layout) vk::pipeline_layout::destroy(data->layout);
         if (data->descriptor_pool)
             vk::device::get()->handle.destroyDescriptorPool(data->descriptor_pool);
+        if (data->receiver_sampler)
+            vk::device::get()->handle.destroySampler(data->receiver_sampler);
         if (data->descriptor_layout)
             vk::descriptor_layout::destroy(data->descriptor_layout);
         delete data;
