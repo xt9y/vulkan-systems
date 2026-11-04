@@ -31,6 +31,7 @@ namespace bld::wounds
                std::uint32_t seed)
     {
         if (!data || !target || !data->max_marks ||
+            !std::isfinite(uv.x) || !std::isfinite(uv.y) ||
             uv.x < 0 || uv.y < 0 || uv.x > 1 || uv.y > 1) return;
         if (data->atlases.size() >= data->max_instances &&
             data->atlases.find(target) == data->atlases.end()) return;

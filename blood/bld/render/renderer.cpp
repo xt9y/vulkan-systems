@@ -329,7 +329,7 @@ namespace bld::render
                                   target.width, target.height, a_ok);
             const auto b = screen(target.view_projection, d.position,
                                   target.width, target.height, b_ok);
-            if (!a_ok || !b_ok) continue;
+            if (!a_ok || !b_ok || b.z < 0.f || b.z > 1.f) continue;
             const float width = std::abs(target.view_projection(1, 1));
             const auto clip = target.view_projection * vec4{d.position, 1};
             const float radius = std::clamp(

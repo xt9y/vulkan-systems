@@ -146,7 +146,8 @@ namespace bld::network
         if (!value || !system::get()) return false;
         if (!data) init();
         // The source ID is part of the replay key to accommodate multiple peers.
-        const std::uint64_t key = value->id ^ (std::uint64_t(value->source) << 32);
+        const std::uint64_t key = value->id ^
+            (std::uint64_t(value->source) * 0x9e3779b97f4a7c15ull);
         if (!data->seen.insert(key).second) return false;
         if (data->history.size() >= data->replay_window)
         {

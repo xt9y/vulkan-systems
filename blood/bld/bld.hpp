@@ -5,3 +5,4 @@
 #include "surfaces/wounds.hpp"
 #include "network/events.hpp"
 #include "render/renderer.hpp"
+#include "render/wound.hpp"
