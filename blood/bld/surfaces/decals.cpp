@@ -20,40 +20,51 @@ namespace bld::surfaces
 
     void set_transform(instance_id id, const mat4 &model)
     {
-        if (data && id) data->transforms[id] = model;
+        if (!data || !id) return;
+        // Decals can arrive over the network before their owner transform.
+        // Resolve their local pose exactly once, when that transform arrives.
+        for (auto &decal : data->decals)
+        {
+            if (decal.target != id || decal.anchored) continue;
+            decal.local = math::inverse_affine(model) * decal.world;
+            decal.anchored = true;
+        }
+        data->transforms[id] = model;
+    }
+
+    void set_skinned(instance_id id, bool skinned)
+    {
+        if (!data || !id) return;
+        if (skinned) data->animated.insert(id);
+        else data->animated.erase(id);
+    }
+
+    bool is_skinned(instance_id id)
+    {
+        return data && data->animated.count(id) != 0;
     }
 
     void remove_transform(instance_id id)
     {
         if (!data) return;
-        const auto owner = data->transforms.find(id);
-        if (owner != data->transforms.end())
-        {
-            for (auto &decal : data->decals)
-                if (decal.target == id)
-                    decal.world = owner->second * decal.local;
-            data->transforms.erase(owner);
-        }
-        for (auto &decal : data->decals)
-        {
-            if (decal.target != id) continue;
-            // Keep the last world-space projection if the rigid owner disappears.
-            // Preserve the last attached world-space projection.
-            decal.target = 0;
-        }
+        data->transforms.erase(id);
+        data->animated.erase(id);
+        auto &marks = data->decals;
+        marks.erase(std::remove_if(marks.begin(), marks.end(),
+            [id](const decal &mark) { return mark.target == id; }), marks.end());
     }
 
     void add(const collision &hit, float size, std::uint32_t seed,
              bool pool, float stretch)
     {
-        if (!hit.hit || hit.skinned) return;
+        if (!hit.hit || hit.skinned || is_skinned(hit.target)) return;
         add(hit.target, hit.position, hit.normal, size, seed, pool, stretch);
     }
 
     void add(instance_id target, vec3 position, vec3 normal, float size,
              std::uint32_t seed, bool pool, float stretch)
     {
-        if (!data || data->capacity == 0) return;
+        if (!data || data->capacity == 0 || is_skinned(target)) return;
         if (pool)
         {
             const auto count = std::count_if(
@@ -93,8 +104,10 @@ namespace bld::surfaces
         d.lifetime = pool ? 360.f : 240.f;
         const auto owner = data->transforms.find(target);
         if (owner != data->transforms.end())
+        {
             d.local = math::inverse_affine(owner->second) * frame;
-        else d.target = 0;
+            d.anchored = true;
+        }
         data->decals.push_back(d);
     }
 
@@ -124,7 +137,7 @@ namespace bld::surfaces
         {
             auto frame = d.world;
             const auto found = data->transforms.find(d.target);
-            if (d.target && found != data->transforms.end())
+            if (d.anchored && found != data->transforms.end())
                 frame = found->second * d.local;
             if (d.pool)
             {
@@ -140,7 +153,7 @@ namespace bld::surfaces
                 d.wetness * (1.f - std::min(1.f, d.age / d.lifetime)));
             result.push_back({
                 math::inverse_affine(frame), math::direction(normal),
-                wet, d.variant, d.pool
+                wet, d.variant, d.pool, d.target
             });
         }
         return result;

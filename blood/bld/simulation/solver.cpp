@@ -165,11 +165,11 @@ namespace bld::simulation
                     }
                     else
                     {
-                        const float size = .11f + math::unit(seed) * .19f;
+                        const float size = .065f + math::unit(seed) * .085f;
                         const float stretch = 1.1f + math::unit(seed) * 1.5f;
                         surfaces::add(hit, size, seed, false, stretch);
                         if (hit.normal.y > .7f && math::unit(seed) > .5f)
-                            surfaces::add(hit, .28f + math::unit(seed)*.3f,
+                            surfaces::add(hit, .16f + math::unit(seed)*.14f,
                                           seed, true);
                     }
                     d.age = d.lifetime;

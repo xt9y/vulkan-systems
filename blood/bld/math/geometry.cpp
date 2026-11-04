@@ -94,7 +94,8 @@ namespace bld::math
         const auto x = a * std::cos(rotation) + b * std::sin(rotation);
         const auto y = b * std::cos(rotation) - a * std::sin(rotation);
         mat4 out = mat4::identity();
-        const float depth = std::max(.10f, std::max(width, height) * .3f);
+        // A thin surface layer, not a volume extending through body parts.
+        const float depth = std::clamp(std::max(width, height) * .20f, .008f, .04f);
         for (int i = 0; i < 3; ++i)
         {
             out(i, 0) = (&x.x)[i] * width;

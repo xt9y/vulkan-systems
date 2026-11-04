@@ -65,7 +65,7 @@ namespace bld::system
         {
             auto seed = event.seed;
             wounds::stamp(event.target, event.uv,
-                          .023f + math::unit(seed) * .027f,
+                          .012f + math::unit(seed) * .016f,
                           .85f + math::unit(seed)*.15f, seed);
             const auto attached = surfaces::get()->transforms.find(event.target);
             if (attached != surfaces::get()->transforms.end())
@@ -77,7 +77,7 @@ namespace bld::system
         }
         else if (event.target)
             surfaces::add(event.target, event.position, event.normal,
-                          .24f, event.seed, false, 1.2f);
+                          .10f, event.seed, false, 1.2f);
 
         if (data->pending_backdrops.size() >= 32)
             data->pending_backdrops.erase(data->pending_backdrops.begin());
@@ -110,7 +110,7 @@ namespace bld::system
                         if (struck.target != event.target)
                         {
                             auto seed = event.seed;
-                            surfaces::add(struck, .33f + .21f * math::unit(seed),
+                            surfaces::add(struck, .16f + .10f * math::unit(seed),
                                           seed, false, 1.45f);
                             break;
                         }
