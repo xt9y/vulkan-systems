@@ -255,83 +255,186 @@ namespace fld::surface
                 const porous::properties &substrate,vec3 gravity)
     {
         if(f.cells.empty() || !std::isfinite(dt) || dt<=0.f)return;
+        constexpr std::uint32_t tile=16;
+        const std::uint32_t tx=(f.width+tile-1)/tile;
+        const std::uint32_t ty=(f.height+tile-1)/tile;
+        std::vector<std::uint8_t> active(std::size_t(tx)*ty,0);
+        const auto mark=[&](std::uint32_t x,std::uint32_t y)
+        {
+            const int X=int(x/tile),Y=int(y/tile);
+            for(int iy=std::max(0,Y-1);iy<=std::min(int(ty)-1,Y+1);++iy)
+                for(int ix=std::max(0,X-1);ix<=std::min(int(tx)-1,X+1);++ix)
+                    active[std::size_t(iy)*tx+ix]=1;
+        };
+
+        // Only liquid and mobile pore saturation require simulation; dried
+        // retained pigment stays visible without consuming solver time.
+        // The one-tile halo lets a film front advance without reallocating.
+        for(std::uint32_t y=0;y<f.height;++y)
+            for(std::uint32_t x=0;x<f.width;++x)
+            {
+                const auto &c=f.cells[index(f,x,y)];
+                if(c.mobile>1.e-15f || c.stored>1.e-15f)mark(x,y);
+            }
+        for(const auto &[a,b]:f.seam_links)
+        {
+            if(a>=f.cells.size() || b>=f.cells.size())continue;
+            if(!active[(a/f.width/tile)*tx+(a%f.width/tile)] &&
+               !active[(b/f.width/tile)*tx+(b%f.width/tile)])continue;
+            mark((a%f.width),(a/f.width));
+            mark((b%f.width),(b/f.width));
+        }
+
+        std::vector<std::uint32_t> tiles;
+        for(std::uint32_t i=0;i<active.size();++i)
+            if(active[i])tiles.push_back(i);
+        if(tiles.empty())return;
+
+        if(f.mobile_delta.size()!=f.cells.size())
+        {
+            f.mobile_delta.resize(f.cells.size(),0.f);
+            f.pore_delta.resize(f.cells.size(),0.f);
+        }
         const float area=cell_area(f);
         const float dx=f.metres_per_uv.x/f.width;
         const float dy=f.metres_per_uv.y/f.height;
         const int substeps=std::clamp(int(std::ceil(dt/.008f)),1,20);
         const float step=std::min(dt,.16f)/float(substeps);
-        std::vector<float> mobile_delta(f.cells.size());
-        std::vector<float> pore_delta(f.cells.size());
         bool changed=false;
+        const auto active_cell=[&](std::uint32_t x,std::uint32_t y)
+        {
+            return active[std::size_t(y/tile)*tx+x/tile]!=0;
+        };
+        // Transfer from the donor's remaining substep budget, so no
+        // combination of faces and seam links can create negative mass.
+        const auto transfer=[](float q,std::size_t i,std::size_t j,
+                               const std::vector<cell> &cells,
+                               std::vector<float> &delta,bool pore)
+        {
+            if(!std::isfinite(q) || q==0.f)return;
+            if(q>0.f)
+            {
+                const float available=std::max(0.f,
+                    (pore?cells[i].stored:cells[i].mobile)+delta[i]);
+                const float value=std::min(q,available);
+                delta[i]-=value;delta[j]+=value;
+            }
+            else
+            {
+                const float available=std::max(0.f,
+                    (pore?cells[j].stored:cells[j].mobile)+delta[j]);
+                const float value=std::min(-q,available);
+                delta[j]-=value;delta[i]+=value;
+            }
+        };
         for(int sub=0;sub<substeps;++sub)
         {
-            std::fill(mobile_delta.begin(),mobile_delta.end(),0.f);
-            std::fill(pore_delta.begin(),pore_delta.end(),0.f);
-            for(std::uint32_t y=0;y<f.height;++y)
-                for(std::uint32_t x=0;x<f.width;++x)
-                {
-                    const auto i=index(f,x,y);
-                    const auto &a=f.cells[i];
-                    if(a.mobile<=0.f && a.stored<=0.f)continue;
-                    for(int axis=0;axis<2;++axis)
-                    {
-                        const auto nx=x+(axis==0),ny=y+(axis==1);
-                        if(nx>=f.width || ny>=f.height)continue;
-                        const auto j=index(f,nx,ny);
-                        const auto &b=f.cells[j];
-                        if(!f.geometry.empty() &&
-                           (!f.geometry[i].valid || !f.geometry[j].valid))
-                            continue;
-                        const float dist=axis==0?dx:dy;
-                        const float width=axis==0?dy:dx;
-                        const vec3 tangent=(!f.geometry.empty() ?
-                            (axis==0?f.geometry[i].tangent_u:
-                                      f.geometry[i].tangent_v):
-                            (axis==0?f.tangent_u:f.tangent_v));
-                        const vec3 world_tangent=unit(world_direction(f,tangent),
-                                                       tangent);
-                        const float ga=dot3(gravity,world_tangent);
-                        const float ha=a.mobile/area,hb=b.mobile/area;
-                        const float h=.5f*(ha+hb);
-                        if(h>0.f)
-                        {
-                            // Lubrication approximation of tangential flow:
-                            // q=h^3/(3 mu) * (rho*g_t - grad(p_capillary)).
-                            // Shear-thinning rheology changes mu locally.
-                            const float shear=std::abs(ga)*h/
-                                std::max(.001f,fluid.viscosity_zero);
-                            const float mu=std::max(.0001f,
-                                rheology::viscosity(fluid,shear));
-                            const float capillary=
-                                fluid.surface_tension*(hb-ha)/(dist*dist);
-                            const float drive=fluid.density*ga-capillary;
-                            const float q=std::pow(std::min(h,.03f),3.f)*
-                                drive/(3.f*mu)*width*step;
-                            // No face may remove more than a fraction of its
-                            // donor's original volume. Four faces stay stable.
-                            const float amount=q>=0.f ?
-                                std::min(q,a.mobile*.22f) :
-                                -std::min(-q,b.mobile*.22f);
-                            mobile_delta[i]-=amount;
-                            mobile_delta[j]+=amount;
-                        }
-                        const float D=axis==0?substrate.wick_u_m2_s:
-                                               substrate.wick_v_m2_s;
-                        const float amount=porous::capillary_flux(
-                            a.stored,b.stored,area,dist,step,D,
-                            std::max(0.f,substrate.capacity_m)*area);
-                        pore_delta[i]-=amount;
-                        pore_delta[j]+=amount;
-                    }
-                }
-            for(std::size_t i=0;i<f.cells.size();++i)
+            for(const auto t:tiles)
             {
-                auto &c=f.cells[i];
-                const float old=c.mobile;
-                c.mobile=std::max(0.f,c.mobile+mobile_delta[i]);
-                c.stored=std::max(0.f,c.stored+pore_delta[i]);
-                porous::absorb(c.mobile,c.stored,area,step,substrate);
-                if(std::abs(c.mobile-old)>1e-15f)changed=true;
+                const std::uint32_t x0=(t%tx)*tile,y0=(t/tx)*tile;
+                const auto xmax=std::min(x0+tile,f.width);
+                const auto ymax=std::min(y0+tile,f.height);
+                for(auto y=y0;y<ymax;++y)
+                    for(auto x=x0;x<xmax;++x)
+                    {
+                        const auto i=index(f,x,y);
+                        f.mobile_delta[i]=0.f;
+                        f.pore_delta[i]=0.f;
+                    }
+            }
+            for(const auto t:tiles)
+            {
+                const std::uint32_t x0=(t%tx)*tile,y0=(t/tx)*tile;
+                const auto xmax=std::min(x0+tile,f.width);
+                const auto ymax=std::min(y0+tile,f.height);
+                for(auto y=y0;y<ymax;++y)
+                    for(auto x=x0;x<xmax;++x)
+                    {
+                        const auto i=index(f,x,y);
+                        const auto &a=f.cells[i];
+                        for(int axis=0;axis<2;++axis)
+                        {
+                            const auto nx=x+(axis==0),ny=y+(axis==1);
+                            if(nx>=f.width || ny>=f.height ||
+                               !active_cell(nx,ny))continue;
+                            const auto j=index(f,nx,ny);
+                            const auto &b=f.cells[j];
+                            if((a.mobile<=0.f && a.stored<=0.f &&
+                                b.mobile<=0.f && b.stored<=0.f) ||
+                               (!f.geometry.empty() &&
+                                (!f.geometry[i].valid || !f.geometry[j].valid)))
+                                continue;
+                            const float dist=axis==0?dx:dy;
+                            const float width=axis==0?dy:dx;
+                            const vec3 tangent=(!f.geometry.empty() ?
+                                (axis==0?f.geometry[i].tangent_u:
+                                          f.geometry[i].tangent_v):
+                                (axis==0?f.tangent_u:f.tangent_v));
+                            const vec3 world_tangent=unit(
+                                world_direction(f,tangent),tangent);
+                            const float ga=dot3(gravity,world_tangent);
+                            const float ha=a.mobile/area,hb=b.mobile/area;
+                            const float h=.5f*(ha+hb);
+                            if(h>0.f)
+                            {
+                                const float shear=std::abs(ga)*h/
+                                    std::max(.001f,fluid.viscosity_zero);
+                                const float mu=std::max(.0001f,
+                                    rheology::viscosity(fluid,shear));
+                                const float capillary=
+                                    fluid.surface_tension*(hb-ha)/(dist*dist);
+                                const float drive=fluid.density*ga-capillary;
+                                const float q=std::pow(std::min(h,.03f),3.f)*
+                                    drive/(3.f*mu)*width*step;
+                                transfer(q,i,j,f.cells,f.mobile_delta,false);
+                            }
+                            const float D=axis==0?substrate.wick_u_m2_s:
+                                                   substrate.wick_v_m2_s;
+                            const float q=porous::capillary_flux(
+                                a.stored,b.stored,area,dist,step,D,
+                                std::max(0.f,substrate.capacity_m)*area);
+                            transfer(q,i,j,f.cells,f.pore_delta,true);
+                        }
+                    }
+            }
+
+            // Separate chart islands may share the same physical surface.
+            // Couple their border cells with symmetric finite-volume fluxes.
+            for(const auto &[i,j]:f.seam_links)
+            {
+                if(i>=f.cells.size() || j>=f.cells.size())continue;
+                if(!active_cell(std::uint32_t(i%f.width),
+                                std::uint32_t(i/f.width)) ||
+                   !active_cell(std::uint32_t(j%f.width),
+                                std::uint32_t(j/f.width)))continue;
+                const auto &a=f.cells[i],&b=f.cells[j];
+                transfer((a.mobile-b.mobile)*.12f,i,j,
+                         f.cells,f.mobile_delta,false);
+                const float D=std::max(substrate.wick_u_m2_s,
+                                        substrate.wick_v_m2_s);
+                const float pore=porous::capillary_flux(
+                    a.stored,b.stored,area,std::min(dx,dy),step,D,
+                    std::max(0.f,substrate.capacity_m)*area);
+                transfer(pore,i,j,f.cells,f.pore_delta,true);
+            }
+            for(const auto t:tiles)
+            {
+                const std::uint32_t x0=(t%tx)*tile,y0=(t/tx)*tile;
+                const auto xmax=std::min(x0+tile,f.width);
+                const auto ymax=std::min(y0+tile,f.height);
+                for(auto y=y0;y<ymax;++y)
+                    for(auto x=x0;x<xmax;++x)
+                    {
+                        const auto i=index(f,x,y);
+                        auto &c=f.cells[i];
+                        const float mobile=c.mobile,stored=c.stored;
+                        c.mobile=std::max(0.f,c.mobile+f.mobile_delta[i]);
+                        c.stored=std::max(0.f,c.stored+f.pore_delta[i]);
+                        porous::absorb(c.mobile,c.stored,area,step,substrate);
+                        if(std::abs(c.mobile-mobile)>1.e-15f ||
+                           std::abs(c.stored-stored)>1.e-15f)
+                            changed=true;
+                    }
             }
         }
         if(changed)++f.generation;
