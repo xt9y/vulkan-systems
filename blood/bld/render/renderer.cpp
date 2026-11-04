@@ -205,7 +205,8 @@ namespace bld::render
         if (auto *system = bld::system::get())
         {
             data->max_decals = system->options.max_decals;
-            data->max_drops = system->options.max_particles;
+            data->max_drops = std::min<std::uint32_t>(
+                4096u, system->options.max_particles * 2u);
         }
         const auto device = vk::device::get()->handle;
         try
@@ -306,7 +307,8 @@ namespace bld::render
         std::vector<gpu_decal> gpu_decals;
         std::vector<gpu_drop> gpu_drops;
         gpu_decals.reserve(std::min(decals.size(), std::size_t(data->max_decals)));
-        gpu_drops.reserve(std::min(particles.size(), std::size_t(data->max_drops)));
+        gpu_drops.reserve(std::min(particles.size() * 2,
+                                   std::size_t(data->max_drops)));
 
         for (const auto &source : decals)
         {
@@ -348,6 +350,54 @@ namespace bld::render
                            std::min(a.y, b.y) - padding,
                            std::max(a.x, b.x) + padding,
                            std::max(a.y, b.y) + padding);
+        }
+
+        // Join nearby droplets from the same burst into sparse viscous strands.
+        // Only one short bridge per particle; no independent particle spawning.
+        for (std::size_t i = 0; i < particles.size() &&
+             gpu_drops.size() < data->max_drops; ++i)
+        {
+            const auto &source = particles[i];
+            if (!source.group) continue;
+            std::size_t closest = particles.size();
+            float best = .012f;
+            for (std::size_t j = i + 1; j < particles.size(); ++j)
+            {
+                if (particles[j].group != source.group) continue;
+                const auto distance = vk::util::math::length_squared(
+                    particles[j].position - source.position);
+                if (distance > .0001f && distance < best)
+                {
+                    best = distance;
+                    closest = j;
+                }
+            }
+            if (closest == particles.size()) continue;
+
+            bool a_ok = false, b_ok = false;
+            const auto a = screen(target.view_projection, source.position,
+                                  target.width, target.height, a_ok);
+            const auto b = screen(target.view_projection,
+                                  particles[closest].position,
+                                  target.width, target.height, b_ok);
+            if (!a_ok || !b_ok || b.z < 0.f || b.z > 1.f) continue;
+            const auto clip = target.view_projection * vec4{source.position, 1};
+            const float radius = std::clamp(
+                source.radius * std::abs(target.view_projection(1, 1)) *
+                    .3f * target.height / std::max(.01f, clip.w),
+                1.0f, 12.f);
+            gpu_drop link{};
+            link.endpoints = {a.x, a.y, b.x, b.y};
+            link.properties = {radius, std::max(a.z, b.z),
+                               std::max(0.f, 1.f - source.age/source.lifetime),
+                               float(source.seed % 1024u)};
+            const auto id = std::uint32_t(gpu_drops.size());
+            gpu_drops.push_back(link);
+            const auto pad = radius + 2.f;
+            drop_tiles.add(id, std::min(a.x, b.x) - pad,
+                           std::min(a.y, b.y) - pad,
+                           std::max(a.x, b.x) + pad,
+                           std::max(a.y, b.y) + pad);
         }
 
         if (!gpu_decals.empty())
