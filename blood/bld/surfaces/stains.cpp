@@ -311,17 +311,22 @@ namespace bld::surface
     {
         if(!data || !std::isfinite(dt) || dt<=0.f)return;
         const auto fluid=material::physical();
+        // A 30 Hz surface-film step is sufficient for millimetre-scale
+        // blood films and halves CPU work on a 60 Hz renderer. The fixed-
+        // volume solver still substeps for stability and does not tie
+        // transport to GPU frame rate.
         for(auto &[id,image]:data->atlases)
         {
             const auto target=data->targets.find(id);
             if(target==data->targets.end() || image.film.cells.empty())continue;
-            fld::surface::update(image.film,dt,fluid,
-                                  porous_properties(target->second.kind));
-            drip(image.film,release);
             image.update_accumulator+=dt;
             if(image.update_accumulator>=1.f/30.f)
             {
+                const auto elapsed=std::min(.1f,image.update_accumulator);
                 image.update_accumulator=0.f;
+                fld::surface::update(image.film,elapsed,fluid,
+                                      porous_properties(target->second.kind));
+                drip(image.film,release);
                 pack(image.film,image.pixels);
                 image.generation=++data->generation;
             }
@@ -329,9 +334,6 @@ namespace bld::surface
         }
         for(auto &stain:data->stains)
         {
-            fld::surface::update(stain.film,dt,fluid,
-                                  porous_properties(stain.kind));
-            drip(stain.film,release);
             stain.age+=dt;
             const auto properties=material::surface(stain.kind);
             stain.wetness=std::exp(-stain.age/
@@ -341,9 +343,15 @@ namespace bld::surface
         data->rigid_update_accumulator+=dt;
         if(data->rigid_update_accumulator>=1.f/30.f)
         {
+            const auto elapsed=std::min(.1f,data->rigid_update_accumulator);
             data->rigid_update_accumulator=0.f;
             for(auto &stain:data->stains)
+            {
+                fld::surface::update(stain.film,elapsed,fluid,
+                                      porous_properties(stain.kind));
+                drip(stain.film,release);
                 pack(stain.film,stain.pixels);
+            }
             if(!data->stains.empty())++data->generation;
         }
     }
