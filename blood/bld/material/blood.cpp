@@ -1,5 +1,6 @@
 #include "blood.hpp"
 #include <algorithm>
+#include <cmath>
 
 namespace bld::material
 {
@@ -36,6 +37,21 @@ namespace bld::material
         blood.index_of_refraction=1.35f;
         blood.roughness=.13f;
         return blood;
+    }
+
+    fld::surface_properties interaction(substrate kind)
+    {
+        const auto visual=surface(kind);
+        fld::surface_properties response{};
+        response.porosity=visual.absorption;
+        response.contact_angle=visual.contact_angle;
+        response.wetting=std::clamp(1.f-
+            visual.contact_angle/3.14159265f,.05f,.95f);
+        response.roughness=std::clamp(visual.roughness,0.f,1.f);
+        response.friction=std::clamp(.18f+visual.absorption*.63f,0.f,1.f);
+        response.restitution=std::clamp(.15f-
+            visual.absorption*.12f,.01f,.15f);
+        return response;
     }
 
     substrate_properties surface(substrate kind)

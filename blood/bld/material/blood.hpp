@@ -14,4 +14,5 @@ namespace bld::material
         float drying_scale=1;
     };
     substrate_properties surface(substrate kind);
+    fld::surface_properties interaction(substrate kind);
 }

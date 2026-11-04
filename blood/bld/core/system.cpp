@@ -107,21 +107,10 @@ namespace bld::system
                     hit.absorb=true;
                     return hit;
                 }
-                const auto kind=it->second.kind;
-                const float speed=fld::math::norm(to-from)/
-                    std::max(.0001f, data->settings.fluid.fixed_step);
-                const float diameter=std::max(radius*2.f,.0005f);
-                const float weber=fld::rheology::weber(
-                    material::physical(),speed,diameter);
-                // Stage one: low-energy adhesion or high-energy spreading.
-                // Stage two: capillary fabric absorption and long-term wicking.
-                const bool porous=kind==substrate::textile ||
-                                  kind==substrate::porous;
-                hit.absorb=porous || (weber<12.f);
-                hit.deposition_fraction=hit.absorb ? 1.f :
-                    std::clamp(.86f/(1.f+weber*.004f),.07f,.85f);
-                hit.restitution=kind==substrate::glass?.11f:.035f;
-                hit.friction=porous?.95f:.60f;
+                // The blood layer only describes the receiving surface.
+                // Actual wetting, absorption and rebound are solved in fld.
+                hit.surface=material::interaction(it->second.kind);
+                hit.material_response=true;
                 return hit;
             },
             [&](const fld::particle &p,const fld::collision &hit)

@@ -2,6 +2,7 @@
 #include "grid.hpp"
 #include "../math/kernels.hpp"
 #include "../material/rheology.hpp"
+#include "../material/contact.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -212,6 +213,8 @@ namespace fld::simulation
                 auto hit = collision(p.previous, p.predicted, p.radius);
                 if (hit.hit)
                 {
+                    if (hit.material_response)
+                        wetting::resolve(world.materials.at(p.phase),p,hit);
                     ++world.stats.contacts;
                     const float deposited = hit.absorb ? 1.f :
                         std::clamp(hit.deposition_fraction, 0.f, 1.f);
