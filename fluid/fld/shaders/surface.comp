@@ -20,7 +20,7 @@ layout(std430,set=0,binding=3) readonly buffer Particles
 };
 layout(std430,set=0,binding=4) readonly buffer TileCount
 {
-    uint counts[];
+    uvec2 ranges[]; // x packed offset, y full particle count
 };
 layout(std430,set=0,binding=5) readonly buffer TileIndex
 {
@@ -39,7 +39,6 @@ layout(push_constant) uniform Data
 const float pi = 3.14159265358979323846;
 const float inf = 1e20;
 const uint tile_size = 16u;
-const uint tile_capacity = 96u;
 
 vec3 unproject(vec2 ndc, float d)
 {
@@ -57,10 +56,10 @@ float poly6(float r2, float h)
 float field(vec3 p, uint tile, float h)
 {
     float density = 0.0;
-    uint count = min(counts[tile], tile_capacity);
+    uint count = ranges[tile].y;
     for (uint i=0u; i<count; ++i)
     {
-        uint id = indices[tile*tile_capacity+i];
+        uint id = indices[ranges[tile].x+i];
         if (id >= pc.sizes.w) continue;
         vec3 separation = p-particles[id].world.xyz;
         density += poly6(dot(separation,separation),h) *
@@ -97,7 +96,7 @@ void main()
     if(pixel.x>=int(pc.sizes.x)||pixel.y>=int(pc.sizes.y))return;
     uint columns=(pc.sizes.x+tile_size-1u)/tile_size;
     uint tile=(uint(pixel.y)/tile_size)*columns+uint(pixel.x)/tile_size;
-    uint count=min(counts[tile],tile_capacity);
+    uint count=ranges[tile].y;
     if(count==0u)
     {
         imageStore(liquid_output,pixel,texelFetch(scene_color,pixel,0));
@@ -122,7 +121,7 @@ void main()
     // this interval cannot intersect the liquid's density isosurface.
     for(uint i=0u;i<count;++i)
     {
-        uint id=indices[tile*tile_capacity+i];
+        uint id=indices[ranges[tile].x+i];
         if(id>=pc.sizes.w)continue;
         vec2 interval=sphere_interval(near_point,ray,
                                      particles[id].world.xyz,h);
@@ -193,7 +192,7 @@ void main()
         vec3 center=vec3(0.0);
         for(uint j=0u;j<count;++j)
         {
-            uint id=indices[tile*tile_capacity+j];
+            uint id=indices[ranges[tile].x+j];
             if(id>=pc.sizes.w)continue;
             Particle drop=particles[id];
             vec2 interval=sphere_interval(near_point,ray,drop.world.xyz,
