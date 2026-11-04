@@ -1,0 +1,3 @@
+blood
+  bld::system::init()
+  bld::system::shutdown()
