@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - research/fluids-blood
+      - research/coupled-films-porous-wounds
   pull_request:
     paths:
       - "fluid/**"
@@ -59,7 +60,19 @@ jobs:
             tests/blood_atlas.cpp \
             blood/bld/surfaces/stains.cpp \
             blood/bld/material/blood.cpp \
+            fluid/fld/surface/film.cpp \
+            fluid/fld/porous/transport.cpp \
             fluid/fld/material/rheology.cpp \
             fluid/fld/math/kernels.cpp \
             -o /tmp/blood_atlas
           /tmp/blood_atlas
+      - name: Coupled film, porous transport and wound-flow conservation
+        run: |
+          clang++ -std=c++17 -O2 -I/tmp/vkengine -Ifluid -Iblood \
+            tests/coupled_films.cpp \
+            fluid/fld/surface/film.cpp \
+            fluid/fld/porous/transport.cpp \
+            fluid/fld/material/rheology.cpp \
+            blood/bld/wounds/flow.cpp \
+            -o /tmp/coupled_films
+          /tmp/coupled_films
