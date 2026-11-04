@@ -50,7 +50,6 @@ namespace bld::render
                 rows = (height + tile_size - 1) / tile_size;
                 capacity = per_tile;
                 counts.assign(std::size_t(columns) * rows, 0);
-                indices.assign(std::size_t(columns) * rows * capacity, 0);
             }
 
             void add(std::uint32_t id, float min_x, float min_y,
@@ -69,6 +68,8 @@ namespace bld::render
                 const auto y1 = std::uint32_t(std::clamp(
                     int(std::floor(max_y / tile_size)), 0, int(rows)-1));
 
+                if (indices.empty())
+                    indices.assign(std::size_t(columns) * rows * capacity, 0);
                 for (auto y = y0; y <= y1; ++y)
                     for (auto x = x0; x <= x1; ++x)
                     {
@@ -357,12 +358,14 @@ namespace bld::render
                               gpu_drops.size() * sizeof(gpu_drop));
         vk::buffer::write(frame.decal_counts, decal_tiles.counts.data(),
                           decal_tiles.counts.size() * sizeof(std::uint32_t));
-        vk::buffer::write(frame.decal_indices, decal_tiles.indices.data(),
-                          decal_tiles.indices.size() * sizeof(std::uint32_t));
+        if (!decal_tiles.indices.empty())
+            vk::buffer::write(frame.decal_indices, decal_tiles.indices.data(),
+                              decal_tiles.indices.size() * sizeof(std::uint32_t));
         vk::buffer::write(frame.drop_counts, drop_tiles.counts.data(),
                           drop_tiles.counts.size() * sizeof(std::uint32_t));
-        vk::buffer::write(frame.drop_indices, drop_tiles.indices.data(),
-                          drop_tiles.indices.size() * sizeof(std::uint32_t));
+        if (!drop_tiles.indices.empty())
+            vk::buffer::write(frame.drop_indices, drop_tiles.indices.data(),
+                              drop_tiles.indices.size() * sizeof(std::uint32_t));
 
         write_descriptors(frame, target);
         parameters push{};
