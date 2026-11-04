@@ -151,7 +151,7 @@ namespace bld::surface
         const float spread=std::clamp(.6f+std::pow(weber,.25f)*.20f,
                                       .7f,2.5f);
 
-        if(registered->second.skinned && uv_valid)
+        if(uv_valid)
         {
             auto &atlas=data->atlases[id];
             atlas.target=id;
