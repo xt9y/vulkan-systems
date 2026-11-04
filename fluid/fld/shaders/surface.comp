@@ -144,7 +144,7 @@ void main()
     // Tile-list bounds cap work; min support distance controls step length.
     for(int k=0;k<48;++k)
     {
-        float rho=field(near_point+ray*t,tile,h,mass_volume);
+        float rho=field(near_point+ray*t,tile,h);
         if(rho>=iso)
         {
             found=true;
@@ -154,38 +154,69 @@ void main()
         t+=mix(h*.4,h*.12,smoothstep(.06,.40,rho));
         if(t>end_t)break;
     }
-    if(!found)
-    {
-        imageStore(liquid_output,pixel,vec4(0));
-        return;
-    }
-
-    float a=last_t,b=t;
-    for(int k=0;k<5;++k)
-    {
-        float mid=(a+b)*.5;
-        if(field(near_point+ray*mid,tile,h,mass_volume)>iso)b=mid;
-        else a=mid;
-    }
-    t=(a+b)*.5;
-    vec3 world=near_point+ray*t;
-    vec3 normal=normalize(-gradient(world,tile,h,mass_volume));
-    if(any(isnan(normal)) || any(isinf(normal)))normal=-ray;
-    if(dot(normal,ray)>0.0)normal=-normal;
-
-    // Integrate approximate volume occupied by the fluid along the ray.
-    // This controls Beer-Lambert extinction; a thin film is not an opaque blob.
+    vec3 world=vec3(0.0);
+    vec3 normal=-ray;
     float thickness=0.0;
-    float at=t;
-    for(int k=0;k<24;++k)
+    if(found)
     {
-        at+=h*.32;
-        if(at>end_t || at>t+.35)break;
-        float density=field(near_point+ray*at,tile,h,mass_volume);
-        thickness+=h*.32*clamp(density,0.0,1.0);
-        if(k>2 && density<.10)break;
+        float a=last_t,b=t;
+        for(int k=0;k<5;++k)
+        {
+            float mid=(a+b)*.5;
+            if(field(near_point+ray*mid,tile,h)>iso)b=mid;
+            else a=mid;
+        }
+        t=(a+b)*.5;
+        world=near_point+ray*t;
+        vec3 g=gradient(world,tile,h);
+        if(dot(g,g)>1e-14)
+            normal=normalize(-g);
+        if(dot(normal,ray)>0.0)normal=-normal;
+        // Optical thickness through a smooth fluid reconstruction.
+        float at=t;
+        for(int k=0;k<24;++k)
+        {
+            at+=h*.32;
+            if(at>end_t || at>t+.35)break;
+            float density=field(near_point+ray*at,tile,h);
+            thickness+=h*.32*clamp(density,0.0,1.0);
+            if(k>2 && density<.10)break;
+        }
+        thickness=max(h*.35,thickness);
     }
-    thickness=max(h*.35,thickness);
+    else
+    {
+        // A disconnected tiny drop cannot reach the bulk iso-threshold.
+        // Free droplets minimize surface area under surface tension, so
+        // render their true-volume spheres rather than billboard capsules.
+        float nearest=inf, exit_t=inf;
+        vec3 center=vec3(0.0);
+        for(uint j=0u;j<count;++j)
+        {
+            uint id=indices[tile*tile_capacity+j];
+            if(id>=pc.sizes.w)continue;
+            Particle drop=particles[id];
+            vec2 interval=sphere_interval(near_point,ray,drop.world.xyz,
+                                         max(drop.world.w,.00001));
+            if(interval.x<nearest && interval.x<scene_t)
+            {
+                nearest=interval.x;
+                exit_t=interval.y;
+                center=drop.world.xyz;
+            }
+        }
+        if(nearest>=inf)
+        {
+            imageStore(liquid_output,pixel,vec4(0));
+            return;
+        }
+        t=nearest;
+        world=near_point+ray*t;
+        vec3 n=world-center;
+        if(dot(n,n)>1e-12)
+            normal=normalize(n);
+        thickness=max(.000001,min(scene_t,exit_t)-t);
+    }
 
     float ior=max(1.001,pc.absorption.w);
     float f0=pow((ior-1.0)/(ior+1.0),2.0);
