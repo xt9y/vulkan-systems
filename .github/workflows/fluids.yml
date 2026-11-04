@@ -30,3 +30,16 @@ jobs:
       - name: Compile GLSL
         run: |
           glslangValidator -V fluid/fld/shaders/surface.comp -o /tmp/fluid.spv
+      - name: Standalone deterministic physics test
+        run: |
+          git clone --depth 1 https://github.com/xt9y/vulkan-engine.git /tmp/vkengine
+          clang++ -std=c++17 -O2 -I/tmp/vkengine \
+            tests/fluid_physics.cpp \
+            fluid/fld/core/system.cpp \
+            fluid/fld/material/rheology.cpp \
+            fluid/fld/material/contact.cpp \
+            fluid/fld/math/kernels.cpp \
+            fluid/fld/simulation/grid.cpp \
+            fluid/fld/simulation/solver.cpp \
+            -o /tmp/fluid_physics
+          /tmp/fluid_physics
