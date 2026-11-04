@@ -123,6 +123,10 @@ namespace bld::system
         {
             const auto *surfaces=surface::get();
             if(!surfaces || !surfaces->targets.count(wound.target))continue;
+            const auto &receiver=surfaces->targets.at(wound.target);
+            // A skinned chart needs a valid UV before mass can be delivered;
+            // never consume the reservoir if a surface cannot accept it.
+            if(receiver.skinned && !wound.uv_valid)continue;
             const float emitted=wounds::advance(wound,dt);
             if(emitted<=0.f)continue;
             surface::deposit(wound.target,wound.position,wound.normal,
