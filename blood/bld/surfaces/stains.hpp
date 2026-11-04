@@ -19,6 +19,9 @@ namespace bld::surface
         instance_id target=0;
         std::uint32_t resolution=256;
         std::vector<std::uint32_t> pixels;
+        // Flatten evicted marks here so stains survive the active-mark budget.
+        // Allocated lazily, only when the first mark is evicted.
+        std::vector<std::uint32_t> baked_pixels;
         std::vector<mark> marks;
         std::uint64_t generation=0;
         float update_accumulator=0;
