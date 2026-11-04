@@ -2,6 +2,7 @@ name: fluids
 on:
   push:
     branches:
+      - main
       - research/fluids-blood
       - research/coupled-films-porous-wounds
   pull_request:
@@ -44,6 +45,24 @@ jobs:
             fluid/fld/material/rheology.cpp \
             -o /tmp/blood_headless
           /tmp/blood_headless
+          clang++ -std=c++17 -O2 -pthread \
+            -Itests/mock_vk -Ifluid -Iblood \
+            tests/blood_system.cpp \
+            blood/bld/core/system.cpp \
+            blood/bld/surfaces/stains.cpp \
+            blood/bld/wounds/flow.cpp \
+            blood/bld/material/blood.cpp \
+            blood/bld/network/events.cpp \
+            fluid/fld/core/system.cpp \
+            fluid/fld/surface/film.cpp \
+            fluid/fld/porous/transport.cpp \
+            fluid/fld/material/rheology.cpp \
+            fluid/fld/material/contact.cpp \
+            fluid/fld/math/kernels.cpp \
+            fluid/fld/simulation/grid.cpp \
+            fluid/fld/simulation/solver.cpp \
+            -o /tmp/blood_system_headless
+          /tmp/blood_system_headless
       - name: Configure private sibling dependencies
         env:
           DEPENDENCY_TOKEN: ${{ secrets.VULKAN_DEPS_TOKEN }}
