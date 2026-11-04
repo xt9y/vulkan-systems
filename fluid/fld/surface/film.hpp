@@ -3,6 +3,7 @@
 #include "../core/types.hpp"
 #include "../porous/transport.hpp"
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace fld::surface
@@ -41,6 +42,13 @@ namespace fld::surface
         bool open_edges=false;
         std::vector<cell> cells;
         std::vector<sample> geometry;  // optional triangle-mesh chart
+        // Undirected contacts between texels on physically adjacent UV islands.
+        // Built once from 3D geometry; UV seams are not flow boundaries.
+        std::vector<std::pair<std::uint32_t,std::uint32_t>> seam_links;
+        // Reused scratch space: no full-frame allocation per film substep.
+        std::vector<float> mobile_delta,pore_delta;
+        std::uint32_t last_active_tiles=0;
+        std::uint64_t simulated_cells=0;
         std::uint64_t generation=1;
         double supplied_m3=0,detached_m3=0;
     };

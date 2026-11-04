@@ -117,6 +117,7 @@ namespace bld::surface
                 std::clamp(.5f+p.y/size.y,0.f,1.f)};
             fld::surface::deposit(stain.film,uv,radius,volume);
             pack(stain.film,stain.pixels);
+            stain.packed_generation=stain.film.generation;
         }
     }
 
@@ -325,11 +326,15 @@ namespace bld::surface
             {
                 const auto elapsed=std::min(.1f,image.update_accumulator);
                 image.update_accumulator=0.f;
+                const auto previous=image.film.generation;
                 fld::surface::update(image.film,elapsed,fluid,
                                       porous_properties(target->second.kind));
                 drip(image.film,release);
-                pack(image.film,image.pixels);
-                image.generation=++data->generation;
+                if(image.film.generation!=previous)
+                {
+                    pack(image.film,image.pixels);
+                    image.generation=++data->generation;
+                }
             }
             for(auto &m:image.marks)m.age+=dt;
         }
@@ -346,14 +351,20 @@ namespace bld::surface
         {
             const auto elapsed=std::min(.1f,data->rigid_update_accumulator);
             data->rigid_update_accumulator=0.f;
+            bool changed=false;
             for(auto &stain:data->stains)
             {
                 fld::surface::update(stain.film,elapsed,fluid,
                                       porous_properties(stain.kind));
                 drip(stain.film,release);
-                pack(stain.film,stain.pixels);
+                if(stain.packed_generation!=stain.film.generation)
+                {
+                    pack(stain.film,stain.pixels);
+                    stain.packed_generation=stain.film.generation;
+                    changed=true;
+                }
             }
-            if(!data->stains.empty())++data->generation;
+            if(changed)++data->generation;
         }
     }
 
