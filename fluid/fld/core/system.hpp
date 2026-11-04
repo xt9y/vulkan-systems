@@ -21,5 +21,7 @@ namespace fld::system
                 const collision_callback &collision = {},
                 const contact_callback &contact = {});
     void clear();
+    // Remove just this fluid phase, without touching other liquids.
+    void clear_phase(std::uint32_t phase);
     void shutdown();
 }

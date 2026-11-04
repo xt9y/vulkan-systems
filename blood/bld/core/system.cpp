@@ -136,8 +136,7 @@ namespace bld::system
     void clear()
     {
         if(!data)return;
-        // The shared fluid solver may contain other liquid phases.
-        if(data->owns_fluid)fld::system::clear();
+        fld::system::clear_phase(data->phase);
         surface::clear();
         network::reset();
         data->impacts=data->deposited=0;
@@ -148,7 +147,12 @@ namespace bld::system
         if(!data)return;
         network::shutdown();
         surface::shutdown();
-        if(data->owns_fluid)fld::system::shutdown();
+        fld::system::clear_phase(data->phase);
+        // If another liquid phase was registered after blood initialized
+        // the shared solver, leave it owned by that remaining host.
+        if(data->owns_fluid && fld::system::get() &&
+           fld::system::get()->materials.size()<=2u)
+            fld::system::shutdown();
         delete data;
         data=nullptr;
     }

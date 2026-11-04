@@ -6,6 +6,7 @@ fluid
   fld::system::update(seconds, collision, contact)
   fld::system::get()->particles
   fld::system::clear()
+  fld::system::clear_phase(material_phase)
   fld::system::shutdown()
 
 Independent Vulkan/C++ liquid simulation and rendering. The same

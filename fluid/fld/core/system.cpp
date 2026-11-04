@@ -236,6 +236,17 @@ namespace fld::system
         data->remainder = 0;
     }
 
+    void clear_phase(std::uint32_t phase)
+    {
+        if(!data)return;
+        auto &ps=data->particles;
+        ps.erase(std::remove_if(ps.begin(),ps.end(),
+            [phase](const particle &p){return p.phase==phase;}),
+            ps.end());
+        data->stats.live_mass_kg=0;
+        for(const auto &p:ps)data->stats.live_mass_kg+=p.mass;
+    }
+
     void shutdown()
     {
         delete data;
