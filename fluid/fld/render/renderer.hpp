@@ -14,7 +14,6 @@ namespace fld::render
         vk::ImageView depth{}, scene_color{}, output{};
         vk::Sampler sampler{};
         mat4 view_projection = mat4::identity();
-        mat4 inverse_view_projection = mat4::identity();
         std::uint32_t width = 0, height = 0;
         vk::ImageLayout depth_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
         vk::ImageLayout color_layout = vk::ImageLayout::eShaderReadOnlyOptimal;
