@@ -225,6 +225,8 @@ namespace fld::simulation
                         contact(deposited_mass, hit);
                     }
                     const float original_mass=p.mass;
+                    const float transferred=original_mass*deposited;
+                    world.stats.deposited_mass_kg+=transferred;
                     p.mass *= (1.f-deposited);
                     if(original_mass>0.f)
                         p.radius*=std::cbrt(std::max(0.f,p.mass)/original_mass);
@@ -260,13 +262,18 @@ namespace fld::simulation
         }
 
         std::size_t write = 0;
+        world.stats.live_mass_kg=0;
         for (std::size_t i = 0; i < count; ++i)
         {
-            if (consumed[i] || ps[i].age >= ps[i].lifetime) continue;
-            if (!std::isfinite(ps[i].position.x) ||
+            const bool invalid=!std::isfinite(ps[i].position.x) ||
                 !std::isfinite(ps[i].position.y) ||
-                !std::isfinite(ps[i].position.z))
+                !std::isfinite(ps[i].position.z);
+            if (consumed[i] || ps[i].age >= ps[i].lifetime || invalid)
+            {
+                if(!consumed[i])world.stats.expired_mass_kg+=ps[i].mass;
                 continue;
+            }
+            world.stats.live_mass_kg+=ps[i].mass;
             if (write != i) ps[write] = ps[i];
             ++write;
         }

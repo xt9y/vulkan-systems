@@ -113,6 +113,8 @@ namespace fld::system
             p.phase=source.phase;
             data->particles.push_back(p);
         }
+        data->stats.emitted_mass_kg+=source.volume*density;
+        data->stats.live_mass_kg+=source.volume*density;
         return std::uint32_t(positions.size());
     }
 

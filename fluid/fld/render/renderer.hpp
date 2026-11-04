@@ -41,6 +41,8 @@ namespace fld::render
         std::vector<frame> frames;
         std::uint32_t width = 0, height = 0;
         std::uint32_t max_particles = 0;
+        std::uint64_t tile_overflows = 0;
+        std::uint32_t peak_tile_occupancy = 0;
     };
 
     state *get();

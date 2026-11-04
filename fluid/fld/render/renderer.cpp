@@ -35,6 +35,8 @@ namespace fld::render
         struct bins
         {
             std::uint32_t columns, rows;
+            std::uint64_t overflow=0;
+            std::uint32_t peak=0;
             std::vector<std::uint32_t> counts, indices;
 
             bins(std::uint32_t width, std::uint32_t height)
@@ -60,7 +62,11 @@ namespace fld::render
                         const auto tile=std::size_t(y)*columns+x;
                         auto &count=counts[tile];
                         if(count<tile_capacity)
+                        {
                             indices[tile*tile_capacity+count++]=id;
+                            peak=std::max(peak,count);
+                        }
+                        else ++overflow;
                     }
             }
         };
@@ -267,6 +273,8 @@ namespace fld::render
             }
         }
 
+        data->tile_overflows=tiles.overflow;
+        data->peak_tile_occupancy=tiles.peak;
         if(!points.empty())
             vk::buffer::write(frame.particles,points.data(),
                               points.size()*sizeof(gpu_particle));

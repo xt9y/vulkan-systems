@@ -127,5 +127,9 @@ namespace fld
         std::uint64_t steps = 0, contacts = 0;
         std::uint32_t neighbor_pairs = 0;
         float maximum_density_error = 0;
+        double emitted_mass_kg = 0;
+        double deposited_mass_kg = 0;
+        double expired_mass_kg = 0;
+        double live_mass_kg = 0;
     };
 }
