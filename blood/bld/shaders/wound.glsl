@@ -57,6 +57,40 @@ void bld_material(vec2 uv,int resolution,uint instance_index,
 }
 
  
+
+vec3 bld_film_normal(vec2 uv,int resolution,uint instance_index,
+                     vec3 world_position,vec3 world_normal)
+{
+    // Reconstruct the mobile-film gradient in world metres. The source
+    // normal map remains visible underneath thin mobile layers.
+    vec2 step_uv=vec2(1.0/float(resolution));
+    float hx=(bld_sample(uv+vec2(step_uv.x,0),resolution,instance_index).z-
+              bld_sample(uv-vec2(step_uv.x,0),resolution,instance_index).z)
+             *.002/(2.0*step_uv.x);
+    float hy=(bld_sample(uv+vec2(0,step_uv.y),resolution,instance_index).z-
+              bld_sample(uv-vec2(0,step_uv.y),resolution,instance_index).z)
+             *.002/(2.0*step_uv.y);
+    vec2 dx=dFdx(uv),dy=dFdy(uv);
+    float det=dx.x*dy.y-dx.y*dy.x;
+    if(abs(det)<1e-8)return world_normal;
+    vec3 px=dFdx(world_position),py=dFdy(world_position);
+    vec3 du=(px*dy.y-py*dx.y)/det;
+    vec3 dv=(py*dx.x-px*dy.x)/det;
+    vec3 gradient=du*(hx/max(dot(du,du),1e-8))+
+                  dv*(hy/max(dot(dv,dv),1e-8));
+    return normalize(world_normal-clamp(length(gradient),0.0,1.5)*
+                     normalize(gradient+vec3(1e-8)));
+}
+
+void bld_material_film(vec2 uv,int resolution,uint instance_index,
+                       vec3 world_position,inout vec3 normal,
+                       inout vec3 albedo,inout float roughness,
+                       inout float metallic)
+{
+    normal=bld_film_normal(uv,resolution,instance_index,world_position,normal);
+    bld_material(uv,resolution,instance_index,albedo,roughness,metallic);
+}
+
 // Rigid surfaces use metre-sized world-space footprints, not a UV atlas
 // stretched across an entire floor. One word is the instance count;
 // each instance has offset/count, followed by packed center/radius/normal/wetness.
