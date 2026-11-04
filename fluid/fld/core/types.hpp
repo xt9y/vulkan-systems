@@ -41,6 +41,7 @@ namespace fld
     };
 
     // Each path is a SPIR-V compute shader compiled by the host's build.
-    // The order is clear, predict, build, lambda, delta, apply, finalize.
-    using shader_paths=std::array<std::string,7>;
+    // clear, predict, build, lambda, delta, apply, finalize,
+    // surface-normal estimate, capillary force.
+    using shader_paths=std::array<std::string,9>;
 }
