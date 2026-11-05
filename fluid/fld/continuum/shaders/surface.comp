@@ -427,7 +427,7 @@ void main()
     vec3 opaque_world=background?vec3(0.):unproject(ndc,d);
     vec4 candidates[4];
     vec2 candidate_uv[4];
-    float weights[4];
+    float sample_weights[4];
     float anchor_weight=-1.;
     float anchor_depth=0.;
     int candidates_count=0;
@@ -467,7 +467,7 @@ void main()
         // rather than averaging unrelated front/back intersections.
         candidates[candidates_count]=sample_color;
         candidate_uv[candidates_count]=sample_uv;
-        weights[candidates_count]=weight;
+        sample_weights[candidates_count]=weight;
         if(weight>anchor_weight)
         {
             anchor_weight=weight;
@@ -482,7 +482,7 @@ void main()
         vec4 sample_color=candidates[i];
         if(abs(sample_color.a-anchor_depth)>
            max(.025,.009*anchor_depth))continue;
-        float weight=weights[i];
+        float weight=sample_weights[i];
 #if defined(FLD_BLOOD)
         // Do not upscale a second copy of the checkerboard. Composite
         // only the optical change relative to the actual full-resolution
