@@ -101,9 +101,18 @@ vec3 center(ivec3 c){return pc.origin_cell.xyz+
                              (vec3(c)+vec3(.5))*pc.origin_cell.w;}
 bool blocked_world(vec3 world)
 {
+    // Cells are finite volumes. Testing only the centre misses thin slabs,
+    // including the rendered floor when it falls between grid cell centres.
+    vec3 half_cell=vec3(pc.origin_cell.w*.5);
+    vec3 cell_low=world-half_cell;
+    vec3 cell_high=world+half_cell;
+    float epsilon=pc.origin_cell.w*1e-4;
     for(uint i=0u;i<pc.dims.w;++i)
-        if(all(greaterThanEqual(world,boxes[i].lo.xyz)) &&
-           all(lessThanEqual(world,boxes[i].hi.xyz)))return true;
+    {
+        if(all(greaterThan(cell_high,boxes[i].lo.xyz+vec3(epsilon))) &&
+           all(lessThan(cell_low,boxes[i].hi.xyz-vec3(epsilon))))
+            return true;
+    }
     return false;
 }
 float pressure(ivec3 c,uint bank)
