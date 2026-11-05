@@ -42,6 +42,9 @@ namespace fld
         // World-space static colliders; supplied by the game, never hard-coded
         // into the generic fluid solver. Boxes also cover rigid props/walls.
         std::vector<box> colliders;
+        // Optional GPU BVH (used automatically for 32+ static colliders).
+        // Empty shader paths are valid for smaller scenes.
+        std::array<std::string,8> bvh_shaders{};
     };
 
     struct drop
