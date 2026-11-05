@@ -26,7 +26,7 @@ namespace transport
     };
     static_assert(sizeof(blocker)==32);
 
-    // Shader order: exchange matrix construction, Jacobi transport solve.
+    // Shader order: exchange construction, Jacobi solve, delta injection, delta propagation.
     using shader_paths=std::array<std::string,4>;
 
     struct state
