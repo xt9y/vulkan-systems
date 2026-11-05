@@ -311,7 +311,7 @@ void main()
     {
         ivec2 sample_pos=clamp(first+ivec2(x,y),ivec2(0),low-1);
         vec4 sample_color=imageLoad(liquid_layer,sample_pos);
-        if(sample_color.a<0. || sample_color.a>scene_t+.004)continue;
+        if(sample_color.a<0.)continue;
         // The half-resolution ray must see the same scene surface as
         // this full-resolution pixel. Bilinear filtering across a cube
         // silhouette otherwise pulls water from the floor onto the cube.
@@ -334,9 +334,14 @@ void main()
             vec3 sample_ray=normalize(sample_far-sample_near);
             float sample_t=dot(unproject(sample_ndc,sample_depth)-
                                sample_near,sample_ray);
-            // Keep neighbors on the same depth surface; small changes
-            // from perspective and a sloped floor remain allowed.
-            if(abs(sample_t-scene_t)>max(.035,.025*scene_t))continue;
+            // The liquid depth and the scene depth here are from the SAME
+            // low-resolution ray. Previously we tested the liquid depth
+            // against another pixel's ray distance with 4 mm tolerance,
+            // wrongly removing shallow water on flat floors.
+            if(sample_color.a>sample_t+.012)continue;
+            // Also require that the sampled opaque geometry belongs to
+            // the receiving pixel's surface, to avoid cube-edge halos.
+            if(abs(sample_t-scene_t)>max(.09,.035*scene_t))continue;
         }
         float weight=(x==0?1.-weights.x:weights.x)*
                      (y==0?1.-weights.y:weights.y);
