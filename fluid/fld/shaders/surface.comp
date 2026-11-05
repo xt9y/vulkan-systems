@@ -138,7 +138,11 @@ void main()
     bool background=(pc.sizes.z&1u)!=0u?d<=.000001:d>=.999999;
     float scene_t=background?inf:dot(unproject(ndc,d)-near_point,ray);
     float spacing=pc.lighting.w;
-    float h=spacing*max(1.5,float((pc.sizes.z>>8u)&65535u)/100.0);
+    float physical_h=spacing*max(1.5,float((pc.sizes.z>>8u)&65535u)/100.0);
+    // Compensate for sparse optical samples. This modifies the reconstructed
+    // isosurface only; the solver keeps the original physical support radius.
+    uint stride=max(1u,(pc.sizes.z>>24u)&255u);
+    float h=physical_h*pow(float(stride),1.0/3.0);
     float start_t=inf, end_t=-inf;
 
     // Traverse only the union of particle kernel supports. Rays outside
@@ -161,7 +165,9 @@ void main()
 
     // Slightly lower density threshold keeps viscous neighboring droplets
     // visually connected into an isosurface instead of isolated beads.
-    const float iso=.25;
+    // A slightly lower surface threshold avoids isolated reconstructed
+    // islands at the interface between neighboring optical tiles.
+    const float iso=.20;
     float t=max(0.0,start_t);
     float last_t=t;
     bool found=false;
