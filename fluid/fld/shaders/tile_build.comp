@@ -29,13 +29,23 @@ layout(push_constant) uniform Data
     uvec4 sizes;   // width, height, flags, particle count
 } pc;
 
+uint scatter_hash(uint x)
+{
+    // Avalanche all bits. The previous high-bit LCG gave the same offset
+    // for hundreds of consecutive groups, creating visible particle bands.
+    x^=x>>16u;
+    x*=0x7feb352du;
+    x^=x>>15u;
+    x*=0x846ca68bu;
+    return x^(x>>16u);
+}
+
 void main()
 {
     // Optical LOD only. PBF simulation keeps every particle.
     const uint stride=max(1u,(pc.sizes.z>>24u)&255u);
     const uint group=gl_GlobalInvocationID.x;
-    const uint offset=stride==1u?0u:
-        ((group*1664525u+1013904223u)>>30u)%stride;
+    const uint offset=stride==1u?0u:scatter_hash(group)%stride;
     const uint id=group*stride+offset;
     if(id>=pc.sizes.w)return;
     vec4 clip=pc.transform*vec4(particles[id].world.xyz,1);
@@ -43,7 +53,10 @@ void main()
     uint columns=(pc.sizes.x+15u)/16u;
     uint rows=(pc.sizes.y+15u)/16u;
     vec2 center=(clip.xy/clip.w*.5+.5)*vec2(pc.sizes.xy);
-    float h=pc.lighting.w*max(1.5,float((pc.sizes.z>>8u)&65535u)/100.0);
+    // Coarse optical particles represent more volume. Expand their
+    // reconstruction support by cube-root(stride), not their physics size.
+    float h=pc.lighting.w*max(1.5,float((pc.sizes.z>>8u)&65535u)/100.0)*
+            pow(float(stride),1.0/3.0);
     // Conservative screen-space kernel support plus one full tile halo.
     float projection=abs(pc.transform[1][1]);
     float r=clamp(h*projection*float(pc.sizes.y)*.5/clip.w,1.0,2048.0)+2.0;
