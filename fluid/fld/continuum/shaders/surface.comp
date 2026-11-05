@@ -248,6 +248,51 @@ void main()
     // Approximate screen-space Snell refraction. Resolve the displacement
     // in camera axes and reject offsets across opaque depth discontinuities
     // so nearby cube silhouettes do not acquire transparent fringes.
+#if defined(FLD_BLOOD)
+    // Blood is the SAME volume and normal field as water, with different
+    // rheology and strongly wavelength-selective absorption. These RGB
+    // coefficients are artistic approximations, not measured spectra.
+    const float ior=1.35;
+    vec3 transmitted=refract(ray,normal,1./ior);
+    vec3 bend=transmitted-ray;
+    vec3 camera_right=normalize(pc.inverse_vp[0].xyz);
+    vec3 camera_up=normalize(pc.inverse_vp[1].xyz);
+    vec2 shift=vec2(dot(bend,camera_right),-dot(bend,camera_up));
+    vec2 sample_uv=clamp(uv+shift*min(.010,thickness*.065),
+                         vec2(.001),vec2(.999));
+    float sample_depth=texture(scene_depth,sample_uv).r;
+    if(abs(sample_depth-d)>.0015)sample_uv=uv;
+    vec3 behind=texture(scene_hdr,sample_uv).rgb;
+
+    // A thin layer is luminous crimson and still transmits the floor.
+    // Increasing optical thickness makes it opaque and deep burgundy.
+    float optical_length=max(0.,thickness);
+    float pigment_opacity=1.-exp(-26.*optical_length);
+    float darkening=smoothstep(.012,.30,optical_length);
+    vec3 shallow=vec3(.68,.055,.041);
+    vec3 deep=vec3(.11,.006,.009);
+    vec3 pigment=mix(shallow,deep,darkening);
+    // The remaining transmission attenuates green and blue faster than red.
+    vec3 transmitted_color=behind*exp(
+        -vec3(4.0,42.0,55.0)*optical_length);
+    vec3 color=mix(transmitted_color,pigment,pigment_opacity);
+
+    float fresnel=.024+(1.-.024)*
+        pow(1.-clamp(dot(normal,-ray),0.,1.),5.);
+    vec3 light=normalize(vec3(.42,.85,.30));
+    vec3 half_vector=normalize(light-ray);
+    float highlight=pow(max(dot(normal,half_vector),0.),116.);
+    color=mix(color,vec3(.42,.33,.31),fresnel*.66)+
+          vec3(.35*highlight);
+
+    if(film)
+    {
+        color+=vec3(.072,.018,.017)*meniscus;
+        float presence=smoothstep(.007,.05,film_fill)*
+                       smoothstep(.018,.075,film_core);
+        color=mix(behind,color,presence);
+    }
+#else
     vec3 transmitted=refract(ray,normal,1./1.333);
     vec3 bend=transmitted-ray;
     vec3 camera_right=normalize(pc.inverse_vp[0].xyz);
@@ -259,7 +304,7 @@ void main()
     float refracted_depth=texture(scene_depth,refracted_uv).r;
     if(abs(refracted_depth-d)>.0015)refracted_uv=uv;
     vec3 behind=texture(scene_hdr,refracted_uv).rgb;
-    float f0=.0204; // n=1.333, normal-incidence dielectric reflectance
+    float f0=.0204;
     float fresnel=f0+(1.-f0)*pow(1.-clamp(dot(normal,-ray),0.,1.),5.);
     vec3 absorb=exp(-vec3(.11,.075,.05)*thickness);
     vec3 color=behind*absorb;
@@ -269,17 +314,14 @@ void main()
     color=mix(color,vec3(.66),fresnel)+vec3(specular*.55);
     if(film)
     {
-        // Colorless, neutral dielectric sheen. A checker floor makes the
-        // reflection/refraction visible; no debug tint is reintroduced.
         float sheen=.085+.12*clamp(film_fill,0.,1.);
         color=mix(color,vec3(.74),sheen);
         color+=vec3(.12*meniscus);
-        // Suppress isolated numerical traces smoothly without deleting
-        // actual low-volume fluid from simulation or abrupt hard cutoffs.
         float presence=smoothstep(.007,.05,film_fill)*
                        smoothstep(.018,.075,film_core);
         color=mix(behind,color,presence);
     }
+#endif
     imageStore(liquid_layer,pixel,vec4(color,t));
 }
 #else
