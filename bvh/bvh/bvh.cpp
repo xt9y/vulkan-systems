@@ -49,11 +49,14 @@ namespace bvh
 
         vk::buffer::resource allocate(std::size_t bytes,bool cpu_write=false)
         {
+            vk::MemoryPropertyFlags memory{
+                vk::MemoryPropertyFlagBits::eDeviceLocal
+            };
+            if(cpu_write)
+                memory=vk::MemoryPropertyFlagBits::eHostVisible |
+                       vk::MemoryPropertyFlagBits::eHostCoherent;
             return vk::buffer::create(
-                bytes,vk::BufferUsageFlagBits::eStorageBuffer,
-                cpu_write?(vk::MemoryPropertyFlagBits::eHostVisible |
-                           vk::MemoryPropertyFlagBits::eHostCoherent):
-                          vk::MemoryPropertyFlagBits::eDeviceLocal);
+                bytes,vk::BufferUsageFlagBits::eStorageBuffer,memory);
         }
 
         parameters args()
