@@ -28,6 +28,7 @@ namespace fld::render
         vk::buffer::resource tile_counts,tile_indices;
         vk::image::resource low_image{};
         vk::ImageView low_view{};
+        bool low_initialized=false;
     };
 
     struct state
