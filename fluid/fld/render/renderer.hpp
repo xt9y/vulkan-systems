@@ -16,6 +16,10 @@ namespace fld::render
         vk::ImageLayout depth_layout=vk::ImageLayout::eDepthStencilReadOnlyOptimal;
         vk::ImageLayout color_layout=vk::ImageLayout::eGeneral;
         bool reversed_depth=false;
+        // Optional debug overlay, linear RGB; zero opacity restores the
+        // physically based transparent appearance without changing physics.
+        vec3 debug_color{0.f,1.f,0.f};
+        float debug_opacity=0.f;
     };
 
     struct frame

@@ -231,7 +231,14 @@ namespace fld::render
         push.transform=target.view_projection;
         push.absorption={.27f,.10f,.045f,
                          world->settings.liquid.index_of_refraction};
-        push.scattering={.018f,.036f,.050f,.065f};
+        // Reuse the existing 128-byte push-constant layout. A negative
+        // scattering.w selects debug tinting without increasing push size.
+        const float opacity=std::clamp(target.debug_opacity,0.f,1.f);
+        push.scattering=opacity>0.f?
+            vec4{std::clamp(target.debug_color.x,0.f,1.f),
+                 std::clamp(target.debug_color.y,0.f,1.f),
+                 std::clamp(target.debug_color.z,0.f,1.f),-opacity}:
+            vec4{.018f,.036f,.050f,.065f};
         push.lighting={.42f,.85f,.3f,world->settings.spacing};
         const std::uint32_t ratio=std::uint32_t(std::clamp(
             std::round(world->settings.smoothing_radius/
