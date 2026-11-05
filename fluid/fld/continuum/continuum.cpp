@@ -23,8 +23,9 @@ namespace fld::continuum
             mat4 inverse_vp;
             vec4 origin_cell;
             std::array<std::uint32_t,4> grid,screen;
+            vec4 optical_pigment; // shallow RGB, opacity coefficient (m^-1)
         };
-        static_assert(sizeof(render_push)==112);
+        static_assert(sizeof(render_push)==128);
 
         struct frame
         {
@@ -483,6 +484,7 @@ namespace fld::continuum
         const auto& o=data->settings;
         rp.origin_cell={o.origin.x,o.origin.y,o.origin.z,o.cell_size};
         rp.grid={o.width,o.height,o.depth,data->support_layer};
+        rp.optical_pigment=target.optical_pigment;
         rp.screen={data->low_width,data->low_height,
                    target.reversed_depth?1u:0u,data->active_vof};
         dispatch_render(command,0,f,rp);
