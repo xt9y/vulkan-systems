@@ -281,7 +281,13 @@ void main()
         // this full-resolution pixel. Bilinear filtering across a cube
         // silhouette otherwise pulls water from the floor onto the cube.
         vec2 sample_uv=(vec2(sample_pos)+.5)/vec2(low);
-        float sample_depth=texture(scene_depth,sample_uv).r;
+        // Depth must be fetched without bilinear interpolation: filtering
+        // depth across cube silhouettes creates fictitious intermediate
+        // surfaces, which in turn makes visible liquid fringes.
+        ivec2 source_pixel=clamp(
+            ivec2(sample_uv*vec2(pc.screen.xy)),
+            ivec2(0),ivec2(pc.screen.xy)-1);
+        float sample_depth=texelFetch(scene_depth,source_pixel,0).r;
         bool sample_background=reverse?sample_depth<=.000001:
                                       sample_depth>=.999999;
         if(sample_background!=background)continue;
