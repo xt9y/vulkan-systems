@@ -194,7 +194,8 @@ namespace fld::continuum
             p.physical={dt,cfg.liquid.density,cfg.gravity.y,
                         cfg.liquid.dynamic_viscosity/cfg.liquid.density};
             p.interface_data={cfg.liquid.surface_tension,
-                              cfg.liquid.advancing_angle,0.f,0.f};
+                              cfg.liquid.advancing_angle,
+                              cfg.liquid.receding_angle,0.f};
             p.dims={cfg.width,cfg.height,cfg.depth,
                     std::uint32_t(cfg.colliders.size())};
             p.flags={data->active_vof,0,0,0};
