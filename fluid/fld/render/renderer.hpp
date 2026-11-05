@@ -7,13 +7,13 @@
 
 namespace fld::render
 {
+    inline constexpr std::uint32_t tile_capacity=256;
     struct input
     {
         vk::ImageView depth{},scene_color{},output{};
         vk::Sampler sampler{};
         mat4 view_projection=mat4::identity();
-        std::uint32_t width=0,height=0,low_width=0,low_height=0;
-        std::uint32_t render_stride=1;
+        std::uint32_t width=0,height=0;
         vk::ImageLayout depth_layout=vk::ImageLayout::eDepthStencilReadOnlyOptimal;
         vk::ImageLayout color_layout=vk::ImageLayout::eGeneral;
         bool reversed_depth=false;
@@ -40,6 +40,7 @@ namespace fld::render
         std::array<vk::Pipeline,4> pipelines{}; // clear, bin, surface, upscale
         std::vector<frame> frames;
         std::uint32_t width=0,height=0;
+        std::uint32_t low_width=0,low_height=0,render_stride=1;
     };
 
     state *get();
