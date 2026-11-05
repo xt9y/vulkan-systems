@@ -86,17 +86,19 @@ namespace fld::render
 
     void init(const std::array<std::string,4> &paths,
               std::uint32_t count,std::uint32_t width,std::uint32_t height,
-              float render_scale)
+              float render_scale,std::uint32_t render_stride)
     {
         if(data)throw std::logic_error("Fluid renderer initialized twice");
         if(!system::get() || !count || !width || !height ||
            width>8192 || height>8192 ||
            !std::isfinite(render_scale) || render_scale<.25f || render_scale>1.f ||
+           (render_stride!=1 && render_stride!=2 && render_stride!=4) ||
            !vk::device::get()->handle)
             throw std::invalid_argument("Invalid fluid renderer state");
         data=new state{};
         data->width=width;
         data->height=height;
+        data->render_stride=render_stride;
         data->low_width=std::max(1u,std::uint32_t(std::ceil(width*render_scale)));
         data->low_height=std::max(1u,std::uint32_t(std::ceil(height*render_scale)));
         auto device=vk::device::get()->handle;
@@ -283,12 +285,14 @@ namespace fld::render
                        world->settings.spacing*100.f),
             150.f,65535.f));
         push.sizes={data->low_width,data->low_height,
-                    (target.reversed_depth?1u:0u)|(ratio<<8),
+                    (target.reversed_depth?1u:0u)|(ratio<<8)|
+                    (data->render_stride<<24),
                     world->count};
 
         const auto tiles=((data->low_width+15)/16)*((data->low_height+15)/16);
         dispatch(command,0,f,push,(tiles+63)/64,1);      // clear tile bins
-        dispatch(command,1,f,push,(world->count+63)/64,1); // scatter particles
+        dispatch(command,1,f,push,
+                 ((world->count+data->render_stride-1)/data->render_stride+63)/64,1); // scatter particles
         push.transform=inverse(target.view_projection);
         dispatch(command,2,f,push,(data->low_width+7)/8,
                  (data->low_height+7)/8);              // low-res optics
