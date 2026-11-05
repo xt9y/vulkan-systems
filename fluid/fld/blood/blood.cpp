@@ -1,8 +1,14 @@
 #include "blood.hpp"
 #include <utility>
+#include <cmath>
+#include <stdexcept>
 
 namespace fld::blood
 {
+    namespace
+    {
+        material active_material{};
+    }
     continuum::options configure(continuum::options settings,
                                  const material& blood)
     {
@@ -42,8 +48,15 @@ namespace fld::blood
               std::uint32_t frames,std::uint32_t width,std::uint32_t height,
               const material& blood)
     {
+        if(!std::isfinite(blood.optical_density) ||
+           blood.optical_density<=0.f ||
+           !std::isfinite(blood.shallow_color.x) ||
+           !std::isfinite(blood.shallow_color.y) ||
+           !std::isfinite(blood.shallow_color.z))
+            throw std::invalid_argument("Invalid blood optical properties");
         continuum::init(configure(std::move(settings),blood),volume,programs,
                         frames,width,height);
+        active_material=blood;
     }
 
     bool active(){return continuum::active();}
@@ -51,7 +64,14 @@ namespace fld::blood
     void record(vk::CommandBuffer command,std::uint32_t image,
                 float seconds,const continuum::render_input& target)
     {
-        continuum::record(command,image,seconds,target);
+        auto input=target;
+        input.optical_pigment={
+            active_material.shallow_color.x,
+            active_material.shallow_color.y,
+            active_material.shallow_color.z,
+            active_material.optical_density
+        };
+        continuum::record(command,image,seconds,input);
     }
 
     void shutdown(){continuum::shutdown();}
