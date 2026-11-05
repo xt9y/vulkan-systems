@@ -14,6 +14,8 @@ layout(push_constant) uniform Parameters
     vec4 interface_data;    // surface tension, contact angle radians, unused
     uvec4 dims;             // nx,ny,nz,number of AABBs
     uvec4 flags;            // active VOF (0/1), pressure source (0/1)
+    vec4 rheology;          // mu_0, mu_infinity, lambda, n (Carreau)
+    vec4 contact;           // substrate drag (s^-1), reserved
 } pc;
 
 uint nx(){return pc.dims.x;}
@@ -96,6 +98,46 @@ vec3 velocity(vec3 pos)
     return vec3(tri_u(g-vec3(0.,.5,.5),0u),
                 tri_v(g-vec3(.5,0.,.5),0u),
                 tri_w(g-vec3(.5,.5,0.),0u));
+}
+bool solid(ivec3 c);
+// Approximate symmetric strain rate from MAC-face velocity gradients.
+// The default Newtonian branch has no extra sampling overhead.
+float apparent_kinematic_viscosity(ivec3 c)
+{
+    if(pc.rheology.y<=0.)return pc.physical.w;
+    float h=max(pc.origin_cell.w,1e-5);
+    float dudx=(face_u(c+ivec3(1,0,0),0u)-face_u(c,0u))/h;
+    float dvdy=(face_v(c+ivec3(0,1,0),0u)-face_v(c,0u))/h;
+    float dwdz=(face_w(c+ivec3(0,0,1),0u)-face_w(c,0u))/h;
+    float dudy=(face_u(c+ivec3(0,1,0),0u)-
+                face_u(c-ivec3(0,1,0),0u))/(2.*h);
+    float dvdx=(face_v(c+ivec3(1,0,0),0u)-
+                face_v(c-ivec3(1,0,0),0u))/(2.*h);
+    float dudz=(face_u(c+ivec3(0,0,1),0u)-
+                face_u(c-ivec3(0,0,1),0u))/(2.*h);
+    float dwdx=(face_w(c+ivec3(1,0,0),0u)-
+                face_w(c-ivec3(1,0,0),0u))/(2.*h);
+    float dvdz=(face_v(c+ivec3(0,0,1),0u)-
+                face_v(c-ivec3(0,0,1),0u))/(2.*h);
+    float dwdy=(face_w(c+ivec3(0,1,0),0u)-
+                face_w(c-ivec3(0,1,0),0u))/(2.*h);
+    float gamma=sqrt(max(0.,
+        2.*(dudx*dudx+dvdy*dvdy+dwdz*dwdz)+
+        (dudy+dvdx)*(dudy+dvdx)+
+        (dudz+dwdx)*(dudz+dwdx)+
+        (dvdz+dwdy)*(dvdz+dwdy)));
+    float t=pc.rheology.z*gamma;
+    float mu=mix(pc.rheology.y,pc.rheology.x,
+                 pow(1.+t*t,(pc.rheology.w-1.)*.5));
+    return mu/max(pc.physical.y,1e-3);
+}
+float contact_damping(ivec3 c)
+{
+    if(pc.contact.x<=0.)return 1.;
+    // Acts near a solid surface, NOT uniformly throughout the drop.
+    bool touching=solid(c-ivec3(0,1,0)) ||
+                  solid(c-ivec3(0,2,0));
+    return touching?exp(-pc.contact.x*pc.physical.x):1.;
 }
 vec3 center(ivec3 c){return pc.origin_cell.xyz+
                              (vec3(c)+vec3(.5))*pc.origin_cell.w;}
@@ -240,6 +282,8 @@ void main()
     // the active liquid and its immediate interface at zero so numerical
     // VOF traces cannot be transported across the entire finite grid.
     vec3 base=pc.origin_cell.xyz;
+    float nu=apparent_kinematic_viscosity(c);
+    float drag=contact_damping(c);
     if(c.x<=int(nx()) && c.y<int(ny()) && c.z<int(nz()))
     {
         ivec3 l=c-ivec3(1,0,0);
@@ -252,7 +296,8 @@ void main()
             float diff=face_u(c+ivec3(1,0,0),0u)+face_u(c-ivec3(1,0,0),0u)
                       +face_u(c+ivec3(0,1,0),0u)+face_u(c-ivec3(0,1,0),0u)
                       +face_u(c+ivec3(0,0,1),0u)+face_u(c-ivec3(0,0,1),0u)-6.*face_u(c,0u);
-            value+=clamp(pc.physical.w*dt/(h*h),0.,1./6.)*diff;
+            value+=clamp(nu*dt/(h*h),0.,1./6.)*diff;
+            value*=drag;
         }
         fields[u_off(1u)+ui(c)]=clamp(value,-8.,8.);
     }
@@ -269,7 +314,8 @@ void main()
             float diff=face_v(c+ivec3(1,0,0),0u)+face_v(c-ivec3(1,0,0),0u)
                       +face_v(c+ivec3(0,1,0),0u)+face_v(c-ivec3(0,1,0),0u)
                       +face_v(c+ivec3(0,0,1),0u)+face_v(c-ivec3(0,0,1),0u)-6.*face_v(c,0u);
-            value+=clamp(pc.physical.w*dt/(h*h),0.,1./6.)*diff;
+            value+=clamp(nu*dt/(h*h),0.,1./6.)*diff;
+            value*=drag;
         }
         fields[v_off(1u)+vi(c)]=clamp(value,-8.,8.);
     }
@@ -285,7 +331,8 @@ void main()
             float diff=face_w(c+ivec3(1,0,0),0u)+face_w(c-ivec3(1,0,0),0u)
                       +face_w(c+ivec3(0,1,0),0u)+face_w(c-ivec3(0,1,0),0u)
                       +face_w(c+ivec3(0,0,1),0u)+face_w(c-ivec3(0,0,1),0u)-6.*face_w(c,0u);
-            value+=clamp(pc.physical.w*dt/(h*h),0.,1./6.)*diff;
+            value+=clamp(nu*dt/(h*h),0.,1./6.)*diff;
+            value*=drag;
         }
         fields[w_off(1u)+wi(c)]=clamp(value,-8.,8.);
     }
