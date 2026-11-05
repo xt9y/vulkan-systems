@@ -1,4 +1,5 @@
 #include "system.hpp"
+#include "../../../bvh/bvh/bvh.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -68,7 +69,7 @@ namespace fld::system
            !settings.substeps || settings.spacing<=0.f ||
            settings.smoothing_radius<settings.spacing*1.8f ||
            initial.radius<=settings.spacing ||
-           settings.colliders.size()>64 ||
+           settings.colliders.size()>65536 ||
            !vk::device::get()->handle)
             throw std::invalid_argument("Invalid VulkanFluid GPU settings");
         for(const auto &wall:settings.colliders)
@@ -142,7 +143,25 @@ namespace fld::system
             vk::buffer::write(data->particles,seeded.data(),
                               seeded.size()*sizeof(particle));
 
-            std::array<vk::DescriptorSetLayoutBinding,7> bindings{};
+            if(data->collider_count>=32)
+            {
+                for(const auto& path:settings.bvh_shaders)
+                    if(path.empty())
+                        throw std::invalid_argument(
+                            "BVH shaders required for 32+ colliders");
+                std::vector<bvh::aabb> bounds;
+                bounds.reserve(settings.colliders.size());
+                for(const auto& box:settings.colliders)
+                    bounds.push_back({box.minimum,box.maximum});
+                bvh::init(bounds,settings.bvh_shaders);
+                data->bvh_enabled=true;
+            }
+            else
+                data->dummy_bvh=vk::buffer::create(
+                    sizeof(bvh::node),usage,
+                    vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+            std::array<vk::DescriptorSetLayoutBinding,8> bindings{};
             for(std::uint32_t i=0;i<bindings.size();++i)
             {
                 bindings[i].binding=i;
@@ -167,6 +186,7 @@ namespace fld::system
 
             for(std::uint32_t i=0;i<data->pipelines.size();++i)
             {
+                if(i>=11 && !data->bvh_enabled)continue;
                 const auto code=vk::shader::read(paths[i]);
                 auto shader=vk::shader::create(code);
                 try
@@ -187,7 +207,7 @@ namespace fld::system
             }
 
             vk::DescriptorPoolSize size{
-                vk::DescriptorType::eStorageBuffer,7
+                vk::DescriptorType::eStorageBuffer,8
             };
             vk::DescriptorPoolCreateInfo pool{};
             pool.maxSets=1;
@@ -200,16 +220,19 @@ namespace fld::system
             allocation.pSetLayouts=&data->descriptor_layout;
             data->descriptors=device.allocateDescriptorSets(allocation).front();
 
-            const std::array<vk::DescriptorBufferInfo,7> buffers{{
+            const std::array<vk::DescriptorBufferInfo,8> buffers{{
                 vk::buffer::descriptor(data->particles),
                 vk::buffer::descriptor(data->heads),
                 vk::buffer::descriptor(data->next),
                 vk::buffer::descriptor(data->lambdas),
                 vk::buffer::descriptor(data->deltas),
                 vk::buffer::descriptor(data->normals),
-                vk::buffer::descriptor(data->boxes)
+                vk::buffer::descriptor(data->boxes),
+                data->bvh_enabled?
+                    bvh::nodes_descriptor():
+                    vk::buffer::descriptor(data->dummy_bvh)
             }};
-            std::array<vk::WriteDescriptorSet,7> writes{};
+            std::array<vk::WriteDescriptorSet,8> writes{};
             for(std::uint32_t i=0;i<writes.size();++i)
             {
                 writes[i].dstSet=data->descriptors;
@@ -252,17 +275,22 @@ namespace fld::system
         };
         push.indices={data->count,data->bucket_count,
                       data->settings.pressure_iterations,data->collider_count};
+        if(data->bvh_enabled && !data->bvh_built)
+        {
+            bvh::record_build(command);
+            data->bvh_built=true;
+        }
         barrier(command); // RAW dependency from earlier queued submissions
         for(std::uint32_t sub=0;sub<data->settings.substeps;++sub)
         {
-            dispatch(command,1,data->count,push);         // predict
+            dispatch(command,data->bvh_enabled?11:1,data->count,push); // predict
             dispatch(command,0,data->bucket_count,push); // clear
             dispatch(command,2,data->count,push);         // build spatial hash
             for(std::uint32_t i=0;i<data->settings.pressure_iterations;++i)
             {
                 dispatch(command,3,data->count,push);     // constraints
                 dispatch(command,4,data->count,push);     // Jacobi correction
-                dispatch(command,5,data->count,push);     // apply
+                dispatch(command,data->bvh_enabled?12:5,data->count,push); // apply
                 if(i+1<data->settings.pressure_iterations)
                 {
                     // Each Jacobi iteration updates positions; rebuild cell
@@ -274,7 +302,7 @@ namespace fld::system
             // Rebuild the neighborhood after the final Jacobi correction.
             dispatch(command,0,data->bucket_count,push);
             dispatch(command,2,data->count,push);
-            dispatch(command,6,data->count,push);         // final velocity
+            dispatch(command,data->bvh_enabled?13:6,data->count,push); // final velocity
             dispatch(command,7,data->count,push);         // color gradient
             dispatch(command,8,data->count,push);         // capillary force
             dispatch(command,9,data->count,push);         // neighbor velocity blend
@@ -287,6 +315,7 @@ namespace fld::system
     {
         if(!data)return;
         const auto device=vk::device::get()->handle;
+        if(data->bvh_enabled)bvh::shutdown();
         if(device)
         {
             for(auto &pipeline:data->pipelines)
@@ -304,6 +333,7 @@ namespace fld::system
             if(data->deltas.handle)vk::buffer::destroy(data->deltas);
             if(data->normals.handle)vk::buffer::destroy(data->normals);
             if(data->boxes.handle)vk::buffer::destroy(data->boxes);
+            if(data->dummy_bvh.handle)vk::buffer::destroy(data->dummy_bvh);
         }
         delete data;
         data=nullptr;

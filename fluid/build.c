@@ -6,6 +6,9 @@ void build(C_Build *b)
     c_sources(fluid,"fld/material/*.cpp");
     c_sources(fluid,"fld/core/*.cpp");
     c_sources(fluid,"fld/render/*.cpp");
+    // Reuse the generic GPU-BVH implementation in the same source release.
+    c_sources(fluid,"../bvh/bvh/*.cpp");
+    c_include(fluid,"..");
     c_include(fluid,".");
     c_flag(fluid,"-std=c++17");
 

@@ -30,7 +30,12 @@ layout(push_constant) uniform Data
 
 void main()
 {
-    uint id=gl_GlobalInvocationID.x;
+    // Optical LOD only. PBF simulation keeps every particle.
+    const uint stride=max(1u,(pc.sizes.z>>24u)&255u);
+    const uint group=gl_GlobalInvocationID.x;
+    const uint offset=stride==1u?0u:
+        ((group*1664525u+1013904223u)>>30u)%stride;
+    const uint id=group*stride+offset;
     if(id>=pc.sizes.w)return;
     vec4 clip=pc.transform*vec4(particles[id].world.xyz,1);
     if(clip.w<=1e-5 || clip.z<-.2 || clip.z>clip.w+.2)return;

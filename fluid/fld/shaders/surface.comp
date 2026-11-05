@@ -7,7 +7,8 @@ layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
 
 layout(set=0,binding=0) uniform sampler2D depth_image;
 layout(set=0,binding=1) uniform sampler2D scene_color;
-layout(rgba16f,set=0,binding=2) writeonly uniform image2D liquid_output;
+// Full-resolution output (binding 2) belongs to the final composite.
+layout(rgba16f,set=0,binding=6) writeonly uniform image2D fluid_layer;
 
 struct Particle
 {
@@ -59,15 +60,18 @@ float field(vec3 p, uint tile, float h)
 {
     float density = 0.0;
     uint count = counts[tile];
-    bool overflow=count>2048u;
-    count=overflow?pc.sizes.w:count;
+    // Bounded reconstruction cost. Oversubscribed tiles use a mass-weighted
+    // visual approximation rather than a catastrophic full-particle scan.
+    float weight=float(max(1u,(pc.sizes.z>>24u)&255u))*
+                 max(1.,float(count)/2048.);
+    count=min(count,2048u);
     for (uint i=0u; i<count; ++i)
     {
-        uint id = overflow?i:indices[tile*2048u+i];
+        uint id = indices[tile*2048u+i];
         if (id >= pc.sizes.w) continue;
         vec3 separation = p-particles[id].world.xyz;
         density += poly6(dot(separation,separation),h) *
-                   particles[id].properties.x;
+                   particles[id].properties.x*weight;
     }
     return density;
 }
@@ -78,17 +82,20 @@ vec3 gradient(vec3 p,uint tile,float h)
     // extra complete density evaluations per shaded liquid pixel.
     vec3 g=vec3(0);
     uint count=counts[tile];
+    float weight=float(max(1u,(pc.sizes.z>>24u)&255u))*
+                 max(1.,float(count)/2048.);
+    count=min(count,2048u);
     const float h2=h*h;
     const float c=-1890.0/(64.0*pi*pow(h,9.0));
-    for(uint i=0u;i<(count>2048u?pc.sizes.w:count);++i)
+    for(uint i=0u;i<min(count,2048u);++i)
     {
-        uint id=count>2048u?i:indices[tile*2048u+i];
+        uint id=indices[tile*2048u+i];
         if(id>=pc.sizes.w)continue;
         vec3 d=p-particles[id].world.xyz;
         float r2=dot(d,d);
         if(r2>=h2)continue;
         float q=h2-r2;
-        g+=c*q*q*particles[id].properties.x*d;
+        g+=c*q*q*particles[id].properties.x*weight*d;
     }
     return g;
 }
@@ -115,7 +122,7 @@ void main()
     uint count=counts[tile];
     if(count==0u)
     {
-        imageStore(liquid_output,pixel,texelFetch(scene_color,pixel,0));
+        imageStore(fluid_layer,pixel,vec4(0.,0.,0.,-1.));
         return;
     }
 
@@ -126,7 +133,7 @@ void main()
     vec3 near_point=unproject(ndc,reverse?.999f:.001f);
     vec3 far_point=unproject(ndc,reverse?.001f:.999f);
     vec3 ray=normalize(far_point-near_point);
-    float d=texelFetch(depth_image,pixel,0).r;
+    float d=texture(depth_image,uv).r;
     bool background=(pc.sizes.z&1u)!=0u?d<=.000001:d>=.999999;
     float scene_t=background?inf:dot(unproject(ndc,d)-near_point,ray);
     float spacing=pc.lighting.w;
@@ -135,9 +142,9 @@ void main()
 
     // Traverse only the union of particle kernel supports. Rays outside
     // this interval cannot intersect the liquid's density isosurface.
-    for(uint i=0u;i<(count>2048u?pc.sizes.w:count);++i)
+    for(uint i=0u;i<min(count,2048u);++i)
     {
-        uint id=count>2048u?i:indices[tile*2048u+i];
+        uint id=indices[tile*2048u+i];
         if(id>=pc.sizes.w)continue;
         vec2 interval=sphere_interval(near_point,ray,
                                      particles[id].world.xyz,h);
@@ -147,7 +154,7 @@ void main()
     end_t=min(end_t,scene_t);
     if(start_t>=inf || start_t>=end_t)
     {
-        imageStore(liquid_output,pixel,texelFetch(scene_color,pixel,0));
+        imageStore(fluid_layer,pixel,vec4(0.,0.,0.,-1.));
         return;
     }
 
@@ -209,7 +216,7 @@ void main()
         // whose screen tile contains few neighbors.
         if(count>12u)
         {
-            imageStore(liquid_output,pixel,texelFetch(scene_color,pixel,0));
+            imageStore(fluid_layer,pixel,vec4(0.,0.,0.,-1.));
             return;
         }
         // A disconnected tiny drop cannot reach the bulk iso-threshold.
@@ -217,9 +224,9 @@ void main()
         // render their true-volume spheres rather than billboard capsules.
         float nearest=inf, exit_t=inf;
         vec3 center=vec3(0.0);
-        for(uint j=0u;j<(count>2048u?pc.sizes.w:count);++j)
+        for(uint j=0u;j<min(count,2048u);++j)
         {
-            uint id=count>2048u?j:indices[tile*2048u+j];
+            uint id=indices[tile*2048u+j];
             if(id>=pc.sizes.w)continue;
             Particle drop=particles[id];
             vec2 interval=sphere_interval(near_point,ray,drop.world.xyz,
@@ -233,7 +240,7 @@ void main()
         }
         if(nearest>=inf)
         {
-            imageStore(liquid_output,pixel,texelFetch(scene_color,pixel,0));
+            imageStore(fluid_layer,pixel,vec4(0.,0.,0.,-1.));
             return;
         }
         t=nearest;
@@ -268,5 +275,6 @@ void main()
         result=mix(result,pc.scattering.rgb,
                    clamp(-pc.scattering.w,0.0,1.0))+
                vec3(specular*.5);
-    imageStore(liquid_output,pixel,vec4(result,1.0));
+    // Store the surface distance for depth-aware full-resolution upsampling.
+    imageStore(fluid_layer,pixel,vec4(result,t));
 }

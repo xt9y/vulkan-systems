@@ -31,3 +31,22 @@ Validation:
   Physical SI helpers have headless deterministic unit tests.
   Full C++ compilation, GPU timing, conservation and capillary benchmarks
   still require a VulkanEngine-enabled machine.
+
+GPU performance revision
+  bvh/                    independent reusable GPU LBVH static library
+  fld/render/upscale      half-resolution surface + native-resolution composite
+  fld/render/render_stride 1, 2, or 4; simulation retains all particles
+  fld/shaders/surface     bounded per-tile visual work (no full-array fallback)
+  fld/core/system        collision BVH only for 32+ boxes; direct path below
+
+  The 2D surface reconstruction is a rendering approximation, not the
+  incompressible physics solver. Rendering stride and scale do not remove
+  simulation particles. Set scale=1 and stride=1 for maximum droplet detail.
+  Tight memory budgets favor scale=.5, stride=2 as a first profile target.
+  Oversubscribed tiles are mass-weighted approximations, not exact sums.
+  GPU BVH is not used for the fixed-radius SPH neighbor search: its hashed
+  uniform cells remain more suitable for the current particle distribution.
+
+  Important: 60 FPS is a target, not a verified guarantee. The CPU-side
+  GitHub source API and shader contracts have not been run on the target M2.
+  Measure simulation GPU time separately from optical rendering GPU time.

@@ -84,21 +84,27 @@ namespace fld::render
         return data && system::particle_count()>0;
     }
 
-    void init(const std::array<std::string,3> &paths,
-              std::uint32_t count,std::uint32_t width,std::uint32_t height)
+    void init(const std::array<std::string,4> &paths,
+              std::uint32_t count,std::uint32_t width,std::uint32_t height,
+              float render_scale,std::uint32_t render_stride)
     {
         if(data)throw std::logic_error("Fluid renderer initialized twice");
         if(!system::get() || !count || !width || !height ||
            width>8192 || height>8192 ||
+           !std::isfinite(render_scale) || render_scale<.25f || render_scale>1.f ||
+           (render_stride!=1 && render_stride!=2 && render_stride!=4) ||
            !vk::device::get()->handle)
             throw std::invalid_argument("Invalid fluid renderer state");
         data=new state{};
         data->width=width;
         data->height=height;
+        data->render_stride=render_stride;
+        data->low_width=std::max(1u,std::uint32_t(std::ceil(width*render_scale)));
+        data->low_height=std::max(1u,std::uint32_t(std::ceil(height*render_scale)));
         auto device=vk::device::get()->handle;
         try
         {
-            std::array<vk::DescriptorSetLayoutBinding,6> bindings{};
+            std::array<vk::DescriptorSetLayoutBinding,7> bindings{};
             for(std::uint32_t i=0;i<bindings.size();++i)
             {
                 bindings[i].binding=i;
@@ -106,7 +112,7 @@ namespace fld::render
                 bindings[i].stageFlags=vk::ShaderStageFlagBits::eCompute;
                 bindings[i].descriptorType=i<2 ?
                     vk::DescriptorType::eCombinedImageSampler:
-                    i==2 ? vk::DescriptorType::eStorageImage:
+                    (i==2 || i==6) ? vk::DescriptorType::eStorageImage:
                            vk::DescriptorType::eStorageBuffer;
             }
             vk::DescriptorSetLayoutCreateInfo layout{};
@@ -146,7 +152,7 @@ namespace fld::render
 
             std::array<vk::DescriptorPoolSize,3> sizes{{
                 {vk::DescriptorType::eCombinedImageSampler,count*2},
-                {vk::DescriptorType::eStorageImage,count},
+                {vk::DescriptorType::eStorageImage,count*2},
                 {vk::DescriptorType::eStorageBuffer,count*3}
             }};
             vk::DescriptorPoolCreateInfo pool{};
@@ -163,8 +169,8 @@ namespace fld::render
             const auto sets=device.allocateDescriptorSets(allocation);
             data->frames.resize(count);
 
-            const std::size_t tiles=std::size_t((width+15)/16)*
-                                    std::size_t((height+15)/16);
+            const std::size_t tiles=std::size_t((data->low_width+15)/16)*
+                                    std::size_t((data->low_height+15)/16);
             for(std::uint32_t i=0;i<count;++i)
             {
                 auto &f=data->frames[i];
@@ -176,6 +182,22 @@ namespace fld::render
                                                  usage,memory);
                 f.tile_indices=vk::buffer::create(tiles*2048u*sizeof(std::uint32_t),
                                                   usage,memory);
+                vk::ImageCreateInfo info{};
+                info.imageType=vk::ImageType::e2D;
+                info.format=vk::Format::eR16G16B16A16Sfloat;
+                info.extent=vk::Extent3D{data->low_width,data->low_height,1};
+                info.mipLevels=1;
+                info.arrayLayers=1;
+                info.samples=vk::SampleCountFlagBits::e1;
+                info.tiling=vk::ImageTiling::eOptimal;
+                info.usage=vk::ImageUsageFlagBits::eStorage;
+                f.low_image=vk::image::create(info,vk::MemoryPropertyFlagBits::eDeviceLocal);
+                vk::ImageViewCreateInfo view{};
+                view.image=f.low_image.handle;
+                view.viewType=vk::ImageViewType::e2D;
+                view.format=info.format;
+                view.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
+                f.low_view=vk::image_view::create(view);
             }
         }
         catch(...)
@@ -195,28 +217,46 @@ namespace fld::render
             throw std::invalid_argument("Invalid fluid render input");
 
         auto &f=data->frames[image];
-        const std::array<vk::DescriptorImageInfo,3> images{{
+        if(!f.low_initialized)
+        {
+            vk::ImageMemoryBarrier transition{};
+            transition.oldLayout=vk::ImageLayout::eUndefined;
+            transition.newLayout=vk::ImageLayout::eGeneral;
+            transition.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            transition.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            transition.image=f.low_image.handle;
+            transition.subresourceRange={
+                vk::ImageAspectFlagBits::eColor,0,1,0,1};
+            transition.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
+            command.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTopOfPipe,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {},{},{},{transition});
+            f.low_initialized=true;
+        }
+        const std::array<vk::DescriptorImageInfo,4> images{{
             {target.sampler,target.depth,target.depth_layout},
             {target.sampler,target.scene_color,target.color_layout},
-            {{},target.output,vk::ImageLayout::eGeneral}
+            {{},target.output,vk::ImageLayout::eGeneral},
+            {{},f.low_view,vk::ImageLayout::eGeneral}
         }};
         const std::array<vk::DescriptorBufferInfo,3> buffers{{
             system::descriptor(),
             vk::buffer::descriptor(f.tile_counts),
             vk::buffer::descriptor(f.tile_indices)
         }};
-        std::array<vk::WriteDescriptorSet,6> writes{};
+        std::array<vk::WriteDescriptorSet,7> writes{};
         for(std::uint32_t i=0;i<writes.size();++i)
         {
             writes[i].dstSet=f.descriptors;
             writes[i].dstBinding=i;
             writes[i].descriptorCount=1;
-            if(i<3)
+            if(i<3 || i==6)
             {
-                writes[i].descriptorType=i==2 ?
+                writes[i].descriptorType=(i==2 || i==6)?
                     vk::DescriptorType::eStorageImage:
                     vk::DescriptorType::eCombinedImageSampler;
-                writes[i].pImageInfo=&images[i];
+                writes[i].pImageInfo=&images[i==6?3:i];
             }
             else
             {
@@ -244,16 +284,22 @@ namespace fld::render
             std::round(world->settings.smoothing_radius/
                        world->settings.spacing*100.f),
             150.f,65535.f));
-        push.sizes={target.width,target.height,
-                    (target.reversed_depth?1u:0u)|(ratio<<8),
+        push.sizes={data->low_width,data->low_height,
+                    (target.reversed_depth?1u:0u)|(ratio<<8)|
+                    (data->render_stride<<24),
                     world->count};
 
-        const auto tiles=((target.width+15)/16)*((target.height+15)/16);
+        const auto tiles=((data->low_width+15)/16)*((data->low_height+15)/16);
         dispatch(command,0,f,push,(tiles+63)/64,1);      // clear tile bins
-        dispatch(command,1,f,push,(world->count+63)/64,1); // scatter particles
+        dispatch(command,1,f,push,
+                 ((world->count+data->render_stride-1)/data->render_stride+63)/64,1); // scatter particles
         push.transform=inverse(target.view_projection);
-        dispatch(command,2,f,push,(target.width+7)/8,
-                 (target.height+7)/8);                  // surface+optics
+        dispatch(command,2,f,push,(data->low_width+7)/8,
+                 (data->low_height+7)/8);              // low-res optics
+        push.sizes[0]=target.width;
+        push.sizes[1]=target.height;
+        dispatch(command,3,f,push,(target.width+7)/8,
+                 (target.height+7)/8);                 // full-res composite
     }
 
     void shutdown()
@@ -266,6 +312,8 @@ namespace fld::render
             {
                 if(f.tile_counts.handle)vk::buffer::destroy(f.tile_counts);
                 if(f.tile_indices.handle)vk::buffer::destroy(f.tile_indices);
+                if(f.low_view)vk::image_view::destroy(f.low_view);
+                if(f.low_image.handle)vk::image::destroy(f.low_image);
             }
             for(auto &pipeline:data->pipelines)
                 if(pipeline)vk::pipeline::destroy(pipeline);
