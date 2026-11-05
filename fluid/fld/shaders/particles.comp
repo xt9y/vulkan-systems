@@ -48,8 +48,10 @@ ivec3 cell(vec3 p)
 uint hash_cell(ivec3 c)
 {
     uvec3 u=uvec3(c);
+    // The host allocates 16384 buckets (a power of two). Bit masking
+    // avoids integer division in every 27-cell SPH neighborhood lookup.
     return (u.x*73856093u ^ u.y*19349663u ^ u.z*83492791u)
-        % pc.indices.y;
+        & (pc.indices.y-1u);
 }
 float poly6(float r2,float h)
 {
