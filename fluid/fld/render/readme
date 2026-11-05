@@ -1,5 +1,0 @@
-Planned: analytic isolated drops, anisotropic sheet/stream reconstruction,
-screen-space depth and thickness, conservative smoothing, Fresnel,
-Beer-Lambert absorption, specular and scene refraction. GPU-resident
-sim+render with per-stage timing. No giant per-pixel raymarch across
-all CPU-binned particles.

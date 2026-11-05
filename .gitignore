@@ -1,5 +1,0 @@
-build/
-*.o
-*.obj
-*.spv
-.DS_Store

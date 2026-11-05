@@ -1,4 +1,0 @@
-Planned: GPU-resident SoA particles, active compaction, cell key/count,
-parallel prefix scan, sorted neighbor ranges, PBF/DFSPH comparisons,
-unified implicit surface-tension/pressure/friction iteration and
-physically constrained substeps. No per-frame CPU particle operations.

@@ -1,2 +1,0 @@
-Planned Vulkan compute shaders via VulkanEngine wrappers. Add shaders
-only with instrumented GPU tests and explicit resource barriers.
