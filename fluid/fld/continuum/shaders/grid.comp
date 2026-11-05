@@ -99,7 +99,6 @@ vec3 velocity(vec3 pos)
                 tri_v(g-vec3(.5,0.,.5),0u),
                 tri_w(g-vec3(.5,.5,0.),0u));
 }
-bool solid(ivec3 c);
 // Approximate symmetric strain rate from MAC-face velocity gradients.
 // The default Newtonian branch has no extra sampling overhead.
 float apparent_kinematic_viscosity(ivec3 c)
@@ -282,7 +281,13 @@ void main()
     // the active liquid and its immediate interface at zero so numerical
     // VOF traces cannot be transported across the entire finite grid.
     vec3 base=pc.origin_cell.xyz;
-    float nu=apparent_kinematic_viscosity(c);
+    float nu=pc.physical.w;
+    // Sparse gating: avoid evaluating nine derivatives of the velocity
+    // field in the overwhelmingly empty portion of the simulation box.
+    if(pc.rheology.y>0. && (wet(c) ||
+       wet(c-ivec3(1,0,0)) || wet(c-ivec3(0,1,0)) ||
+       wet(c-ivec3(0,0,1))))
+        nu=apparent_kinematic_viscosity(c);
     float drag=contact_damping(c);
     if(c.x<=int(nx()) && c.y<int(ny()) && c.z<int(nz()))
     {
