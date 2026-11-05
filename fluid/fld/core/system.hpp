@@ -14,7 +14,7 @@ namespace fld::system
         vk::DescriptorPool descriptor_pool{};
         vk::DescriptorSet descriptors{};
         vk::PipelineLayout pipeline_layout{};
-        std::array<vk::Pipeline,11> pipelines{};
+        std::array<vk::Pipeline,14> pipelines{};
         std::uint32_t count=0;
         std::uint32_t collider_count=0;
         bool bvh_enabled=false,bvh_built=false;
