@@ -14,8 +14,7 @@ layout(push_constant) uniform Parameters
 {
     mat4 inverse_vp;
     vec4 origin_cell;     // xyz origin, w cell width
-    vec4 tint;            // rgb debug tint, alpha strength
-    uvec4 grid;           // nx, ny, nz, unused
+    uvec4 grid;           // nx, ny, nz, support layer
     uvec4 screen;         // render dimensions, reverse depth, VOF bank
 } pc;
 
@@ -84,6 +83,26 @@ float ground_fill(vec2 world_xz)
         fill+=fetch_vof(c)*weight;
     }
     return clamp(fill,0.,1.);
+}
+// Only treat a shallow film as a connected puddle where a substantial
+// nearby occupied cell supports it. The first-order VOF scheme can leave
+// faint numerical residue across otherwise dry cells; that residue must
+// not turn the entire finite simulation grid into a rendered green sheet.
+float nearby_liquid(vec2 world_xz)
+{
+    if(pc.grid.w==0u)return 0.;
+    vec2 g=(world_xz-pc.origin_cell.xz)/pc.origin_cell.w-vec2(.5);
+    ivec2 base=ivec2(floor(g+.5));
+    float maximum=0.;
+    for(int z=-1;z<=1;++z)
+    for(int x=-1;x<=1;++x)
+    {
+        ivec3 c=ivec3(base.x+x,int(pc.grid.w),base.y+z);
+        if(!valid_cell(c) || solid_cell(c) ||
+           !solid_cell(c-ivec3(0,1,0)))continue;
+        maximum=max(maximum,fetch_vof(c));
+    }
+    return maximum;
 }
 float volume(vec3 pos)
 {
@@ -166,8 +185,12 @@ void main()
                 film_t=(support_y+h*f-near_point.y)/ray.y;
                 f=ground_fill((near_point+ray*film_t).xz);
             }
-            if(f>.015 && film_t>=entry && film_t<exit_t &&
-               film_t<=scene_t+.025 && (!hit || film_t<t))
+            // Ignore diffuse VOF residue rather than shading it as
+            // a domain-sized rectangular puddle. Keep the stored
+            // volume unchanged: this is a render-only visibility test.
+            float core=nearby_liquid((near_point+ray*film_t).xz);
+            if(f>.075 && core>.22 && film_t>=entry && film_t<exit_t &&
+               film_t<=scene_t+.005 && (!hit || film_t<t))
             {
                 film=true;
                 hit=true;
@@ -210,15 +233,18 @@ void main()
     }
     if(dot(normal,ray)>0.)normal=-normal;
     thickness=max(.001,thickness);
+    // Water is almost colorless at ordinary viewing thickness. Let the
+    // floor/objects behind it and neutral environmental reflections
+    // establish its appearance, without a painted blue/green overlay.
     vec3 behind=texture(scene_hdr,uv).rgb;
-    float fresnel=.02+.98*pow(1.-clamp(dot(normal,-ray),0.,1.),5.);
-    vec3 absorb=exp(-vec3(.30,.12,.055)*thickness);
-    vec3 color=behind*absorb+vec3(.025,.045,.065)*(1.-absorb);
+    float f0=.0204; // n=1.333, normal-incidence dielectric reflectance
+    float fresnel=f0+(1.-f0)*pow(1.-clamp(dot(normal,-ray),0.,1.),5.);
+    vec3 absorb=exp(-vec3(.11,.075,.05)*thickness);
+    vec3 color=behind*absorb;
     vec3 light=normalize(vec3(.42,.85,.30));
     vec3 half_vector=normalize(light-ray);
-    float specular=pow(max(dot(normal,half_vector),0.),96.);
-    color=mix(color,vec3(.5,.55,.6),fresnel)+vec3(specular*.65);
-    color=mix(color,pc.tint.rgb,clamp(pc.tint.a,0.,1.));
+    float specular=pow(max(dot(normal,half_vector),0.),128.);
+    color=mix(color,vec3(.58),fresnel)+vec3(specular*.55);
     imageStore(liquid_layer,pixel,vec4(color,t));
 }
 #else
@@ -250,7 +276,27 @@ void main()
     {
         ivec2 sample_pos=clamp(first+ivec2(x,y),ivec2(0),low-1);
         vec4 sample_color=imageLoad(liquid_layer,sample_pos);
-        if(sample_color.a<0. || sample_color.a>scene_t+.025)continue;
+        if(sample_color.a<0. || sample_color.a>scene_t+.004)continue;
+        // The half-resolution ray must see the same scene surface as
+        // this full-resolution pixel. Bilinear filtering across a cube
+        // silhouette otherwise pulls water from the floor onto the cube.
+        vec2 sample_uv=(vec2(sample_pos)+.5)/vec2(low);
+        float sample_depth=texture(scene_depth,sample_uv).r;
+        bool sample_background=reverse?sample_depth<=.000001:
+                                      sample_depth>=.999999;
+        if(sample_background!=background)continue;
+        if(!background)
+        {
+            vec2 sample_ndc=sample_uv*2.-1.;
+            vec3 sample_near=unproject(sample_ndc,reverse?.999:.001);
+            vec3 sample_far=unproject(sample_ndc,reverse?.001:.999);
+            vec3 sample_ray=normalize(sample_far-sample_near);
+            float sample_t=dot(unproject(sample_ndc,sample_depth)-
+                               sample_near,sample_ray);
+            // Keep neighbors on the same depth surface; small changes
+            // from perspective and a sloped floor remain allowed.
+            if(abs(sample_t-scene_t)>max(.035,.025*scene_t))continue;
+        }
         float weight=(x==0?1.-weights.x:weights.x)*
                      (y==0?1.-weights.y:weights.y);
         fluid_color+=sample_color.rgb*weight;
