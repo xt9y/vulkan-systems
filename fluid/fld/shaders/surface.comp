@@ -59,11 +59,11 @@ float field(vec3 p, uint tile, float h)
 {
     float density = 0.0;
     uint count = counts[tile];
-    bool overflow=count>256u;
+    bool overflow=count>2048u;
     count=overflow?pc.sizes.w:count;
     for (uint i=0u; i<count; ++i)
     {
-        uint id = overflow?i:indices[tile*256u+i];
+        uint id = overflow?i:indices[tile*2048u+i];
         if (id >= pc.sizes.w) continue;
         vec3 separation = p-particles[id].world.xyz;
         density += poly6(dot(separation,separation),h) *
@@ -80,9 +80,9 @@ vec3 gradient(vec3 p,uint tile,float h)
     uint count=counts[tile];
     const float h2=h*h;
     const float c=-1890.0/(64.0*pi*pow(h,9.0));
-    for(uint i=0u;i<(count>256u?pc.sizes.w:count);++i)
+    for(uint i=0u;i<(count>2048u?pc.sizes.w:count);++i)
     {
-        uint id=count>256u?i:indices[tile*256u+i];
+        uint id=count>2048u?i:indices[tile*2048u+i];
         if(id>=pc.sizes.w)continue;
         vec3 d=p-particles[id].world.xyz;
         float r2=dot(d,d);
@@ -135,9 +135,9 @@ void main()
 
     // Traverse only the union of particle kernel supports. Rays outside
     // this interval cannot intersect the liquid's density isosurface.
-    for(uint i=0u;i<(count>256u?pc.sizes.w:count);++i)
+    for(uint i=0u;i<(count>2048u?pc.sizes.w:count);++i)
     {
-        uint id=count>256u?i:indices[tile*256u+i];
+        uint id=count>2048u?i:indices[tile*2048u+i];
         if(id>=pc.sizes.w)continue;
         vec2 interval=sphere_interval(near_point,ray,
                                      particles[id].world.xyz,h);
@@ -217,9 +217,9 @@ void main()
         // render their true-volume spheres rather than billboard capsules.
         float nearest=inf, exit_t=inf;
         vec3 center=vec3(0.0);
-        for(uint j=0u;j<(count>256u?pc.sizes.w:count);++j)
+        for(uint j=0u;j<(count>2048u?pc.sizes.w:count);++j)
         {
-            uint id=count>256u?j:indices[tile*256u+j];
+            uint id=count>2048u?j:indices[tile*2048u+j];
             if(id>=pc.sizes.w)continue;
             Particle drop=particles[id];
             vec2 interval=sphere_interval(near_point,ray,drop.world.xyz,
