@@ -180,7 +180,7 @@ namespace fld::render
                 const auto memory=vk::MemoryPropertyFlagBits::eDeviceLocal;
                 f.tile_counts=vk::buffer::create(tiles*sizeof(std::uint32_t),
                                                  usage,memory);
-                f.tile_indices=vk::buffer::create(tiles*2048u*sizeof(std::uint32_t),
+                f.tile_indices=vk::buffer::create(tiles*tile_capacity*sizeof(std::uint32_t),
                                                   usage,memory);
                 vk::ImageCreateInfo info{};
                 info.imageType=vk::ImageType::e2D;
