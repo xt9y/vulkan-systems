@@ -60,15 +60,18 @@ float field(vec3 p, uint tile, float h)
 {
     float density = 0.0;
     uint count = counts[tile];
-    bool overflow=count>2048u;
-    count=overflow?pc.sizes.w:count;
+    // Bounded reconstruction cost. Oversubscribed tiles use a mass-weighted
+    // visual approximation rather than a catastrophic full-particle scan.
+    float weight=float(max(1u,(pc.sizes.z>>24u)&255u))*
+                 max(1.,float(count)/2048.);
+    count=min(count,2048u);
     for (uint i=0u; i<count; ++i)
     {
-        uint id = overflow?i:indices[tile*2048u+i];
+        uint id = indices[tile*2048u+i];
         if (id >= pc.sizes.w) continue;
         vec3 separation = p-particles[id].world.xyz;
         density += poly6(dot(separation,separation),h) *
-                   particles[id].properties.x;
+                   particles[id].properties.x*weight;
     }
     return density;
 }
@@ -79,17 +82,20 @@ vec3 gradient(vec3 p,uint tile,float h)
     // extra complete density evaluations per shaded liquid pixel.
     vec3 g=vec3(0);
     uint count=counts[tile];
+    float weight=float(max(1u,(pc.sizes.z>>24u)&255u))*
+                 max(1.,float(count)/2048.);
+    count=min(count,2048u);
     const float h2=h*h;
     const float c=-1890.0/(64.0*pi*pow(h,9.0));
-    for(uint i=0u;i<(count>2048u?pc.sizes.w:count);++i)
+    for(uint i=0u;i<min(count,2048u);++i)
     {
-        uint id=count>2048u?i:indices[tile*2048u+i];
+        uint id=indices[tile*2048u+i];
         if(id>=pc.sizes.w)continue;
         vec3 d=p-particles[id].world.xyz;
         float r2=dot(d,d);
         if(r2>=h2)continue;
         float q=h2-r2;
-        g+=c*q*q*particles[id].properties.x*d;
+        g+=c*q*q*particles[id].properties.x*weight*d;
     }
     return g;
 }
@@ -136,9 +142,9 @@ void main()
 
     // Traverse only the union of particle kernel supports. Rays outside
     // this interval cannot intersect the liquid's density isosurface.
-    for(uint i=0u;i<(count>2048u?pc.sizes.w:count);++i)
+    for(uint i=0u;i<min(count,2048u);++i)
     {
-        uint id=count>2048u?i:indices[tile*2048u+i];
+        uint id=indices[tile*2048u+i];
         if(id>=pc.sizes.w)continue;
         vec2 interval=sphere_interval(near_point,ray,
                                      particles[id].world.xyz,h);
@@ -218,9 +224,9 @@ void main()
         // render their true-volume spheres rather than billboard capsules.
         float nearest=inf, exit_t=inf;
         vec3 center=vec3(0.0);
-        for(uint j=0u;j<(count>2048u?pc.sizes.w:count);++j)
+        for(uint j=0u;j<min(count,2048u);++j)
         {
-            uint id=count>2048u?j:indices[tile*2048u+j];
+            uint id=indices[tile*2048u+j];
             if(id>=pc.sizes.w)continue;
             Particle drop=particles[id];
             vec2 interval=sphere_interval(near_point,ray,drop.world.xyz,
