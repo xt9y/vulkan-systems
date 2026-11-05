@@ -9,7 +9,7 @@ namespace fld::system
     struct state
     {
         options settings{};
-        vk::buffer::resource particles,heads,next,lambdas,deltas,normals,boxes;
+        vk::buffer::resource particles,heads,next,lambdas,deltas,normals,boxes,dummy_bvh;
         vk::DescriptorSetLayout descriptor_layout{};
         vk::DescriptorPool descriptor_pool{};
         vk::DescriptorSet descriptors{};
@@ -17,6 +17,7 @@ namespace fld::system
         std::array<vk::Pipeline,11> pipelines{};
         std::uint32_t count=0;
         std::uint32_t collider_count=0;
+        bool bvh_enabled=false,bvh_built=false;
         std::uint32_t bucket_count=16384;
         double simulated_seconds=0.;
     };
