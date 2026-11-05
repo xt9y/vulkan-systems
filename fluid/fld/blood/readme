@@ -1,0 +1,40 @@
+Blood is a reusable fld::blood profile layered on fld::continuum.
+It does not create a second fluid solver, collision system, particle system,
+or pressure grid.
+
+Files:
+  blood.hpp, blood.cpp                  blood material and reusable adapter
+  ../continuum/shaders/grid.comp        optional Carreau shear thinning and floor drag
+  ../continuum/shaders/surface.comp     FLD_BLOOD optical shading (same renderer)
+
+Usage:
+  fld::blood::material profile{};
+  profile.viscosity_zero=.25f;
+  profile.viscosity_high=.0035f;
+  profile.relaxation_seconds=25.f;
+  profile.shear_exponent=.25f;
+  profile.substrate_drag=4.f;
+  profile.shallow_color={.71f,.046f,.038f};
+  profile.optical_density=32.f;
+  auto programs=fld::blood::shaders("build/shaders/");
+  fld::blood::init(options,drop,programs,frames,width,height,profile);
+  fld::blood::record(command,frame,dt,render_input);
+  fld::blood::shutdown();
+
+Material units: density kg/m^3, viscosity Pa*s, surface tension N/m,
+relaxation s, contact drag 1/s. The example uses approximately 1060 kg/m^3,
+Carreau mu_0=.25 Pa*s, mu_infinity=.0035 Pa*s, lambda=25 s, n=.25.
+These are illustrative blood rheology values; hematocrit and temperature
+change actual blood properties. The extra contact drag is a game-look
+approximation, not an intrinsic medical parameter.
+
+The optical layer combines transmitted background with red-selective
+absorption. Thin layers are brighter and more translucent; thicker layers
+become darker, more opaque burgundy. Colors and optical density are editable
+in the blood material. Water shaders remain available as the normal
+continuum rendering variant.
+
+Not simulated: clots, drying, cellular blood flow, fine splashes, true
+contact-angle hysteresis or medically validated rheology. This is a
+single-fluid real-time approximation with numerical limits of the existing
+VOF/MAC pressure solver. GPU runtime and 60 FPS are not yet validated.
