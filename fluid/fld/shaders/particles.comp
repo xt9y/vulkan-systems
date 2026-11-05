@@ -68,6 +68,16 @@ vec3 spiky(vec3 r,float h)
     float h2=h*h,h6=h2*h2*h2;
     return -45.0/(pi*h6)*pow(h-len,2.)*r/len;
 }
+// Akinci et al. (2013) surface-cohesion kernel, SI dimensions 1/m^3.
+// Positive at normal particle spacing, repulsive at extremely short range.
+float cohesion_kernel(float r,float h)
+{
+    if(r<=1e-6 || r>=h)return 0.;
+    float u=r/h;
+    float k=pow(1.-u,3.)*u*u*u;
+    if(u<=.5)k=2.*k-1./64.;
+    return (32./pi)*k/(h*h*h);
+}
 
 
 int broadphase(vec3 p,float radius,out uint candidates[16])
@@ -211,10 +221,10 @@ void main()
         }
     }
     sum_grad2+=dot(grad_self,grad_self);
-    // Positive compression and a small bounded negative surface-density
-    // error both contribute. Without the negative branch there is no
-    // attractive pressure correction, and one droplet becomes loose beads.
-    float error=max(-.065,rho/pc.liquid.x-1.);
+    // Keep a bounded tensile branch at free surfaces. Clamping at -0.065
+    // left surface particles almost unconstrained, so the drop separated
+    // into independent beads after impact. Cap the correction for stability.
+    float error=max(-.20,rho/pc.liquid.x-1.);
     lambdas[id]=-error/(sum_grad2+1e-4);
 #elif defined(FLD_DELTA)
     vec3 correction=vec3(0);
@@ -235,8 +245,9 @@ void main()
                 vec3 d=p.position.xyz-q.position.xyz;
                 float w=poly6(dot(d,d),h)/
                          max(poly6(.09*h*h,h),1e-7);
-                // PBF artificial pressure discourages close packing.
-                float scorr=-.001*pow(w,4.);
+                // Short-range repulsion prevents tensile clumping while the
+                // bounded negative density constraint maintains connectivity.
+                float scorr=-.002*pow(w,4.);
                 correction+=(lambdas[id]+lambdas[j]+scorr)*
                              q.physical.y/pc.liquid.x*spiky(d,h);
             }
@@ -300,9 +311,10 @@ void main()
 #elif defined(FLD_CAPILLARY)
     vec3 n=surface_normals[id].xyz;
     float magnitude=surface_normals[id].w;
-    if(magnitude<1e-5)return; // liquid interior
-    vec3 n_hat=n/magnitude;
+    bool surface=magnitude>=1e-5;
+    vec3 n_hat=surface?n/magnitude:vec3(0.);
     float curvature=0.;
+    vec3 cohesion=vec3(0.);
     ivec3 at=cell(p.position.xyz);
     float h=pc.liquid.z;
     for(int z=-1;z<=1;++z)
@@ -317,20 +329,32 @@ void main()
             Particle q=particles[j];
             if(j!=int(id) && all(equal(cell(q.position.xyz),c)))
             {
-                vec3 nj=surface_normals[j].xyz;
-                float lj=length(nj);
-                if(lj>1e-5)
-                    curvature+=q.physical.x*
-                               dot(nj/lj-n_hat,
-                                   spiky(p.position.xyz-q.position.xyz,h));
+                vec3 d=p.position.xyz-q.position.xyz;
+                float r=length(d);
+                if(r>1e-6 && r<h)
+                {
+                    // Pairwise surface cohesion: equal particle masses exert
+                    // opposite accelerations, including between droplets.
+                    cohesion-=pc.contact.x*q.physical.y*
+                               cohesion_kernel(r,h)*d/r;
+                }
+                if(surface)
+                {
+                    vec3 nj=surface_normals[j].xyz;
+                    float lj=length(nj);
+                    if(lj>1e-5)
+                        curvature+=q.physical.x*
+                                   dot(nj/lj-n_hat,spiky(d,h));
+                }
             }
             j=next_particle[j];
         }
     }
-    // Continuum Surface Force, numerically bounded for real-time PBF.
-    // Not the unified implicit pressure/capillarity formulation.
-    vec3 acceleration=-pc.contact.x/pc.liquid.x*
-                       abs(curvature)*n;
+    // Curvature plus pair cohesion use the material's surface tension.
+    // Both contributions are bounded per substep for coarse real-time SPH.
+    vec3 acceleration=cohesion;
+    if(surface)
+        acceleration-=pc.contact.x/pc.liquid.x*abs(curvature)*n;
     float speed=length(acceleration);
     float bound=.15*pc.liquid.y/
                 max(pc.gravity_dt.w*pc.gravity_dt.w,1e-8);
