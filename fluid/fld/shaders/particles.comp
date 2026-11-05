@@ -89,6 +89,8 @@ vec3 project_colliders(vec3 p,float r,out vec3 normal)
         if(face==4){p.z=low.z;normal=vec3(0,0,-1);}
         if(face==5){p.z=high.z;normal=vec3(0,0,1);}
     }
+    // Floor always wins if a cube's expanded underside overlaps the plane.
+    p.y=max(p.y,pc.liquid.w+r);
     return p;
 }
 vec3 contact_normal(vec3 p,float r)
