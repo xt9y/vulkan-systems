@@ -52,6 +52,39 @@ float fetch_vof(ivec3 c)
     uint i=(uint(c.z)*pc.grid.y+uint(c.y))*pc.grid.x+uint(c.x);
     return fields[pc.screen.w*total()+i];
 }
+bool valid_cell(ivec3 c)
+{
+    return all(greaterThanEqual(c,ivec3(0))) &&
+           all(lessThan(c,ivec3(pc.grid.xyz)));
+}
+bool solid_cell(ivec3 c)
+{
+    if(!valid_cell(c))return true;
+    uint i=(uint(c.z)*pc.grid.y+uint(c.y))*pc.grid.x+uint(c.x);
+    return fields[6u*total()+i]>.5;
+}
+// Bilinear surface reconstruction of the liquid volume fraction in the
+// first fluid layer above an actual solid collider. Its equivalent height
+// makes sub-cell puddles visible without inventing additional liquid mass.
+float ground_fill(vec2 world_xz)
+{
+    if(pc.grid.w==0u)return 0.;
+    float h=pc.origin_cell.w;
+    vec2 g=(world_xz-pc.origin_cell.xz)/h-vec2(.5);
+    ivec2 base=ivec2(floor(g));
+    vec2 t=fract(g);
+    float fill=0.;
+    for(int z=0;z<2;++z)
+    for(int x=0;x<2;++x)
+    {
+        ivec3 c=ivec3(base.x+x,int(pc.grid.w),base.y+z);
+        if(!valid_cell(c) || solid_cell(c) ||
+           !solid_cell(c-ivec3(0,1,0)))continue;
+        float weight=(x==0?1.-t.x:t.x)*(z==0?1.-t.y:t.y);
+        fill+=fetch_vof(c)*weight;
+    }
+    return clamp(fill,0.,1.);
+}
 float volume(vec3 pos)
 {
     vec3 coord=(pos-pc.origin_cell.xyz)/pc.origin_cell.w-vec3(.5);
@@ -92,8 +125,7 @@ void main()
     float t=entry;
     float previous=t;
     bool hit=false;
-    // Only a single field sample per spatial step. All 3D volume reads are
-    // bounded by the grid's ray interval and by the opaque scene depth.
+    // Bulk water uses the continuous 3D VOF isosurface.
     for(int i=0;i<128;++i)
     {
         if(t>exit_t)break;
@@ -104,36 +136,80 @@ void main()
         previous=t;
         t+=step_size;
     }
+    float h=pc.origin_cell.w;
+    if(hit)
+    {
+        float a=previous,b=t;
+        for(int i=0;i<4;++i)
+        {
+            float mid=.5*(a+b);
+            if(volume(near_point+ray*mid)>.32)b=mid;
+            else a=mid;
+        }
+        t=.5*(a+b);
+    }
+    // A puddle thinner than one grid cell has a nonzero VOF but may never
+    // cross the .32 bulk isovalue, and a ray may step over it entirely.
+    // Intersect its reconstructed height analytically at the actual floor.
+    bool film=false;
+    float film_height=0.;
+    if(pc.grid.w>0u && ray.y<-.00001)
+    {
+        float support_y=pc.origin_cell.y+float(pc.grid.w)*h;
+        float floor_t=(support_y-near_point.y)/ray.y;
+        if(floor_t>=entry && floor_t<=exit_t+h/abs(ray.y))
+        {
+            float f=ground_fill((near_point+ray*floor_t).xz);
+            float film_t=floor_t;
+            for(int i=0;i<3;++i)
+            {
+                film_t=(support_y+h*f-near_point.y)/ray.y;
+                f=ground_fill((near_point+ray*film_t).xz);
+            }
+            if(f>.015 && film_t>=entry && film_t<exit_t &&
+               film_t<=scene_t+.025 && (!hit || film_t<t))
+            {
+                film=true;
+                hit=true;
+                t=film_t;
+                film_height=h*f;
+            }
+        }
+    }
     if(!hit)
     {
         imageStore(liquid_layer,pixel,vec4(0.,0.,0.,-1.));return;
     }
-    float a=previous,b=t;
-    for(int i=0;i<4;++i)
-    {
-        float mid=.5*(a+b);
-        if(volume(near_point+ray*mid)>.32)b=mid;
-        else a=mid;
-    }
-    t=.5*(a+b);
     vec3 pos=near_point+ray*t;
-    float h=pc.origin_cell.w;
-    vec3 grad=vec3(
-        volume(pos+vec3(h,0,0))-volume(pos-vec3(h,0,0)),
-        volume(pos+vec3(0,h,0))-volume(pos-vec3(0,h,0)),
-        volume(pos+vec3(0,0,h))-volume(pos-vec3(0,0,h)));
-    vec3 normal=dot(grad,grad)>1e-7?normalize(-grad):-ray;
-    if(dot(normal,ray)>0.)normal=-normal;
+    vec3 normal;
     float thickness=0.;
-    for(int i=0;i<24;++i)
+    if(film)
     {
-        float point_t=t+(float(i)+.5)*h*.5;
-        if(point_t>=exit_t)break;
-        float f=volume(near_point+ray*point_t);
-        thickness+=h*.5*f;
-        if(i>3 && f<.08)break;
+        float slope_x=(ground_fill(pos.xz+vec2(h,0.))-
+                       ground_fill(pos.xz-vec2(h,0.)))*.5;
+        float slope_z=(ground_fill(pos.xz+vec2(0.,h))-
+                       ground_fill(pos.xz-vec2(0.,h)))*.5;
+        normal=normalize(vec3(-slope_x,1.,-slope_z));
+        thickness=film_height/max(.15,abs(ray.y));
     }
-    thickness=max(.03,thickness);
+    else
+    {
+        vec3 grad=vec3(
+            volume(pos+vec3(h,0,0))-volume(pos-vec3(h,0,0)),
+            volume(pos+vec3(0,h,0))-volume(pos-vec3(0,h,0)),
+            volume(pos+vec3(0,0,h))-volume(pos-vec3(0,0,h)));
+        normal=dot(grad,grad)>1e-7?normalize(-grad):-ray;
+        for(int i=0;i<24;++i)
+        {
+            float point_t=t+(float(i)+.5)*h*.5;
+            if(point_t>=exit_t)break;
+            float f=volume(near_point+ray*point_t);
+            thickness+=h*.5*f;
+            if(i>3 && f<.08)break;
+        }
+    }
+    if(dot(normal,ray)>0.)normal=-normal;
+    thickness=max(.001,thickness);
     vec3 behind=texture(scene_hdr,uv).rgb;
     float fresnel=.02+.98*pow(1.-clamp(dot(normal,-ray),0.,1.),5.);
     vec3 absorb=exp(-vec3(.30,.12,.055)*thickness);
