@@ -47,7 +47,7 @@ namespace transport::hierarchy
         enum kernel : std::uint32_t
         {
             seed=0,aggregate=1,gather=2,emission_aggregate=3,
-            direct=4,inject=5,propagate=6,residual=7
+            direct=4,inject=5,propagate=6,residual_kernel=7
         };
         constexpr std::array<const char*,8> kernel_names{{
             "seed","aggregate","gather","emission","direct","inject",
@@ -610,7 +610,7 @@ namespace transport::hierarchy
         command.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
                                 vk::PipelineStageFlagBits::eComputeShader,
                                 {},{transfer},{},{});
-        dispatch(command,s,residual,0);
+        dispatch(command,s,residual_kernel,0);
         vk::MemoryBarrier copy{};
         copy.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
         copy.dstAccessMask=vk::AccessFlagBits::eTransferRead;
