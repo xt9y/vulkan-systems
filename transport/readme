@@ -18,6 +18,8 @@ transport::hierarchy::solver (new)
   Direct bounce separated for high-resolution primary-light reconstruction.
   Changed-emission Neumann delta propagation without a dense rebuild.
   Residual checks with GPU atomic maximum and host-visible readback.
+  A conditional upper bound on the discrete radiosity-solution error is
+  calculated from the maximum transport row sum and surface reflectance.
   Discrete solve can continue with record_refine() to a chosen tolerance.
   Graph stats: surface/node/link counts, build ms, row sums, global scale,
   sampled reciprocity error, and actual discrete equation residual.
