@@ -368,7 +368,16 @@ namespace transport::hierarchy
             s.info.node_count=std::uint32_t(graph.nodes.size());
             s.info.edge_count=std::uint32_t(graph.links.size());
             s.info.initial_max_row=graph.maximum_row;
-            s.info.global_scale=graph.global_scale;
+             s.info.global_scale=graph.global_scale;
+            float maximum_reflectance=0.f;
+            for(const auto& patch:surfaces)
+                maximum_reflectance=std::max({
+                    maximum_reflectance,
+                    patch.value.albedo.x,patch.value.albedo.y,
+                    patch.value.albedo.z
+                });
+            s.info.operator_norm_upper=maximum_reflectance*
+                graph.maximum_row*graph.global_scale;
             // Validate reciprocity of near-field finite-area leaf links.
             // Clustered links are approximations and are not included here.
             std::unordered_map<std::uint64_t,float> flux;
@@ -639,8 +648,16 @@ namespace transport::hierarchy
         vk::buffer::unmap(s.readback);
         float value=0.f;
         std::memcpy(&value,&bits,sizeof(value));
-        s.info.residual=value;
+         s.info.residual=value;
+        const float contraction=std::max(1e-6f,1.f-s.info.operator_norm_upper);
+        s.info.discrete_error_bound=value/contraction;
         return value;
+    }
+
+    float solver::error_bound() const
+    {
+        if(!state_)throw std::logic_error("hierarchy not initialized");
+        return state_->info.discrete_error_bound;
     }
 
     const statistics& solver::metrics() const
