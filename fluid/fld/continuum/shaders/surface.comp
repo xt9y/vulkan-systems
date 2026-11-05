@@ -206,6 +206,7 @@ void main()
     vec3 pos=near_point+ray*t;
     vec3 normal;
     float thickness=0.;
+    float meniscus=0.;
     if(film)
     {
         float slope_x=(ground_fill(pos.xz+vec2(h,0.))-
@@ -214,6 +215,9 @@ void main()
                        ground_fill(pos.xz-vec2(0.,h)))*.5;
         normal=normalize(vec3(-slope_x,1.,-slope_z));
         thickness=film_height/max(.15,abs(ray.y));
+        // A shallow contact line is most visible through the changing
+        // surface normal, not through an artificial colored tint.
+        meniscus=clamp(length(vec2(slope_x,slope_z))*1.8,0.,1.);
     }
     else
     {
@@ -236,7 +240,20 @@ void main()
     // Water is almost colorless at ordinary viewing thickness. Let the
     // floor/objects behind it and neutral environmental reflections
     // establish its appearance, without a painted blue/green overlay.
-    vec3 behind=texture(scene_hdr,uv).rgb;
+    // Approximate screen-space Snell refraction. Resolve the displacement
+    // in camera axes and reject offsets across opaque depth discontinuities
+    // so nearby cube silhouettes do not acquire transparent fringes.
+    vec3 transmitted=refract(ray,normal,1./1.333);
+    vec3 bend=transmitted-ray;
+    vec3 camera_right=normalize(pc.inverse_vp[0].xyz);
+    vec3 camera_up=normalize(pc.inverse_vp[1].xyz);
+    vec2 shift=vec2(dot(bend,camera_right),-dot(bend,camera_up));
+    vec2 refracted_uv=clamp(
+        uv+shift*min(.014,max(0.,thickness)*.12),
+        vec2(.001),vec2(.999));
+    float refracted_depth=texture(scene_depth,refracted_uv).r;
+    if(abs(refracted_depth-d)>.0015)refracted_uv=uv;
+    vec3 behind=texture(scene_hdr,refracted_uv).rgb;
     float f0=.0204; // n=1.333, normal-incidence dielectric reflectance
     float fresnel=f0+(1.-f0)*pow(1.-clamp(dot(normal,-ray),0.,1.),5.);
     vec3 absorb=exp(-vec3(.11,.075,.05)*thickness);
@@ -245,6 +262,7 @@ void main()
     vec3 half_vector=normalize(light-ray);
     float specular=pow(max(dot(normal,half_vector),0.),128.);
     color=mix(color,vec3(.58),fresnel)+vec3(specular*.55);
+    color+=vec3(.065*meniscus);
     imageStore(liquid_layer,pixel,vec4(color,t));
 }
 #else
