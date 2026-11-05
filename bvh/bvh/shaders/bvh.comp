@@ -48,7 +48,7 @@ int delta(int a,int b)
     uint x=keys[a].x^keys[b].x;
     if(x!=0u)return 31-findMSB(x);
     uint duplicate=uint(a^b);
-    return duplicate==0u?64:64-findMSB(duplicate);
+    return duplicate==0u?64:63-findMSB(duplicate);
 }
 bool overlap(vec3 amin,vec3 amax,vec3 bmin,vec3 bmax)
 {
@@ -100,7 +100,7 @@ void main()
     if(other<=id || other>=pc.sizes.y)return;
     bool asc=(id&pc.sort.y)==0u;
     uvec2 a=keys[id],b=keys[other];
-    if(greater_key(a,b)==asc && a!=b)
+    if(greater_key(a,b)==asc && any(notEqual(a,b)))
     {
         keys[id]=b;
         keys[other]=a;
