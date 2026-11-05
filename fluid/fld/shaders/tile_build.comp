@@ -1,5 +1,6 @@
 #version 450
 layout(local_size_x=64) in;
+const uint tile_capacity=256u;
 struct Particle
 {
     vec4 world;
@@ -55,9 +56,8 @@ void main()
         {
             uint tile=uint(y)*columns+uint(x);
             uint slot=atomicAdd(counts[tile],1u);
-            if(slot<2048u)
-                indices[tile*2048u+slot]=id;
-            // Overflow is flagged by counts>2048 and the renderer checks
-            // the complete particle buffer rather than losing fluid.
+            if(slot<tile_capacity)
+                indices[tile*tile_capacity+slot]=id;
+            // Keep full occupancy count; optics use bounded weighted samples.
         }
 }
