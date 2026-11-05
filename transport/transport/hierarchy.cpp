@@ -23,6 +23,10 @@ namespace transport::hierarchy
         constexpr std::uint32_t invalid=UINT32_MAX;
         constexpr float pi=3.14159265358979323846f;
         vec3 xyz(vec4 v){return {v.x,v.y,v.z};}
+        float component(vec3 v,int axis)
+        {
+            return axis==0?v.x:(axis==1?v.y:v.z);
+        }
 
         struct alignas(16) gpu_node
         {
@@ -109,7 +113,8 @@ namespace transport::hierarchy
                 bool separated=false;
                 for(int i=0;i<3;i++)
                 {
-                    const float p=(&pos.x)[i],d=(&dir.x)[i],e=(&extent.x)[i];
+                    const float p=component(pos,i),d=component(dir,i),
+                                e=component(extent,i);
                     if(std::abs(d)<1e-7f)
                     {
                         if(std::abs(p)>e){separated=true;break;}
@@ -225,7 +230,7 @@ namespace transport::hierarchy
                     {
                         const auto pa=xyz(surface_data[a].value.position_area);
                         const auto pb=xyz(surface_data[b].value.position_area);
-                        return (&pa.x)[axis]<(&pb.x)[axis];
+                        return component(pa,axis)<component(pb,axis);
                     });
                     const auto left=build_tree(first,mid);
                     const auto right=build_tree(mid,last);
