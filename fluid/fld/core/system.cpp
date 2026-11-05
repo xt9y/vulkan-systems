@@ -186,6 +186,7 @@ namespace fld::system
 
             for(std::uint32_t i=0;i<data->pipelines.size();++i)
             {
+                if(i>=11 && !data->bvh_enabled)continue;
                 const auto code=vk::shader::read(paths[i]);
                 auto shader=vk::shader::create(code);
                 try
@@ -282,14 +283,14 @@ namespace fld::system
         barrier(command); // RAW dependency from earlier queued submissions
         for(std::uint32_t sub=0;sub<data->settings.substeps;++sub)
         {
-            dispatch(command,1,data->count,push);         // predict
+            dispatch(command,data->bvh_enabled?11:1,data->count,push); // predict
             dispatch(command,0,data->bucket_count,push); // clear
             dispatch(command,2,data->count,push);         // build spatial hash
             for(std::uint32_t i=0;i<data->settings.pressure_iterations;++i)
             {
                 dispatch(command,3,data->count,push);     // constraints
                 dispatch(command,4,data->count,push);     // Jacobi correction
-                dispatch(command,5,data->count,push);     // apply
+                dispatch(command,data->bvh_enabled?12:5,data->count,push); // apply
                 if(i+1<data->settings.pressure_iterations)
                 {
                     // Each Jacobi iteration updates positions; rebuild cell
@@ -301,7 +302,7 @@ namespace fld::system
             // Rebuild the neighborhood after the final Jacobi correction.
             dispatch(command,0,data->bucket_count,push);
             dispatch(command,2,data->count,push);
-            dispatch(command,6,data->count,push);         // final velocity
+            dispatch(command,data->bvh_enabled?13:6,data->count,push); // final velocity
             dispatch(command,7,data->count,push);         // color gradient
             dispatch(command,8,data->count,push);         // capillary force
             dispatch(command,9,data->count,push);         // neighbor velocity blend
