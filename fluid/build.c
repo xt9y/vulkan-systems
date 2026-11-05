@@ -5,6 +5,7 @@ void build(C_Build *b)
     C_Target *fluid=c_static_library(b,"VulkanFluid");
     c_sources(fluid,"fld/material/*.cpp");
     c_sources(fluid,"fld/continuum/*.cpp");
+    c_sources(fluid,"fld/blood/*.cpp");
     // The old PBF particle implementation remains in Git history. The
     // active library uses only continuum volume/pressure state.
     c_include(fluid,"..");
