@@ -1,23 +1,50 @@
 VulkanTransport
-GPU diffuse patch transport baseline using VulkanEngine only.
-build.c builds the VulkanTransport static library.
 
-transport::patch - surface center, area, normal, albedo, emission
-transport::blocker - axis-aligned visibility obstacle
-transport::init(patches, blockers, shaders)
-transport::record_build(command) - construct dense GPU patch exchange weights
-transport::record_solve(command, even_iterations) - initial Jacobi multibounce solution
-transport::record_delta(command, terms) - update precomputed lighting by propagating emission changes
-transport::update_emission(index, value) - change light after GPU synchronization
-transport::radiance_descriptor() - GPU buffer for consumer renderer
-transport::shutdown()
+Independent static library built by transport/build.c with VulkanEngine.
+Two separate transport backends are provided:
 
-Compile transport.comp four times with glslangValidator -V:
--DTRANSPORT_BUILD for exchange weights
--DTRANSPORT_SOLVE for Jacobi solve (default branch)
--DTRANSPORT_INJECT for source-delta injection
--DTRANSPORT_PROPAGATE for delta-bounce propagation
+transport:: (legacy)
+  Dense GPU patch-exchange prototype in transport.cpp and transport.comp.
+  Quadratic storage and work. Retained for baseline comparisons.
 
-Limitations: O(N^2) memory/work, approximate differential form factors,
-diffuse-only, static geometry until record_build, no sparse active-frontier scheduling.
-Not a completed Causal Radiance Graph or proven real-time GI breakthrough.
+transport::hierarchy::solver (new)
+  hierarchy.hpp, hierarchy.cpp, shaders/hierarchy.comp
+  CPU spatial hierarchy with adaptive cluster/patch interaction selection.
+  GPU compressed row (CSR) exchange links, area-weighted cluster reduction.
+  Physically reciprocal symmetric 2x2x2x2 quadrature for individual near
+  patch pairs; approximate center exchange for distant source clusters.
+  Adaptive visibility queries against oriented boxes at graph build time.
+  Static multibounce diffuse transport using ping-pong GPU Jacobi passes.
+  Direct bounce separated for high-resolution primary-light reconstruction.
+  Changed-emission Neumann delta propagation without a dense rebuild.
+  Residual checks with GPU atomic maximum and host-visible readback.
+  Discrete solve can continue with record_refine() to a chosen tolerance.
+  Graph stats: surface/node/link counts, build ms, row sums, global scale,
+  sampled reciprocity error, and actual discrete equation residual.
+
+GPU compiler variants:
+  glslangValidator -V -DHIER_SEED hierarchy.comp
+  glslangValidator -V -DHIER_AGGREGATE hierarchy.comp
+  glslangValidator -V -DHIER_GATHER hierarchy.comp
+  glslangValidator -V -DHIER_EMISSION hierarchy.comp
+  glslangValidator -V -DHIER_DIRECT hierarchy.comp
+  glslangValidator -V -DHIER_INJECT hierarchy.comp
+  glslangValidator -V -DHIER_PROPAGATE hierarchy.comp
+  glslangValidator -V -DHIER_RESIDUAL hierarchy.comp
+
+Important limits:
+  This is an experimental adaptive hierarchical diffuse approximation,
+  not exact GI or a new algorithm without prior art.
+  Dense all-pair storage is avoided; finite-memory links are not proof
+  of O(N) cost for every geometry and visibility arrangement.
+  GPU node aggregation currently loops over patch ranges (O(N log N)
+  work for balanced trees), not an optimized multilevel reduction.
+  Geometry-change invalidation/rebuilds are not yet incremental.
+  Visibility uses oriented boxes rather than full triangle BVH.
+  Far-cluster visibility checks are sampled and not conservative.
+  Global row scaling prevents amplification but is a biased safeguard.
+  Surface reflectance is RGB Lambertian; specular, glass, volumes,
+  spectral rendering, caustics and unbiased correction are absent.
+  A low equation residual means convergence of the approximate
+  operator, not physical correctness of every light transport path.
+  Actual GPU timings and image error versus path tracing need measurements.

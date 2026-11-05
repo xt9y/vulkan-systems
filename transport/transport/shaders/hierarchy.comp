@@ -1,0 +1,115 @@
+#version 450
+layout(local_size_x=128) in;
+
+struct Patch { vec4 position_area; vec4 normal; vec4 albedo; vec4 emission; };
+struct Node {
+    vec4 center_area;
+    vec4 normal_spread;
+    vec4 extent_radius;
+    uvec4 range_children; // begin,count,left,right
+};
+struct Link { uint source; float factor; };
+
+layout(std430,binding=0) readonly buffer Surfaces { Patch patches[]; };
+layout(std430,binding=1) readonly buffer Nodes { Node nodes[]; };
+layout(std430,binding=2) readonly buffer Order { uint order[]; };
+layout(std430,binding=3) readonly buffer Offsets { uint offsets[]; };
+layout(std430,binding=4) readonly buffer Links { Link links[]; };
+layout(std430,binding=5) readonly buffer InputRadiance { vec4 input_light[]; };
+layout(std430,binding=6) writeonly buffer OutputRadiance { vec4 output_light[]; };
+layout(std430,binding=7) buffer NodeRadiance { vec4 node_light[]; };
+layout(std430,binding=8) writeonly buffer DirectRadiance { vec4 first_bounce[]; };
+layout(std430,binding=9) buffer EmissionHistory { vec4 old_emission[]; };
+layout(std430,binding=10) buffer FinalRadiance { vec4 final_light[]; };
+layout(std430,binding=11) buffer ResidualValue { uint maximum_residual; };
+layout(push_constant) uniform Parameters {
+    uint patch_count;
+    uint node_count;
+    uint unused0;
+    uint unused1;
+} param;
+
+vec3 gather(uint i)
+{
+    vec3 sum=vec3(0);
+    for(uint j=offsets[i];j<offsets[i+1];j++)
+    {
+        Link edge=links[j];
+        sum+=node_light[edge.source].rgb*edge.factor;
+    }
+    return patches[i].albedo.rgb*sum;
+}
+
+#if defined(HIER_AGGREGATE) || defined(HIER_EMISSION)
+void main()
+{
+    uint i=gl_GlobalInvocationID.x;
+    if(i>=param.node_count)return;
+    Node n=nodes[i];
+    vec3 value=vec3(0);
+    for(uint j=0;j<n.range_children.y;j++)
+    {
+        uint patch_id=order[n.range_children.x+j];
+        float area=patches[patch_id].position_area.w;
+#ifdef HIER_EMISSION
+        value+=patches[patch_id].emission.rgb*area;
+#else
+        value+=input_light[patch_id].rgb*area;
+#endif
+    }
+    node_light[i]=vec4(value/max(n.center_area.w,1e-8),0);
+}
+#elif defined(HIER_SEED)
+void main()
+{
+    uint i=gl_GlobalInvocationID.x;
+    if(i>=param.patch_count)return;
+    output_light[i]=vec4(patches[i].emission.rgb,1);
+}
+#elif defined(HIER_GATHER)
+void main()
+{
+    uint i=gl_GlobalInvocationID.x;
+    if(i>=param.patch_count)return;
+    output_light[i]=vec4(patches[i].emission.rgb+gather(i),1);
+}
+#elif defined(HIER_DIRECT)
+void main()
+{
+    uint i=gl_GlobalInvocationID.x;
+    if(i>=param.patch_count)return;
+    first_bounce[i]=vec4(gather(i),0);
+}
+#elif defined(HIER_INJECT)
+void main()
+{
+    uint i=gl_GlobalInvocationID.x;
+    if(i>=param.patch_count)return;
+    vec3 delta=patches[i].emission.rgb-old_emission[i].rgb;
+    output_light[i]=vec4(delta,0);
+    final_light[i].rgb+=delta;
+    old_emission[i]=patches[i].emission;
+}
+#elif defined(HIER_PROPAGATE)
+void main()
+{
+    uint i=gl_GlobalInvocationID.x;
+    if(i>=param.patch_count)return;
+    vec3 bounce=gather(i);
+    output_light[i]=vec4(bounce,0);
+    final_light[i].rgb+=bounce;
+}
+#elif defined(HIER_RESIDUAL)
+void main()
+{
+    uint i=gl_GlobalInvocationID.x;
+    if(i>=param.patch_count)return;
+    vec3 estimate=patches[i].emission.rgb+gather(i);
+    vec3 diff=abs(input_light[i].rgb-estimate);
+    float error=max(max(diff.r,diff.g),diff.b);
+    if(!isnan(error)&&!isinf(error))
+        atomicMax(maximum_residual,floatBitsToUint(error));
+}
+#else
+#error Missing HIER_* shader variant
+#endif
