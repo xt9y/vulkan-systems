@@ -19,10 +19,10 @@ namespace fld::continuum
         struct render_push
         {
             mat4 inverse_vp;
-            vec4 origin_cell,tint;
+            vec4 origin_cell;
             std::array<std::uint32_t,4> grid,screen;
         };
-        static_assert(sizeof(render_push)==128);
+        static_assert(sizeof(render_push)==112);
 
         struct frame
         {
@@ -462,10 +462,6 @@ namespace fld::continuum
         rp.inverse_vp=inverse(target.view_projection);
         const auto& o=data->settings;
         rp.origin_cell={o.origin.x,o.origin.y,o.origin.z,o.cell_size};
-        rp.tint={std::clamp(target.debug_color.x,0.f,1.f),
-                 std::clamp(target.debug_color.y,0.f,1.f),
-                 std::clamp(target.debug_color.z,0.f,1.f),
-                 std::clamp(target.debug_opacity,0.f,1.f)};
         rp.grid={o.width,o.height,o.depth,data->support_layer};
         rp.screen={data->low_width,data->low_height,
                    target.reversed_depth?1u:0u,data->active_vof};
