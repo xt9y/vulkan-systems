@@ -25,7 +25,12 @@ The current implementation does not yet have APIC/FLIP, conservative PLIC
 interface reconstruction, or a coupled shallow-water/thin-film specialization.
 Do not claim those features are implemented.
 
-The whole grid is allocated on the GPU. Default 64 x 40 x 64 at 10 cm cells.
+The whole grid is allocated on the GPU. Library defaults are
+64 x 40 x 64 at 10 cm cells; the current vulkan-game room profile is
+72 x 48 x 72 at 14.5 cm cells, covering the actual walled test area.
+The grid must include the solids that bound the fluid. Walls at the edge of
+a finite grid remain a modelling limitation; room-scale extents must not be
+smaller than the visible play area.
 Simulation and rendering run as ordered GPU compute passes; they cannot be
 correctly collapsed into one dispatch because pressure iterations require
 global synchronization. Timestep is capped to avoid obvious CFL violations.
@@ -39,9 +44,19 @@ API:
   fld::continuum::shutdown()
 
 VulkanEngine must be initialized first. The host provides renderer image views,
-scene boxes, color and shader paths. Generic library knows no game-specific
-weapons, characters or blood. Independent bvh/ library remains reusable; the
-current continuum solver rasterizes a small collider set only once at startup.
+scene collider boxes and shader paths. The liquid shader uses neutral clear-water
+transmission, thickness-based absorption and dielectric Fresnel reflection;
+no game-specific tint or debug color input is required. The floor film draws
+only where nontrivial local VOF is supported by a wet neighborhood and actual
+solid geometry, so low-concentration numerical mist does not become a giant
+rectangular render mask. The full-resolution composite rejects mismatched
+opaque depths near scene silhouettes, avoiding low-resolution bleed around
+cubes. These visibility thresholds are not a substitute for higher-order VOF
+reconstruction; numerical diffusion still exists in the first-order solver.
+
+Generic library knows no game-specific weapons, characters or blood.
+Independent bvh/ remains reusable; the current continuum solver rasterizes
+a small collider set at startup.
 
 Validation required on actual GPU:
   compile seven grid compute stages, volume render and upscaler;
