@@ -67,6 +67,9 @@ namespace fld::continuum
         vk::ImageLayout depth_layout=vk::ImageLayout::eDepthStencilReadOnlyOptimal;
         vk::ImageLayout color_layout=vk::ImageLayout::eGeneral;
         bool reversed_depth=false;
+        // RGB shallow pigment and an optical-density coefficient, only used
+        // by materials whose surface shader enables pigment absorption.
+        vec4 optical_pigment{.68f,.055f,.041f,26.f};
     };
 
     // Generic GPU continuum liquid: a staggered MAC velocity field,
