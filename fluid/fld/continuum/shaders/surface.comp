@@ -154,7 +154,7 @@ void main()
     ivec2 low=imageSize(liquid_layer);
     vec2 coord=uv*vec2(low)-vec2(.5);
     ivec2 first=ivec2(floor(coord));
-    vec2 fract=fract(coord);
+    vec2 weights=fract(coord);
     float d=texelFetch(scene_depth,pixel,0).r;
     bool reverse=pc.screen.z!=0u;
     bool background=reverse?d<=.000001:d>=.999999;
@@ -175,8 +175,8 @@ void main()
         ivec2 sample_pos=clamp(first+ivec2(x,y),ivec2(0),low-1);
         vec4 sample_color=imageLoad(liquid_layer,sample_pos);
         if(sample_color.a<0. || sample_color.a>scene_t+.025)continue;
-        float weight=(x==0?1.-fract.x:fract.x)*
-                     (y==0?1.-fract.y:fract.y);
+        float weight=(x==0?1.-weights.x:weights.x)*
+                     (y==0?1.-weights.y:weights.y);
         fluid_color+=sample_color.rgb*weight;
         coverage+=weight;
     }
