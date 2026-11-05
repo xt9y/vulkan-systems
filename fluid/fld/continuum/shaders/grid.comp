@@ -11,7 +11,7 @@ layout(push_constant) uniform Parameters
     vec4 origin_cell;       // xyz origin, w cell width (metres)
     vec4 spawn_radius;      // xyz initial sphere center, w initial radius
     vec4 physical;          // dt, density, gravity Y, kinematic viscosity
-    vec4 interface_data;    // surface tension, contact angle radians, unused
+    vec4 interface_data;    // surface tension, advance/recede angles, unused
     uvec4 dims;             // nx,ny,nz,number of AABBs
     uvec4 flags;            // active VOF (0/1), pressure source (0/1)
     vec4 rheology;          // mu_0, mu_infinity, lambda, n (Carreau)
@@ -142,16 +142,18 @@ vec3 center(ivec3 c){return pc.origin_cell.xyz+
                              (vec3(c)+vec3(.5))*pc.origin_cell.w;}
 bool blocked_world(vec3 world)
 {
-    // Cells are finite volumes. Testing only the centre misses thin slabs,
-    // including the rendered floor when it falls between grid cell centres.
-    vec3 half_cell=vec3(pc.origin_cell.w*.5);
-    vec3 cell_low=world-half_cell;
-    vec3 cell_high=world+half_cell;
-    float epsilon=pc.origin_cell.w*1e-4;
+    // Occupy a cell only when most of its actual volume intersects a
+    // collider. The old any-overlap rule padded every cube and wall by up
+    // to one grid cell, leaving an obvious dry moat around its edges.
+    float h=pc.origin_cell.w;
+    vec3 half_cell=vec3(.5*h);
+    vec3 lo=world-half_cell,hi=world+half_cell;
+    float cell_volume=h*h*h;
     for(uint i=0u;i<pc.dims.w;++i)
     {
-        if(all(greaterThan(cell_high,boxes[i].lo.xyz+vec3(epsilon))) &&
-           all(lessThan(cell_low,boxes[i].hi.xyz-vec3(epsilon))))
+        vec3 overlap=max(vec3(0.),
+            min(hi,boxes[i].hi.xyz)-max(lo,boxes[i].lo.xyz));
+        if(overlap.x*overlap.y*overlap.z>.50*cell_volume)
             return true;
     }
     return false;
@@ -176,9 +178,22 @@ vec3 density_normal(ivec3 c)
         vec2 horizontal=result.xz;
         float d=length(horizontal);
         if(d>1e-5)
-            result=vec3(horizontal.x/d*sin(pc.interface_data.y),
-                        cos(pc.interface_data.y),
-                        horizontal.y/d*sin(pc.interface_data.y));
+        {
+            // A coarse advancing/receding contact-angle model. The liquid
+            // front chooses its angle from tangential motion rather than
+            // always forcing the advancing angle. It reduces perpetual
+            // retraction but is not a sub-cell dynamic wetting solver.
+            vec2 front=horizontal/d;
+            vec2 tangent=vec2(
+                .5*(face_u(c,0u)+face_u(c+ivec3(1,0,0),0u)),
+                .5*(face_w(c,0u)+face_w(c+ivec3(0,0,1),0u)));
+            float contact_speed=dot(tangent,front);
+            float advance=smoothstep(-.018,.018,contact_speed);
+            float angle=mix(pc.interface_data.z,
+                            pc.interface_data.y,advance);
+            result=vec3(front.x*sin(angle),cos(angle),
+                        front.y*sin(angle));
+        }
     }
     return result;
 }
