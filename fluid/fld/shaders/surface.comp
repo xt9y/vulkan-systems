@@ -74,11 +74,23 @@ float field(vec3 p, uint tile, float h)
 
 vec3 gradient(vec3 p,uint tile,float h)
 {
-    float step_length = max(h*.13, .0003);
-    vec3 dx=vec3(step_length,0,0),dy=vec3(0,step_length,0),dz=vec3(0,0,step_length);
-    return vec3(field(p+dx,tile,h)-field(p-dx,tile,h),
-                field(p+dy,tile,h)-field(p-dy,tile,h),
-                field(p+dz,tile,h)-field(p-dz,tile,h));
+    // Analytic poly6 derivative: one neighbor traversal instead of six
+    // extra complete density evaluations per shaded liquid pixel.
+    vec3 g=vec3(0);
+    uint count=counts[tile];
+    const float h2=h*h;
+    const float c=-1890.0/(64.0*pi*pow(h,9.0));
+    for(uint i=0u;i<(count>256u?pc.sizes.w:count);++i)
+    {
+        uint id=count>256u?i:indices[tile*256u+i];
+        if(id>=pc.sizes.w)continue;
+        vec3 d=p-particles[id].world.xyz;
+        float r2=dot(d,d);
+        if(r2>=h2)continue;
+        float q=h2-r2;
+        g+=c*q*q*particles[id].properties.x*d;
+    }
+    return g;
 }
 
 vec2 sphere_interval(vec3 ro, vec3 rd, vec3 c, float r)
@@ -141,7 +153,7 @@ void main()
 
     // Slightly lower density threshold keeps viscous neighboring droplets
     // visually connected into an isosurface instead of isolated beads.
-    const float iso=.34;
+    const float iso=.25;
     float t=max(0.0,start_t);
     float last_t=t;
     bool found=false;
@@ -179,18 +191,27 @@ void main()
         if(dot(normal,ray)>0.0)normal=-normal;
         // Optical thickness through a smooth fluid reconstruction.
         float at=t;
-        for(int k=0;k<24;++k)
+        for(int k=0;k<16;++k)
         {
-            at+=h*.32;
+            at+=h*.38;
             if(at>end_t || at>t+.35)break;
             float density=field(near_point+ray*at,tile,h);
-            thickness+=h*.32*clamp(density,0.0,1.0);
+            thickness+=h*.38*clamp(density,0.0,1.0);
             if(k>2 && density<.10)break;
         }
         thickness=max(h*.35,thickness);
     }
     else
     {
+        // The bulk liquid is a connected implicit surface; never draw
+        // individual seed spheres just because a ray missed its threshold.
+        // Keep the analytic path only for genuinely isolated small droplets
+        // whose screen tile contains few neighbors.
+        if(count>12u)
+        {
+            imageStore(liquid_output,pixel,texelFetch(scene_color,pixel,0));
+            return;
+        }
         // A disconnected tiny drop cannot reach the bulk iso-threshold.
         // Free droplets minimize surface area under surface tension, so
         // render their true-volume spheres rather than billboard capsules.

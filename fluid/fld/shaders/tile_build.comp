@@ -37,7 +37,7 @@ void main()
     uint columns=(pc.sizes.x+15u)/16u;
     uint rows=(pc.sizes.y+15u)/16u;
     vec2 center=(clip.xy/clip.w*.5+.5)*vec2(pc.sizes.xy);
-    float h=pc.lighting.w*2.27;
+    float h=pc.lighting.w*max(1.5,float((pc.sizes.z>>8u)&65535u)/100.0);
     // Conservative screen-space kernel support plus one full tile halo.
     float projection=abs(pc.transform[1][1]);
     float r=clamp(h*projection*float(pc.sizes.y)*.5/clip.w,1.0,2048.0)+18.0;

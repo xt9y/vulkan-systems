@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace fld
 {
@@ -21,6 +22,13 @@ namespace fld
     };
     static_assert(sizeof(particle)==64);
 
+    struct alignas(16) box
+    {
+        vec4 minimum{}; // xyz world bounds; w unused
+        vec4 maximum{};
+    };
+    static_assert(sizeof(box)==32);
+
     struct options
     {
         properties liquid{};
@@ -31,6 +39,9 @@ namespace fld
         float smoothing_radius=.102f;
         float floor_height=0.f;
         vec3 gravity{0.f,-9.81f,0.f};
+        // World-space static colliders; supplied by the game, never hard-coded
+        // into the generic fluid solver. Boxes also cover rigid props/walls.
+        std::vector<box> colliders;
     };
 
     struct drop
@@ -42,6 +53,6 @@ namespace fld
 
     // Each path is a SPIR-V compute shader compiled by the host's build.
     // clear, predict, build, lambda, delta, apply, finalize,
-    // surface-normal estimate, capillary force.
-    using shader_paths=std::array<std::string,9>;
+    // surface-normal estimate, capillary force, XSPH viscosity, apply.
+    using shader_paths=std::array<std::string,11>;
 }
