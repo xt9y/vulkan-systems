@@ -239,6 +239,49 @@ void main()
             }
         }
     }
+    // The direct top-surface intersection above is ideal for downward
+    // rays. At grazing angles the ray can travel through the side of a
+    // sub-cell film without ever intersecting its horizontal top plane.
+    // Find the first entry into the occupied ground-height field only
+    // inside its one-cell vertical slab. This is a local fallback, not
+    // a second displaced or independently rendered fluid surface.
+    if(pc.grid.w>0u && !film)
+    {
+        float support_y=pc.origin_cell.y+float(pc.grid.w)*h;
+        float slab_start=entry;
+        float slab_end=hit?min(t,exit_t):exit_t;
+        if(abs(ray.y)>1e-6)
+        {
+            float lower=(support_y-near_point.y)/ray.y;
+            float upper=(support_y+h-near_point.y)/ray.y;
+            slab_start=max(slab_start,min(lower,upper));
+            slab_end=min(slab_end,max(lower,upper));
+        }
+        else if(near_point.y<support_y || near_point.y>support_y+h)
+            slab_end=slab_start;
+        float march_step=h*.40;
+        if(slab_start<slab_end)
+        {
+            for(int i=0;i<128;++i)
+            {
+                float probe_t=slab_start+float(i)*march_step;
+                if(probe_t>=slab_end || probe_t>=scene_t-.003)break;
+                vec3 probe=near_point+ray*probe_t;
+                float f=ground_fill(probe.xz);
+                if(f<=.045 || probe.y<support_y-.001 ||
+                   probe.y>support_y+h*f)continue;
+                vec2 support=ground_support(probe.xz);
+                if(support.x<=.11 || support.y<=.05)continue;
+                hit=true;
+                film=true;
+                t=probe_t;
+                film_fill=f;
+                film_core=support.x;
+                film_height=h*f;
+                break;
+            }
+        }
+    }
     if(!hit)
     {
         imageStore(liquid_layer,pixel,vec4(0.,0.,0.,-1.));return;
