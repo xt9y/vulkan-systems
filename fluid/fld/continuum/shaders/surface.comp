@@ -424,53 +424,84 @@ void main()
         vec3 ray=normalize(far_point-near_point);
         scene_t=dot(unproject(ndc,d)-near_point,ray);
     }
-    vec3 fluid_color=vec3(0.);
-    float coverage=0.;
+    vec3 opaque_world=background?vec3(0.):unproject(ndc,d);
+    vec4 candidates[4];
+    vec2 candidate_uv[4];
+    float weights[4];
+    float anchor_weight=-1.;
+    float anchor_depth=0.;
+    int candidates_count=0;
     for(int y=0;y<2;++y)
     for(int x=0;x<2;++x)
     {
         ivec2 sample_pos=clamp(first+ivec2(x,y),ivec2(0),low-1);
         vec4 sample_color=imageLoad(liquid_layer,sample_pos);
         if(sample_color.a<0.)continue;
-        // The half-resolution ray must see the same scene surface as
-        // this full-resolution pixel. Bilinear filtering across a cube
-        // silhouette otherwise pulls water from the floor onto the cube.
         vec2 sample_uv=(vec2(sample_pos)+.5)/vec2(low);
-        // Depth must be fetched without bilinear interpolation: filtering
-        // depth across cube silhouettes creates fictitious intermediate
-        // surfaces, which in turn makes visible liquid fringes.
         ivec2 source_pixel=clamp(
             ivec2(sample_uv*vec2(pc.screen.xy)),
             ivec2(0),ivec2(pc.screen.xy)-1);
-        float sample_depth=texelFetch(scene_depth,source_pixel,0).r;
-        bool sample_background=reverse?sample_depth<=.000001:
-                                      sample_depth>=.999999;
-        if(sample_background!=background)continue;
+        float source_depth=texelFetch(scene_depth,source_pixel,0).r;
+        bool source_background=reverse?source_depth<=.000001:
+                                       source_depth>=.999999;
+        if(source_background!=background)continue;
         if(!background)
         {
-            vec2 sample_ndc=sample_uv*2.-1.;
-            vec3 sample_near=unproject(sample_ndc,reverse?.999:.001);
-            vec3 sample_far=unproject(sample_ndc,reverse?.001:.999);
-            vec3 sample_ray=normalize(sample_far-sample_near);
-            float sample_t=dot(unproject(sample_ndc,sample_depth)-
-                               sample_near,sample_ray);
-            // The liquid depth and the scene depth here are from the SAME
-            // low-resolution ray. Previously we tested the liquid depth
-            // against another pixel's ray distance with 4 mm tolerance,
-            // wrongly removing shallow water on flat floors.
-            if(sample_color.a>sample_t+.012)continue;
-            // Also require that the sampled opaque geometry belongs to
-            // the receiving pixel's surface, to avoid cube-edge halos.
-            if(abs(sample_t-scene_t)>max(.09,.035*scene_t))continue;
+            vec2 source_ndc=sample_uv*2.-1.;
+            vec3 source_scene=unproject(source_ndc,source_depth);
+            vec3 source_near=unproject(source_ndc,reverse?.999:.001);
+            vec3 source_far=unproject(source_ndc,reverse?.001:.999);
+            vec3 source_ray=normalize(source_far-source_near);
+            float source_t=dot(source_scene-source_near,source_ray);
+            // Accept a liquid hit only if it is in front of the same
+            // opaque surface and both rays land on the same geometric
+            // neighborhood. Comparing only radial depth admits samples
+            // from an adjacent cube side, producing a double edge.
+            if(sample_color.a>source_t+.006)continue;
+            if(length(source_scene-opaque_world)>
+               max(.11,.012*scene_t))continue;
         }
         float weight=(x==0?1.-weights.x:weights.x)*
                      (y==0?1.-weights.y:weights.y);
-        fluid_color+=sample_color.rgb*weight;
+        // Preserve the closest surface sheet at the dominant pixel
+        // rather than averaging unrelated front/back intersections.
+        candidates[candidates_count]=sample_color;
+        candidate_uv[candidates_count]=sample_uv;
+        weights[candidates_count]=weight;
+        if(weight>anchor_weight)
+        {
+            anchor_weight=weight;
+            anchor_depth=sample_color.a;
+        }
+        ++candidates_count;
+    }
+    vec3 correction=vec3(0.);
+    float coverage=0.;
+    for(int i=0;i<candidates_count;++i)
+    {
+        vec4 sample_color=candidates[i];
+        if(abs(sample_color.a-anchor_depth)>
+           max(.025,.009*anchor_depth))continue;
+        float weight=weights[i];
+#if defined(FLD_BLOOD)
+        // Do not upscale a second copy of the checkerboard. Composite
+        // only the optical change relative to the actual full-resolution
+        // scene pixel; otherwise it creates pink ghosts and doubled edges.
+        vec3 reference=texture(scene_hdr,candidate_uv[i]).rgb;
+        correction+=(sample_color.rgb-reference)*weight;
+#else
+        correction+=sample_color.rgb*weight;
+#endif
         coverage+=weight;
     }
     vec3 scene=texelFetch(scene_hdr,pixel,0).rgb;
+#if defined(FLD_BLOOD)
+    vec3 out_color=scene+(coverage>1e-5?
+        correction/coverage*clamp(coverage,0.,1.):vec3(0.));
+#else
     vec3 out_color=coverage>1e-5?
-        mix(scene,fluid_color/coverage,clamp(coverage,0.,1.)):scene;
+        mix(scene,correction/coverage,clamp(coverage,0.,1.)):scene;
+#endif
     imageStore(final_color,pixel,vec4(out_color,1.));
 }
 #endif
