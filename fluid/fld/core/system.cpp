@@ -69,7 +69,7 @@ namespace fld::system
            !settings.substeps || settings.spacing<=0.f ||
            settings.smoothing_radius<settings.spacing*1.8f ||
            initial.radius<=settings.spacing ||
-           settings.colliders.size()>64 ||
+           settings.colliders.size()>65536 ||
            !vk::device::get()->handle)
             throw std::invalid_argument("Invalid VulkanFluid GPU settings");
         for(const auto &wall:settings.colliders)
