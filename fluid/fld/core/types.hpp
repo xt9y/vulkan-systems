@@ -57,5 +57,5 @@ namespace fld
     // Each path is a SPIR-V compute shader compiled by the host's build.
     // clear, predict, build, lambda, delta, apply, finalize,
     // surface-normal estimate, capillary force, XSPH viscosity, apply.
-    using shader_paths=std::array<std::string,11>;
+    using shader_paths=std::array<std::string,14>; // plus 3 BVH collision variants
 }
