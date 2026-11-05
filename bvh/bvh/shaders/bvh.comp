@@ -1,0 +1,233 @@
+#version 450
+layout(local_size_x=128,local_size_y=1,local_size_z=1) in;
+
+struct Box { vec4 lo; vec4 hi; };
+struct Node { vec4 lo; vec4 hi; uvec4 links; };
+struct Ray { vec4 origin_max; vec4 direction_min; };
+struct RayHit { uint primitive; float distance; uint visited; uint flags; };
+
+layout(std430,set=0,binding=0) readonly buffer Primitives { Box primitives[]; };
+layout(std430,set=0,binding=1) buffer Keys { uvec2 keys[]; };
+layout(std430,set=0,binding=2) coherent buffer Nodes { Node nodes[]; };
+layout(std430,set=0,binding=3) coherent buffer Visits { uint visits[]; };
+layout(std430,set=0,binding=4) readonly buffer Queries { Box queries[]; };
+layout(std430,set=0,binding=5) buffer QueryCount { uint hit_counts[]; };
+layout(std430,set=0,binding=6) buffer QueryHits { uint hit_ids[]; };
+layout(std430,set=0,binding=7) readonly buffer Rays { Ray rays[]; };
+layout(std430,set=0,binding=8) buffer RayHits { RayHit ray_hits[]; };
+
+layout(push_constant) uniform Params
+{
+    vec4 world_min;
+    vec4 world_max;
+    uvec4 sizes;   // primitives, padded, query count, max hits per query
+    uvec4 sort;    // bitonic j, k, unused, unused
+} pc;
+
+const uint invalid=0xffffffffu;
+uint expand10(uint v)
+{
+    v=(v | (v<<16u))&0x030000ffu;
+    v=(v | (v<<8u))&0x0300f00fu;
+    v=(v | (v<<4u))&0x030c30c3u;
+    v=(v | (v<<2u))&0x09249249u;
+    return v;
+}
+uint morton(vec3 p)
+{
+    uvec3 q=uvec3(clamp(p,vec3(0.),vec3(.999999))*1024.);
+    return (expand10(q.x)<<2u)|(expand10(q.y)<<1u)|expand10(q.z);
+}
+bool greater_key(uvec2 a,uvec2 b)
+{
+    return a.x>b.x || (a.x==b.x && a.y>b.y);
+}
+int delta(int a,int b)
+{
+    if(b<0 || b>=int(pc.sizes.x))return -1;
+    uint x=keys[a].x^keys[b].x;
+    if(x!=0u)return 31-findMSB(x);
+    uint duplicate=uint(a^b);
+    return duplicate==0u?64:64-findMSB(duplicate);
+}
+bool overlap(vec3 amin,vec3 amax,vec3 bmin,vec3 bmax)
+{
+    return all(lessThanEqual(amin,bmax)) &&
+           all(greaterThanEqual(amax,bmin));
+}
+bool intersect_ray(Ray ray,vec3 lo,vec3 hi,float limit,out float entry)
+{
+    float near_t=ray.direction_min.w;
+    float far_t=min(ray.origin_max.w,limit);
+    for(int c=0;c<3;++c)
+    {
+        float d=ray.direction_min[c];
+        float o=ray.origin_max[c];
+        if(abs(d)<1e-9)
+        {
+            if(o<lo[c] || o>hi[c])return false;
+        }
+        else
+        {
+            float inv=1./d;
+            float t0=(lo[c]-o)*inv;
+            float t1=(hi[c]-o)*inv;
+            near_t=max(near_t,min(t0,t1));
+            far_t=min(far_t,max(t0,t1));
+            if(near_t>far_t)return false;
+        }
+    }
+    entry=near_t;
+    return true;
+}
+
+void main()
+{
+    uint id=gl_GlobalInvocationID.x;
+#if defined(BVH_KEYS)
+    if(id>=pc.sizes.y)return;
+    if(id>=pc.sizes.x)
+    {
+        keys[id]=uvec2(invalid,invalid);
+        return;
+    }
+    vec3 center=(primitives[id].lo.xyz+primitives[id].hi.xyz)*.5;
+    vec3 extent=max(pc.world_max.xyz-pc.world_min.xyz,vec3(1e-10));
+    keys[id]=uvec2(morton((center-pc.world_min.xyz)/extent),id);
+#elif defined(BVH_SORT)
+    if(id>=pc.sizes.y)return;
+    uint other=id^pc.sort.x;
+    if(other<=id || other>=pc.sizes.y)return;
+    bool asc=(id&pc.sort.y)==0u;
+    uvec2 a=keys[id],b=keys[other];
+    if(greater_key(a,b)==asc && a!=b)
+    {
+        keys[id]=b;
+        keys[other]=a;
+    }
+#elif defined(BVH_CLEAR)
+    uint total=pc.sizes.x*2u-1u;
+    if(id<total)
+    {
+        nodes[id].links=uvec4(invalid);
+        nodes[id].lo=vec4(0);
+        nodes[id].hi=vec4(0);
+    }
+    if(id+1u<pc.sizes.x)visits[id]=0u;
+#elif defined(BVH_TOPOLOGY)
+    int n=int(pc.sizes.x);
+    int i=int(id);
+    if(i>=n-1)return;
+    int direction=delta(i,i+1)>delta(i,i-1)?1:-1;
+    int delta_min=delta(i,i-direction);
+    int lmax=2;
+    while(delta(i,i+lmax*direction)>delta_min && lmax<n*2)
+        lmax*=2;
+    int l=0;
+    for(int step=lmax/2;step>0;step/=2)
+        if(delta(i,i+(l+step)*direction)>delta_min)l+=step;
+    int j=i+l*direction;
+    int delta_node=delta(i,j);
+    int s=0;
+    for(int step=(l+1)/2;step>0;step=(step+1)/2)
+    {
+        if(s+step<l && delta(i,i+(s+step)*direction)>delta_node)
+            s+=step;
+        if(step==1)break;
+    }
+    int split=i+s*direction+min(direction,0);
+    uint low=uint(min(i,j)),high=uint(max(i,j));
+    uint left=uint(split)==low?uint(n-1+split):uint(split);
+    uint right=uint(split+1)==high?uint(n+split):uint(split+1);
+    nodes[id].links.x=left;
+    nodes[id].links.y=right;
+    nodes[left].links.z=id;
+    nodes[right].links.z=id;
+#elif defined(BVH_LEAVES)
+    if(id>=pc.sizes.x)return;
+    uint node_id=pc.sizes.x-1u+id;
+    uint primitive=keys[id].y;
+    if(primitive>=pc.sizes.x)return;
+    nodes[node_id].lo=primitives[primitive].lo;
+    nodes[node_id].hi=primitives[primitive].hi;
+    nodes[node_id].links.w=primitive;
+#elif defined(BVH_REFIT)
+    if(id>=pc.sizes.x || pc.sizes.x<=1u)return;
+    uint parent=nodes[pc.sizes.x-1u+id].links.z;
+    while(parent!=invalid)
+    {
+        memoryBarrierBuffer();
+        // First arriving leaf waits for its sibling subtree.
+        if(atomicAdd(visits[parent],1u)==0u)break;
+        memoryBarrierBuffer();
+        uint a=nodes[parent].links.x,b=nodes[parent].links.y;
+        nodes[parent].lo=vec4(min(nodes[a].lo.xyz,nodes[b].lo.xyz),0);
+        nodes[parent].hi=vec4(max(nodes[a].hi.xyz,nodes[b].hi.xyz),0);
+        memoryBarrierBuffer();
+        parent=nodes[parent].links.z;
+    }
+#elif defined(BVH_OVERLAP)
+    if(id>=pc.sizes.z)return;
+    uint count=0u,flags=0u;
+    uint stack[96];
+    int top=0;
+    stack[top++]=0u;
+    Box query=queries[id];
+    while(top>0)
+    {
+        uint current=stack[--top];
+        Node n=nodes[current];
+        if(!overlap(n.lo.xyz,n.hi.xyz,query.lo.xyz,query.hi.xyz))
+            continue;
+        if(n.links.w!=invalid)
+        {
+            if(count<pc.sizes.w)
+                hit_ids[id*pc.sizes.w+count]=n.links.w;
+            else flags=0x40000000u;
+            ++count;
+        }
+        else
+        {
+            if(top+2>96){flags=0x80000000u;break;}
+            stack[top++]=n.links.x;
+            stack[top++]=n.links.y;
+        }
+    }
+    hit_counts[id]=(count&0x3fffffffu)|flags;
+#elif defined(BVH_RAY)
+    if(id>=pc.sizes.z)return;
+    Ray ray=rays[id];
+    RayHit hit;
+    hit.primitive=invalid;
+    hit.distance=ray.origin_max.w;
+    hit.visited=0u;
+    hit.flags=0u;
+    uint stack[96];
+    int top=0;
+    stack[top++]=0u;
+    while(top>0)
+    {
+        uint index=stack[--top];
+        Node n=nodes[index];
+        float distance;
+        ++hit.visited;
+        if(!intersect_ray(ray,n.lo.xyz,n.hi.xyz,hit.distance,distance))
+            continue;
+        if(n.links.w!=invalid)
+        {
+            if(distance<hit.distance)
+            {
+                hit.distance=distance;
+                hit.primitive=n.links.w;
+            }
+        }
+        else
+        {
+            if(top+2>96){hit.flags|=1u;break;}
+            stack[top++]=n.links.x;
+            stack[top++]=n.links.y;
+        }
+    }
+    ray_hits[id]=hit;
+#endif
+}
