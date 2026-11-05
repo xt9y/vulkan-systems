@@ -20,6 +20,13 @@ layout(std430,set=0,binding=6) readonly buffer StaticColliders
 {
     Collider colliders[];
 };
+// Generic BVH node format, identical to bvh::node in bvh/bvh/bvh.hpp.
+// Only used when the collision scene has 32 or more static bounds.
+struct BVHNode {vec4 minimum;vec4 maximum;uvec4 links;};
+layout(std430,set=0,binding=7) readonly buffer CollisionBVH
+{
+    BVHNode nodes[];
+};
 
 layout(push_constant) uniform Settings
 {
@@ -58,6 +65,34 @@ vec3 spiky(vec3 r,float h)
     return -45.0/(pi*h6)*pow(h-len,2.)*r/len;
 }
 
+
+int broadphase(vec3 p,float radius,out uint candidates[64])
+{
+    if(pc.indices.w<32u)return -1; // seven-box scenes use direct checks
+    uint stack[64];
+    int top=1,found=0;
+    stack[0]=0u;
+    while(top>0)
+    {
+        BVHNode n=nodes[stack[--top]];
+        if(any(lessThan(p,n.minimum.xyz-vec3(radius))) ||
+           any(greaterThan(p,n.maximum.xyz+vec3(radius))))
+            continue;
+        if(n.links.w!=0xffffffffu)
+        {
+            if(found>=64)return -1; // safe full-scan fallback
+            candidates[found++]=n.links.w;
+        }
+        else
+        {
+            if(top+2>64)return -1;
+            stack[top++]=n.links.x;
+            stack[top++]=n.links.y;
+        }
+    }
+    return found;
+}
+
 vec3 project_colliders(vec3 p,float r,out vec3 normal)
 {
     normal=vec3(0);
@@ -66,8 +101,12 @@ vec3 project_colliders(vec3 p,float r,out vec3 normal)
         p.y=pc.liquid.w+r;
         normal=vec3(0,1,0);
     }
-    for(uint i=0u;i<pc.indices.w;++i)
+    uint candidates[64];
+    int selected=broadphase(p,r,candidates);
+    uint count=selected<0?pc.indices.w:uint(selected);
+    for(uint cursor=0u;cursor<count;++cursor)
     {
+        uint i=selected<0?cursor:candidates[cursor];
         vec3 low=colliders[i].minimum.xyz-vec3(r);
         vec3 high=colliders[i].maximum.xyz+vec3(r);
         if(any(lessThanEqual(p,low)) || any(greaterThanEqual(p,high)))
@@ -96,8 +135,12 @@ vec3 project_colliders(vec3 p,float r,out vec3 normal)
 vec3 contact_normal(vec3 p,float r)
 {
     if(p.y<=pc.liquid.w+r+.002)return vec3(0,1,0);
-    for(uint i=0u;i<pc.indices.w;++i)
+    uint candidates[64];
+    int selected=broadphase(p,r+.002,candidates);
+    uint count=selected<0?pc.indices.w:uint(selected);
+    for(uint cursor=0u;cursor<count;++cursor)
     {
+        uint i=selected<0?cursor:candidates[cursor];
         vec3 lo=colliders[i].minimum.xyz-vec3(r);
         vec3 hi=colliders[i].maximum.xyz+vec3(r);
         const float eps=.002;
