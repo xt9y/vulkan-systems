@@ -215,6 +215,23 @@ namespace fld::render
             throw std::invalid_argument("Invalid fluid render input");
 
         auto &f=data->frames[image];
+        if(!f.low_initialized)
+        {
+            vk::ImageMemoryBarrier transition{};
+            transition.oldLayout=vk::ImageLayout::eUndefined;
+            transition.newLayout=vk::ImageLayout::eGeneral;
+            transition.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            transition.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            transition.image=f.low_image.handle;
+            transition.subresourceRange={
+                vk::ImageAspectFlagBits::eColor,0,1,0,1};
+            transition.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
+            command.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTopOfPipe,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {},{},{},{transition});
+            f.low_initialized=true;
+        }
         const std::array<vk::DescriptorImageInfo,4> images{{
             {target.sampler,target.depth,target.depth_layout},
             {target.sampler,target.scene_color,target.color_layout},
