@@ -1,52 +1,50 @@
-VulkanFluid
-  build.c                    static C++17 library
-  fld/fld.hpp                public API
-  fld/core/                  particle state and GPU simulation
-  fld/material/              SI material properties
-  fld/render/                tile bins and liquid compositor
-  fld/shaders/               SPIR-V compute kernels
-  research.md                algorithms and validation contract
+VulkanFluid — GPU continuum liquid
+  build.c                          static C++17 library
+  fld/fld.hpp                      public API
+  fld/continuum/continuum.hpp      user settings and render inputs
+  fld/continuum/continuum.cpp      GPU allocations, dispatch, render integration
+  fld/continuum/shaders/grid.comp  staggered MAC grid and volume-fraction solver
+  fld/continuum/shaders/surface.comp  volume isosurface + full-resolution composite
+  fld/material/                    SI material properties
 
-Current implementation: first GPU baseline, not the completed research paper.
-  GPU-resident particles, spatial-hash neighbor graph, PBF pressure projection,
-  bounded capillary surface-force approximation, contact-line friction,
-  GPU screen-space tile lists and density-isosurface optical rendering.
-  This does NOT reproduce the full unified implicit Probst-Teschner solver.
-  Neither full Vulkan C++ compilation nor 60 FPS on M2 has been measured.
+The active backend no longer simulates a fluid as independent SPH spheres.
+It stores liquid occupancy as a 3D cell-centered volume fraction (VOF), with
+velocities on MAC grid faces. A pressure Poisson solve enforces approximate
+incompressibility and a finite-volume face flux transports volume between
+cells. Free surfaces can merge, break apart and interact with solid geometry.
+The surface is raymarched from trilinearly interpolated VOF instead of per-
+particle raymarching. Curvature provides a simple Laplace pressure boundary
+condition, and a contact-angle approximation applies near horizontal solids.
 
-VulkanEngine must be initialized before fld::system::init.
-  fld::system::init(options,initial_drop,shader_paths);
-  fld::render::init(renderer_shader_paths,frames,width,height);
-  fld::system::record(command,elapsed_seconds);
-  fld::render::record(command,frame,targets);
-  fld::render::shutdown();
-  fld::system::shutdown();
+The core solver is a FIRST CONTINUUM BASELINE, not a verified scientific
+solver. Donor-cell upwind advection is first order and may diffuse interfaces.
+Pressure uses 36 Jacobi iterations by default, not geometric multigrid and
+not residual-based convergence. It may exhibit divergence error, contact-angle
+error and volume loss under high Courant numbers or insufficient resolution.
+The current implementation does not yet have APIC/FLIP, conservative PLIC
+interface reconstruction, or a coupled shallow-water/thin-film specialization.
+Do not claim those features are implemented.
 
-All units are SI. The game supplies liquid material, drop radius/position,
-floor height and shaders. The generic library never names blood, characters,
-weapons, or gameplay rules.
+The whole grid is allocated on the GPU. Default 64 x 40 x 64 at 10 cm cells.
+Simulation and rendering run as ordered GPU compute passes; they cannot be
+correctly collapsed into one dispatch because pressure iterations require
+global synchronization. Timestep is capped to avoid obvious CFL violations.
+Low frame rates slow simulated time rather than dropping liquid through the
+floor. Control speed and physical resolution in the host's client.cpp.
 
-Validation:
-  GitHub Actions gpu-fluid.yml compiles and validates all 12 SPIR-V stages.
-  Physical SI helpers have headless deterministic unit tests.
-  Full C++ compilation, GPU timing, conservation and capillary benchmarks
-  still require a VulkanEngine-enabled machine.
+API:
+  fld::continuum::init(options,drop,shader_paths,frames,width,height)
+  fld::continuum::record(command,frame_index,elapsed_seconds,render_input)
+  fld::continuum::active()
+  fld::continuum::shutdown()
 
-GPU performance revision
-  bvh/                    independent reusable GPU LBVH static library
-  fld/render/upscale      half-resolution surface + native-resolution composite
-  fld/render/render_stride 1, 2, or 4; simulation retains all particles
-  fld/shaders/surface     bounded per-tile visual work (no full-array fallback)
-  fld/core/system        collision BVH only for 32+ boxes; direct path below
+VulkanEngine must be initialized first. The host provides renderer image views,
+scene boxes, color and shader paths. Generic library knows no game-specific
+weapons, characters or blood. Independent bvh/ library remains reusable; the
+current continuum solver rasterizes a small collider set only once at startup.
 
-  The 2D surface reconstruction is a rendering approximation, not the
-  incompressible physics solver. Rendering stride and scale do not remove
-  simulation particles. Set scale=1 and stride=1 for maximum droplet detail.
-  Tight memory budgets favor scale=.5, stride=2 as a first profile target.
-  Oversubscribed tiles are mass-weighted approximations, not exact sums.
-  GPU BVH is not used for the fixed-radius SPH neighbor search: its hashed
-  uniform cells remain more suitable for the current particle distribution.
-
-  Important: 60 FPS is a target, not a verified guarantee. The CPU-side
-  GitHub source API and shader contracts have not been run on the target M2.
-  Measure simulation GPU time separately from optical rendering GPU time.
+Validation required on actual GPU:
+  compile seven grid compute stages, volume render and upscaler;
+  step test, gravity, pooled water, coalescence, volume measurement, divergence
+  residual and collider boundaries; profile passes separately on M2.
+60 FPS and physically accurate contact-line motion are not yet validated.

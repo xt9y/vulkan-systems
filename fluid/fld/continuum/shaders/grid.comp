@@ -1,0 +1,326 @@
+#version 450
+// Continuous free-surface liquid. All fields live in one GPU storage buffer.
+// Staggered MAC faces + conservative cell-centered VOF + pressure projection.
+layout(local_size_x=8,local_size_y=8,local_size_z=4) in;
+layout(std430,set=0,binding=0) buffer Grid { float fields[]; };
+struct Box { vec4 lo; vec4 hi; };
+layout(std430,set=0,binding=1) readonly buffer Boxes { Box boxes[]; };
+
+layout(push_constant) uniform Parameters
+{
+    vec4 origin_cell;       // xyz origin, w cell width (metres)
+    vec4 spawn_radius;      // xyz initial sphere center, w initial radius
+    vec4 physical;          // dt, density, gravity Y, kinematic viscosity
+    vec4 interface_data;    // surface tension, contact angle radians, unused
+    uvec4 dims;             // nx,ny,nz,number of AABBs
+    uvec4 flags;            // active VOF (0/1), pressure source (0/1)
+} pc;
+
+uint nx(){return pc.dims.x;}
+uint ny(){return pc.dims.y;}
+uint nz(){return pc.dims.z;}
+uint nc(){return nx()*ny()*nz();}
+uint nu(){return (nx()+1u)*ny()*nz();}
+uint nv(){return nx()*(ny()+1u)*nz();}
+uint nw(){return nx()*ny()*(nz()+1u);}
+uint vof_off(uint bank){return bank*nc();}
+uint pressure_off(uint bank){return (2u+bank)*nc();}
+uint divergence_off(){return 4u*nc();}
+uint curvature_off(){return 5u*nc();}
+uint solid_off(){return 6u*nc();}
+uint u_off(uint bank){return 7u*nc()+bank*nu();}
+uint v_off(uint bank){return 7u*nc()+2u*nu()+bank*nv();}
+uint w_off(uint bank){return 7u*nc()+2u*nu()+2u*nv()+bank*nw();}
+
+bool valid(ivec3 c){return all(greaterThanEqual(c,ivec3(0))) &&
+                          all(lessThan(c,ivec3(pc.dims.xyz)));}
+uint ci(ivec3 c){return (uint(c.z)*ny()+uint(c.y))*nx()+uint(c.x);}
+uint ui(ivec3 c){return (uint(c.z)*ny()+uint(c.y))*(nx()+1u)+uint(c.x);}
+uint vi(ivec3 c){return (uint(c.z)*(ny()+1u)+uint(c.y))*nx()+uint(c.x);}
+uint wi(ivec3 c){return (uint(c.z)*ny()+uint(c.y))*nx()+uint(c.x);}
+bool solid(ivec3 c){return !valid(c) || fields[solid_off()+ci(c)]>.5;}
+float fraction(ivec3 c,uint bank)
+{
+    if(!valid(c) || solid(c))return 0.;
+    return fields[vof_off(bank)+ci(c)];
+}
+bool wet(ivec3 c){return fraction(c,pc.flags.x)>.025;}
+float face_u(ivec3 c,uint bank)
+{
+    c=clamp(c,ivec3(0),ivec3(int(nx()),int(ny())-1,int(nz())-1));
+    return fields[u_off(bank)+ui(c)];
+}
+float face_v(ivec3 c,uint bank)
+{
+    c=clamp(c,ivec3(0),ivec3(int(nx())-1,int(ny()),int(nz())-1));
+    return fields[v_off(bank)+vi(c)];
+}
+float face_w(ivec3 c,uint bank)
+{
+    c=clamp(c,ivec3(0),ivec3(int(nx())-1,int(ny())-1,int(nz())));
+    return fields[w_off(bank)+wi(c)];
+}
+float tri_u(vec3 c,uint bank)
+{
+    ivec3 b=ivec3(floor(c));vec3 t=fract(c);float sum=0.;
+    for(int z=0;z<2;++z)for(int y=0;y<2;++y)for(int x=0;x<2;++x)
+    {
+        vec3 w=mix(vec3(1.)-t,t,vec3(x,y,z));
+        sum+=face_u(b+ivec3(x,y,z),bank)*w.x*w.y*w.z;
+    }
+    return sum;
+}
+float tri_v(vec3 c,uint bank)
+{
+    ivec3 b=ivec3(floor(c));vec3 t=fract(c);float sum=0.;
+    for(int z=0;z<2;++z)for(int y=0;y<2;++y)for(int x=0;x<2;++x)
+    {
+        vec3 w=mix(vec3(1.)-t,t,vec3(x,y,z));
+        sum+=face_v(b+ivec3(x,y,z),bank)*w.x*w.y*w.z;
+    }
+    return sum;
+}
+float tri_w(vec3 c,uint bank)
+{
+    ivec3 b=ivec3(floor(c));vec3 t=fract(c);float sum=0.;
+    for(int z=0;z<2;++z)for(int y=0;y<2;++y)for(int x=0;x<2;++x)
+    {
+        vec3 w=mix(vec3(1.)-t,t,vec3(x,y,z));
+        sum+=face_w(b+ivec3(x,y,z),bank)*w.x*w.y*w.z;
+    }
+    return sum;
+}
+vec3 velocity(vec3 pos)
+{
+    vec3 g=(pos-pc.origin_cell.xyz)/pc.origin_cell.w;
+    return vec3(tri_u(g-vec3(0.,.5,.5),0u),
+                tri_v(g-vec3(.5,0.,.5),0u),
+                tri_w(g-vec3(.5,.5,0.),0u));
+}
+vec3 center(ivec3 c){return pc.origin_cell.xyz+
+                             (vec3(c)+vec3(.5))*pc.origin_cell.w;}
+bool blocked_world(vec3 world)
+{
+    for(uint i=0u;i<pc.dims.w;++i)
+        if(all(greaterThanEqual(world,boxes[i].lo.xyz)) &&
+           all(lessThanEqual(world,boxes[i].hi.xyz)))return true;
+    return false;
+}
+float pressure(ivec3 c,uint bank)
+{
+    return wet(c)?fields[pressure_off(bank)+ci(c)]:0.;
+}
+vec3 density_normal(ivec3 c)
+{
+    vec3 g=vec3(
+        fraction(c+ivec3(1,0,0),pc.flags.x)-fraction(c-ivec3(1,0,0),pc.flags.x),
+        fraction(c+ivec3(0,1,0),pc.flags.x)-fraction(c-ivec3(0,1,0),pc.flags.x),
+        fraction(c+ivec3(0,0,1),pc.flags.x)-fraction(c-ivec3(0,0,1),pc.flags.x));
+    float n=length(g);
+    if(n<1e-5)return vec3(0.);
+    vec3 result=-g/n;
+    // Contact angle at horizontal solid surfaces: constrain the interface
+    // normal, while the pressure solve still enforces no penetration.
+    if(solid(c-ivec3(0,1,0)) && result.y>-.95)
+    {
+        vec2 horizontal=result.xz;
+        float d=length(horizontal);
+        if(d>1e-5)
+            result=vec3(horizontal.x/d*sin(pc.interface_data.y),
+                        cos(pc.interface_data.y),
+                        horizontal.y/d*sin(pc.interface_data.y));
+    }
+    return result;
+}
+float surface_pressure(ivec3 c)
+{
+    if(!valid(c))return 0.;
+    return pc.interface_data.x*fields[curvature_off()+ci(c)];
+}
+float free_pressure(ivec3 fluid_cell,ivec3 neighbor,uint pbank)
+{
+    if(wet(neighbor))return pressure(neighbor,pbank);
+    if(solid(neighbor))return 0.;
+    return surface_pressure(fluid_cell);
+}
+float flux(float face,float left,float right)
+{
+    return face>0.?face*left:face*right;
+}
+
+void main()
+{
+    ivec3 c=ivec3(gl_GlobalInvocationID.xyz);
+    bool inside=valid(c);
+    float h=pc.origin_cell.w,dt=pc.physical.x;
+
+#if defined(CONT_SEED)
+    if(inside)
+    {
+        vec3 point=center(c);
+        float boundary=length(point-pc.spawn_radius.xyz)-pc.spawn_radius.w;
+        float f=clamp(.5-boundary/h,0.,1.);
+        bool occupied=blocked_world(point);
+        fields[solid_off()+ci(c)]=occupied?1.:0.;
+        fields[vof_off(0u)+ci(c)]=occupied?0.:f;
+        fields[vof_off(1u)+ci(c)]=occupied?0.:f;
+        fields[pressure_off(0u)+ci(c)]=0.;
+        fields[pressure_off(1u)+ci(c)]=0.;
+        fields[divergence_off()+ci(c)]=0.;
+        fields[curvature_off()+ci(c)]=0.;
+    }
+    if(c.x<=int(nx()) && c.y<int(ny()) && c.z<int(nz()))
+    {
+        fields[u_off(0u)+ui(c)]=0.;fields[u_off(1u)+ui(c)]=0.;
+    }
+    if(c.x<int(nx()) && c.y<=int(ny()) && c.z<int(nz()))
+    {
+        fields[v_off(0u)+vi(c)]=0.;fields[v_off(1u)+vi(c)]=0.;
+    }
+    if(c.x<int(nx()) && c.y<int(ny()) && c.z<=int(nz()))
+    {
+        fields[w_off(0u)+wi(c)]=0.;fields[w_off(1u)+wi(c)]=0.;
+    }
+#elif defined(CONT_ADVECT_VELOCITY)
+    vec3 base=pc.origin_cell.xyz;
+    if(c.x<=int(nx()) && c.y<int(ny()) && c.z<int(nz()))
+    {
+        ivec3 l=c-ivec3(1,0,0);
+        vec3 world=base+(vec3(c)+vec3(0.,.5,.5))*h;
+        float value=0.;
+        if(!solid(l)&&!solid(c))
+        {
+            vec3 old=velocity(world);
+            value=tri_u((world-old*dt-base)/h-vec3(0.,.5,.5),0u);
+            float diff=face_u(c+ivec3(1,0,0),0u)+face_u(c-ivec3(1,0,0),0u)
+                      +face_u(c+ivec3(0,1,0),0u)+face_u(c-ivec3(0,1,0),0u)
+                      +face_u(c+ivec3(0,0,1),0u)+face_u(c-ivec3(0,0,1),0u)-6.*face_u(c,0u);
+            value+=clamp(pc.physical.w*dt/(h*h),0.,1./6.)*diff;
+        }
+        fields[u_off(1u)+ui(c)]=clamp(value,-8.,8.);
+    }
+    if(c.x<int(nx()) && c.y<=int(ny()) && c.z<int(nz()))
+    {
+        ivec3 bottom=c-ivec3(0,1,0);
+        vec3 world=base+(vec3(c)+vec3(.5,0.,.5))*h;
+        float value=0.;
+        if(!solid(bottom)&&!solid(c))
+        {
+            vec3 old=velocity(world);
+            value=tri_v((world-old*dt-base)/h-vec3(.5,0.,.5),0u);
+            value+=pc.physical.z*dt;
+            float diff=face_v(c+ivec3(1,0,0),0u)+face_v(c-ivec3(1,0,0),0u)
+                      +face_v(c+ivec3(0,1,0),0u)+face_v(c-ivec3(0,1,0),0u)
+                      +face_v(c+ivec3(0,0,1),0u)+face_v(c-ivec3(0,0,1),0u)-6.*face_v(c,0u);
+            value+=clamp(pc.physical.w*dt/(h*h),0.,1./6.)*diff;
+        }
+        fields[v_off(1u)+vi(c)]=clamp(value,-8.,8.);
+    }
+    if(c.x<int(nx()) && c.y<int(ny()) && c.z<=int(nz()))
+    {
+        ivec3 back=c-ivec3(0,0,1);
+        vec3 world=base+(vec3(c)+vec3(.5,.5,0.))*h;
+        float value=0.;
+        if(!solid(back)&&!solid(c))
+        {
+            vec3 old=velocity(world);
+            value=tri_w((world-old*dt-base)/h-vec3(.5,.5,0.),0u);
+            float diff=face_w(c+ivec3(1,0,0),0u)+face_w(c-ivec3(1,0,0),0u)
+                      +face_w(c+ivec3(0,1,0),0u)+face_w(c-ivec3(0,1,0),0u)
+                      +face_w(c+ivec3(0,0,1),0u)+face_w(c-ivec3(0,0,1),0u)-6.*face_w(c,0u);
+            value+=clamp(pc.physical.w*dt/(h*h),0.,1./6.)*diff;
+        }
+        fields[w_off(1u)+wi(c)]=clamp(value,-8.,8.);
+    }
+#elif defined(CONT_CURVATURE)
+    if(!inside)return;
+    // The sign convention is outward interface normal.
+    vec3 n1=density_normal(c+ivec3(1,0,0));
+    vec3 n0=density_normal(c-ivec3(1,0,0));
+    vec3 m1=density_normal(c+ivec3(0,1,0));
+    vec3 m0=density_normal(c-ivec3(0,1,0));
+    vec3 k1=density_normal(c+ivec3(0,0,1));
+    vec3 k0=density_normal(c-ivec3(0,0,1));
+    float curvature=(n1.x-n0.x+m1.y-m0.y+k1.z-k0.z)/(2.*h);
+    fields[curvature_off()+ci(c)]=clamp(curvature,-2./h,2./h);
+#elif defined(CONT_DIVERGENCE)
+    if(!inside)return;
+    float div=(face_u(c+ivec3(1,0,0),1u)-face_u(c,1u)+
+               face_v(c+ivec3(0,1,0),1u)-face_v(c,1u)+
+               face_w(c+ivec3(0,0,1),1u)-face_w(c,1u))/h;
+    fields[divergence_off()+ci(c)]=wet(c)?div:0.;
+#elif defined(CONT_PRESSURE)
+    if(!inside)return;
+    uint dst=1u-pc.flags.y;
+    if(!wet(c)){fields[pressure_off(dst)+ci(c)]=0.;return;}
+    float sum=0.;float count=0.;
+    for(int axis=0;axis<3;++axis)
+    for(int direction=-1;direction<=1;direction+=2)
+    {
+        ivec3 offset=ivec3(0);
+        offset[axis]=direction;
+        ivec3 adjacent=c+offset;
+        if(solid(adjacent))continue; // Neumann no-penetration boundary
+        ++count;
+        sum+=free_pressure(c,adjacent,pc.flags.y);
+    }
+    float rhs=pc.physical.y*fields[divergence_off()+ci(c)]/max(dt,1e-6);
+    fields[pressure_off(dst)+ci(c)]=count>0.?
+        (sum-rhs*h*h)/count:0.;
+#elif defined(CONT_PROJECT)
+    if(c.x<=int(nx()) && c.y<int(ny()) && c.z<int(nz()))
+    {
+        ivec3 l=c-ivec3(1,0,0);
+        float value=0.;
+        if(!solid(l)&&!solid(c) && (wet(l)||wet(c)))
+        {
+            float pL=wet(l)?pressure(l,pc.flags.y):surface_pressure(c);
+            float pR=wet(c)?pressure(c,pc.flags.y):surface_pressure(l);
+            value=face_u(c,1u)-dt/(pc.physical.y*h)*(pR-pL);
+        }
+        fields[u_off(0u)+ui(c)]=clamp(value,-8.,8.);
+    }
+    if(c.x<int(nx()) && c.y<=int(ny()) && c.z<int(nz()))
+    {
+        ivec3 bottom=c-ivec3(0,1,0);
+        float value=0.;
+        if(!solid(bottom)&&!solid(c) && (wet(bottom)||wet(c)))
+        {
+            float pB=wet(bottom)?pressure(bottom,pc.flags.y):surface_pressure(c);
+            float pT=wet(c)?pressure(c,pc.flags.y):surface_pressure(bottom);
+            value=face_v(c,1u)-dt/(pc.physical.y*h)*(pT-pB);
+        }
+        fields[v_off(0u)+vi(c)]=clamp(value,-8.,8.);
+    }
+    if(c.x<int(nx()) && c.y<int(ny()) && c.z<=int(nz()))
+    {
+        ivec3 back=c-ivec3(0,0,1);
+        float value=0.;
+        if(!solid(back)&&!solid(c) && (wet(back)||wet(c)))
+        {
+            float pB=wet(back)?pressure(back,pc.flags.y):surface_pressure(c);
+            float pF=wet(c)?pressure(c,pc.flags.y):surface_pressure(back);
+            value=face_w(c,1u)-dt/(pc.physical.y*h)*(pF-pB);
+        }
+        fields[w_off(0u)+wi(c)]=clamp(value,-8.,8.);
+    }
+#elif defined(CONT_ADVECT_VOLUME)
+    if(!inside)return;
+    if(solid(c)){fields[vof_off(1u-pc.flags.x)+ci(c)]=0.;return;}
+    float own=fraction(c,pc.flags.x);
+    // Conservative finite-volume upwind flux on shared MAC faces.
+    float xp=flux(face_u(c+ivec3(1,0,0),0u),own,
+                  fraction(c+ivec3(1,0,0),pc.flags.x));
+    float xm=flux(face_u(c,0u),fraction(c-ivec3(1,0,0),pc.flags.x),own);
+    float yp=flux(face_v(c+ivec3(0,1,0),0u),own,
+                  fraction(c+ivec3(0,1,0),pc.flags.x));
+    float ym=flux(face_v(c,0u),fraction(c-ivec3(0,1,0),pc.flags.x),own);
+    float zp=flux(face_w(c+ivec3(0,0,1),0u),own,
+                  fraction(c+ivec3(0,0,1),pc.flags.x));
+    float zm=flux(face_w(c,0u),fraction(c-ivec3(0,0,1),pc.flags.x),own);
+    float updated=own-dt/h*(xp-xm+yp-ym+zp-zm);
+    // Bounded donor-cell advection. CFL must stay below 1 to preserve mass
+    // without clipping; the API uses fixed substeps and a velocity limit.
+    fields[vof_off(1u-pc.flags.x)+ci(c)]=clamp(updated,0.,1.);
+#endif
+}

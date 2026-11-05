@@ -1,0 +1,188 @@
+#version 450
+// Continuous volume-fraction isosurface, not particle impostors.
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+layout(set=0,binding=0) uniform sampler2D scene_depth;
+layout(set=0,binding=1) uniform sampler2D scene_hdr;
+layout(rgba16f,set=0,binding=2) writeonly uniform image2D final_color;
+#if defined(CONT_RENDER)
+layout(std430,set=0,binding=3) readonly buffer Grid { float fields[]; };
+layout(rgba16f,set=0,binding=6) writeonly uniform image2D liquid_layer;
+#else
+layout(rgba16f,set=0,binding=6) readonly uniform image2D liquid_layer;
+#endif
+layout(push_constant) uniform Parameters
+{
+    mat4 inverse_vp;
+    vec4 origin_cell;     // xyz origin, w cell width
+    vec4 tint;            // rgb debug tint, alpha strength
+    uvec4 grid;           // nx, ny, nz, unused
+    uvec4 screen;         // render dimensions, reverse depth, VOF bank
+} pc;
+
+const float far_limit=1e20;
+vec3 unproject(vec2 ndc,float d)
+{
+    vec4 p=pc.inverse_vp*vec4(ndc,d,1.);
+    return p.xyz/p.w;
+}
+bool ray_box(vec3 ro,vec3 rd,vec3 lo,vec3 hi,out float a,out float b)
+{
+    a=0.;b=far_limit;
+    for(int axis=0;axis<3;++axis)
+    {
+        if(abs(rd[axis])<1e-7)
+        {
+            if(ro[axis]<lo[axis] || ro[axis]>hi[axis])return false;
+        }
+        else
+        {
+            float t0=(lo[axis]-ro[axis])/rd[axis];
+            float t1=(hi[axis]-ro[axis])/rd[axis];
+            a=max(a,min(t0,t1));b=min(b,max(t0,t1));
+        }
+    }
+    return b>a;
+}
+#if defined(CONT_RENDER)
+uint total(){return pc.grid.x*pc.grid.y*pc.grid.z;}
+float fetch_vof(ivec3 c)
+{
+    if(any(lessThan(c,ivec3(0))) ||
+       any(greaterThanEqual(c,ivec3(pc.grid.xyz))))return 0.;
+    uint i=(uint(c.z)*pc.grid.y+uint(c.y))*pc.grid.x+uint(c.x);
+    return fields[pc.screen.w*total()+i];
+}
+float volume(vec3 pos)
+{
+    vec3 coord=(pos-pc.origin_cell.xyz)/pc.origin_cell.w-vec3(.5);
+    ivec3 base=ivec3(floor(coord));
+    vec3 t=fract(coord);
+    float value=0.;
+    for(int z=0;z<2;++z)
+    for(int y=0;y<2;++y)
+    for(int x=0;x<2;++x)
+    {
+        vec3 weight=mix(vec3(1.)-t,t,vec3(x,y,z));
+        value+=fetch_vof(base+ivec3(x,y,z))*weight.x*weight.y*weight.z;
+    }
+    return value;
+}
+void main()
+{
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(pixel,ivec2(pc.screen.xy))))return;
+    vec2 uv=(vec2(pixel)+.5)/vec2(pc.screen.xy);
+    vec2 ndc=uv*2.-1.;
+    bool reverse=pc.screen.z!=0u;
+    vec3 near_point=unproject(ndc,reverse?.999:.001);
+    vec3 far_point=unproject(ndc,reverse?.001:.999);
+    vec3 ray=normalize(far_point-near_point);
+    float d=texture(scene_depth,uv).r;
+    bool background=reverse?d<=.000001:d>=.999999;
+    float scene_t=background?far_limit:dot(unproject(ndc,d)-near_point,ray);
+    vec3 bounds_min=pc.origin_cell.xyz;
+    vec3 bounds_max=bounds_min+vec3(pc.grid.xyz)*pc.origin_cell.w;
+    float entry,exit_t;
+    if(!ray_box(near_point,ray,bounds_min,bounds_max,entry,exit_t))
+    {
+        imageStore(liquid_layer,pixel,vec4(0.,0.,0.,-1.));return;
+    }
+    exit_t=min(exit_t,scene_t);
+    float step_size=pc.origin_cell.w*.65;
+    float t=entry;
+    float previous=t;
+    bool hit=false;
+    // Only a single field sample per spatial step. All 3D volume reads are
+    // bounded by the grid's ray interval and by the opaque scene depth.
+    for(int i=0;i<128;++i)
+    {
+        if(t>exit_t)break;
+        if(volume(near_point+ray*t)>.32)
+        {
+            hit=true;break;
+        }
+        previous=t;
+        t+=step_size;
+    }
+    if(!hit)
+    {
+        imageStore(liquid_layer,pixel,vec4(0.,0.,0.,-1.));return;
+    }
+    float a=previous,b=t;
+    for(int i=0;i<4;++i)
+    {
+        float mid=.5*(a+b);
+        if(volume(near_point+ray*mid)>.32)b=mid;
+        else a=mid;
+    }
+    t=.5*(a+b);
+    vec3 pos=near_point+ray*t;
+    float h=pc.origin_cell.w;
+    vec3 grad=vec3(
+        volume(pos+vec3(h,0,0))-volume(pos-vec3(h,0,0)),
+        volume(pos+vec3(0,h,0))-volume(pos-vec3(0,h,0)),
+        volume(pos+vec3(0,0,h))-volume(pos-vec3(0,0,h)));
+    vec3 normal=dot(grad,grad)>1e-7?normalize(-grad):-ray;
+    if(dot(normal,ray)>0.)normal=-normal;
+    float thickness=0.;
+    for(int i=0;i<24;++i)
+    {
+        float point_t=t+(float(i)+.5)*h*.5;
+        if(point_t>=exit_t)break;
+        float f=volume(near_point+ray*point_t);
+        thickness+=h*.5*f;
+        if(i>3 && f<.08)break;
+    }
+    thickness=max(.03,thickness);
+    vec3 behind=texture(scene_hdr,uv).rgb;
+    float fresnel=.02+.98*pow(1.-clamp(dot(normal,-ray),0.,1.),5.);
+    vec3 absorb=exp(-vec3(.30,.12,.055)*thickness);
+    vec3 color=behind*absorb+vec3(.025,.045,.065)*(1.-absorb);
+    vec3 light=normalize(vec3(.42,.85,.30));
+    vec3 half_vector=normalize(light-ray);
+    float specular=pow(max(dot(normal,half_vector),0.),96.);
+    color=mix(color,vec3(.5,.55,.6),fresnel)+vec3(specular*.65);
+    color=mix(color,pc.tint.rgb,clamp(pc.tint.a,0.,1.));
+    imageStore(liquid_layer,pixel,vec4(color,t));
+}
+#else
+void main()
+{
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(pixel,ivec2(pc.screen.xy))))return;
+    vec2 uv=(vec2(pixel)+.5)/vec2(pc.screen.xy);
+    ivec2 low=imageSize(liquid_layer);
+    vec2 coord=uv*vec2(low)-vec2(.5);
+    ivec2 first=ivec2(floor(coord));
+    vec2 fract=fract(coord);
+    float d=texelFetch(scene_depth,pixel,0).r;
+    bool reverse=pc.screen.z!=0u;
+    bool background=reverse?d<=.000001:d>=.999999;
+    float scene_t=far_limit;
+    if(!background)
+    {
+        vec2 ndc=uv*2.-1.;
+        vec3 near_point=unproject(ndc,reverse?.999:.001);
+        vec3 far_point=unproject(ndc,reverse?.001:.999);
+        vec3 ray=normalize(far_point-near_point);
+        scene_t=dot(unproject(ndc,d)-near_point,ray);
+    }
+    vec3 fluid_color=vec3(0.);
+    float coverage=0.;
+    for(int y=0;y<2;++y)
+    for(int x=0;x<2;++x)
+    {
+        ivec2 sample_pos=clamp(first+ivec2(x,y),ivec2(0),low-1);
+        vec4 sample_color=imageLoad(liquid_layer,sample_pos);
+        if(sample_color.a<0. || sample_color.a>scene_t+.025)continue;
+        float weight=(x==0?1.-fract.x:fract.x)*
+                     (y==0?1.-fract.y:fract.y);
+        fluid_color+=sample_color.rgb*weight;
+        coverage+=weight;
+    }
+    vec3 scene=texelFetch(scene_hdr,pixel,0).rgb;
+    vec3 out_color=coverage>1e-5?
+        mix(scene,fluid_color/coverage,clamp(coverage,0.,1.)):scene;
+    imageStore(final_color,pixel,vec4(out_color,1.));
+}
+#endif

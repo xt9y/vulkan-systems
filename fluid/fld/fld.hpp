@@ -1,4 +1,3 @@
 #pragma once
-#include "material/properties.hpp"
-#include "core/system.hpp"
-#include "render/renderer.hpp"
+// Primary generic fluid API: GPU MAC grid, VOF and pressure projection.
+#include "continuum/continuum.hpp"
