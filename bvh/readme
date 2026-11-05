@@ -1,0 +1,25 @@
+VulkanBVH
+  bvh/bvh.hpp         generic VulkanGPU BVH API; std430 AABB/node layout
+  bvh/bvh.cpp         persistent GPU buffers, sorting, tree construction
+  bvh/shaders/*.comp  GPU Morton codes, sorting, radix topology, refit,
+                      AABB overlap and ray-AABB queries
+
+Algorithms
+  LBVH with 30-bit Morton keys and original-ID tie-breaker.
+  Parallel bitonic compare/exchange (simple portable baseline, not radix sort).
+  Karras (2012) longest-common-prefix radix tree.
+  Parallel bottom-up atomic-arrival bounding-box refit.
+  Fixed-stack GPU overlap and ray traversal with overflow flags.
+
+Reference
+  T. Karras, Maximizing Parallelism in the Construction of BVHs,
+  Octrees, and k-d Trees, HPG 2012, DOI:10.2312/EGGH/HPG12/033-037.
+
+Limits
+  Static or rebuildable arbitrary AABBs; 1..65536 primitives.
+  Balanced radix trees are usually shallow, but query stacks can overflow:
+  query flags explicitly report overflow; no silent truncated results.
+  Sorting is O(log^2 N) GPU dispatches and intended to improve later.
+  Not a universal spatial accelerator: grid hashing remains faster for
+  near-uniform fixed-radius SPH particle neighborhoods.
+  GPU runtime performance and numerical validation require hardware.
