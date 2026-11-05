@@ -14,8 +14,10 @@ namespace fld::continuum
         {
             vec4 origin_cell,spawn_radius,physical,interface_data;
             std::array<std::uint32_t,4> dims,flags;
+            vec4 rheology;    // zero-shear mu, high-shear mu, lambda, n
+            vec4 contact;     // substrate drag, reserved
         };
-        static_assert(sizeof(simulation_push)==96);
+        static_assert(sizeof(simulation_push)==128);
         struct render_push
         {
             mat4 inverse_vp;
@@ -195,6 +197,10 @@ namespace fld::continuum
             p.dims={cfg.width,cfg.height,cfg.depth,
                     std::uint32_t(cfg.colliders.size())};
             p.flags={data->active_vof,0,0,0};
+            p.rheology={cfg.flow.zero_shear_viscosity,
+                        cfg.flow.high_shear_viscosity,
+                        cfg.flow.relaxation_seconds,cfg.flow.power_index};
+            p.contact={cfg.flow.substrate_drag,0.f,0.f,0.f};
             return p;
         }
     }
@@ -217,6 +223,20 @@ namespace fld::continuum
            !std::isfinite(settings.gravity.y) ||
            !settings.pressure_iterations || settings.pressure_iterations>128 ||
            !settings.substeps || settings.substeps>8 ||
+           !std::isfinite(settings.flow.zero_shear_viscosity) ||
+           !std::isfinite(settings.flow.high_shear_viscosity) ||
+           !std::isfinite(settings.flow.relaxation_seconds) ||
+           !std::isfinite(settings.flow.power_index) ||
+           !std::isfinite(settings.flow.substrate_drag) ||
+           settings.flow.zero_shear_viscosity<0.f ||
+           settings.flow.high_shear_viscosity<0.f ||
+           settings.flow.relaxation_seconds<0.f ||
+           settings.flow.power_index<=0.f || settings.flow.power_index>1.f ||
+           settings.flow.substrate_drag<0.f ||
+           (settings.flow.high_shear_viscosity>0.f &&
+            (settings.flow.zero_shear_viscosity<
+             settings.flow.high_shear_viscosity ||
+             settings.flow.relaxation_seconds<=0.f)) ||
            !vk::device::get()->handle)
             throw std::invalid_argument("Invalid continuum fluid settings");
         for(const auto& b:settings.colliders)
