@@ -20,10 +20,20 @@ layout(std430,binding=4) readonly buffer BlockerBuffer { Blocker blockers[]; };
 layout(std430,binding=5) readonly buffer DeltaInput { vec4 delta_input[]; };
 layout(std430,binding=6) writeonly buffer DeltaOutput { vec4 delta_output[]; };
 layout(std430,binding=7) buffer EmissionHistory { vec4 old_emission[]; };
+struct OrientedBlocker {
+    vec4 center;
+    vec4 half_extent;
+    vec4 axis_x;
+    vec4 axis_y;
+    vec4 axis_z;
+};
+layout(std430,binding=8) readonly buffer OrientedBlockerBuffer {
+    OrientedBlocker oriented_blockers[];
+};
 layout(push_constant) uniform Parameters {
     uint count;
     uint blocker_count;
-    uint unused0;
+    uint oriented_count;
     uint unused1;
 } args;
 
@@ -51,6 +61,18 @@ bool intersects_box(vec3 origin,vec3 direction,vec3 minimum,vec3 maximum)
     return far_t>=near_t;
 }
 
+bool intersects_oriented(vec3 origin,vec3 vector,OrientedBlocker box)
+{
+    vec3 relative=origin-box.center.xyz;
+    vec3 start=vec3(dot(relative,box.axis_x.xyz),
+                    dot(relative,box.axis_y.xyz),
+                    dot(relative,box.axis_z.xyz));
+    vec3 ray=vec3(dot(vector,box.axis_x.xyz),
+                  dot(vector,box.axis_y.xyz),
+                  dot(vector,box.axis_z.xyz));
+    return intersects_box(start,ray,-box.half_extent.xyz,box.half_extent.xyz);
+}
+
 void main()
 {
     uint index=gl_GlobalInvocationID.x;
@@ -74,6 +96,14 @@ void main()
     for(uint k=0;k<args.blocker_count;k++)
     {
         if(intersects_box(start,v,blockers[k].minimum.xyz,blockers[k].maximum.xyz))
+        {
+            exchange[index]=0.0;
+            return;
+        }
+    }
+    for(uint k=0;k<args.oriented_count;k++)
+    {
+        if(intersects_oriented(start,v,oriented_blockers[k]))
         {
             exchange[index]=0.0;
             return;

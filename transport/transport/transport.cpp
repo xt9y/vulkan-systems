@@ -48,10 +48,11 @@ namespace transport
 
     void init(const std::vector<patch>& surfaces,
               const std::vector<blocker>& obstacles,
-              const shader_paths& shaders)
+              const shader_paths& shaders,
+              const std::vector<oriented_blocker>& oriented)
     {
         if(data)throw std::logic_error("transport already initialized");
-        if(surfaces.empty() || surfaces.size()>4096 || obstacles.size()>1024 ||
+        if(surfaces.empty() || surfaces.size()>4096 || obstacles.size()>1024 || oriented.size()>1024 ||
            !vk::device::get()->handle)
             throw std::invalid_argument("invalid transport configuration");
 
@@ -73,6 +74,7 @@ namespace transport
         data=new state{};
         data->patch_count=std::uint32_t(surfaces.size());
         data->blocker_count=std::uint32_t(obstacles.size());
+        data->oriented_count=std::uint32_t(oriented.size());
         const auto device=vk::device::get()->handle;
         try
         {
@@ -80,6 +82,9 @@ namespace transport
             data->patches=buffer(n*sizeof(patch),vk::BufferUsageFlagBits::eStorageBuffer,true);
             data->blockers=buffer(std::max<std::size_t>(1,obstacles.size())*sizeof(blocker),
                                   vk::BufferUsageFlagBits::eStorageBuffer,true);
+            data->oriented_blockers=buffer(
+                std::max<std::size_t>(1,oriented.size())*sizeof(oriented_blocker),
+                vk::BufferUsageFlagBits::eStorageBuffer,true);
             data->exchange=buffer(n*n*sizeof(float),
                                   vk::BufferUsageFlagBits::eStorageBuffer);
             for(auto& b:data->radiance)
@@ -99,8 +104,11 @@ namespace transport
             if(!obstacles.empty())
                 vk::buffer::write(data->blockers,obstacles.data(),
                                   obstacles.size()*sizeof(blocker));
+            if(!oriented.empty())
+                vk::buffer::write(data->oriented_blockers,oriented.data(),
+                                  oriented.size()*sizeof(oriented_blocker));
 
-            std::array<vk::DescriptorSetLayoutBinding,8> bindings{};
+            std::array<vk::DescriptorSetLayoutBinding,9> bindings{};
             for(std::uint32_t i=0;i<bindings.size();++i)
             {
                 bindings[i].binding=i;
@@ -143,7 +151,7 @@ namespace transport
                 vk::shader::destroy(shader);
             }
 
-            vk::DescriptorPoolSize size{vk::DescriptorType::eStorageBuffer,32};
+            vk::DescriptorPoolSize size{vk::DescriptorType::eStorageBuffer,36};
             vk::DescriptorPoolCreateInfo pool{};
             pool.maxSets=4;
             pool.poolSizeCount=1;
@@ -161,7 +169,7 @@ namespace transport
 
             for(std::uint32_t s=0;s<4;++s)
             {
-                std::array<vk::DescriptorBufferInfo,8> infos{{
+                std::array<vk::DescriptorBufferInfo,9> infos{{
                     vk::buffer::descriptor(data->patches),
                     vk::buffer::descriptor(data->exchange),
                     vk::buffer::descriptor(data->radiance[s==1?1:0]),
@@ -169,9 +177,10 @@ namespace transport
                     vk::buffer::descriptor(data->blockers),
                     vk::buffer::descriptor(data->delta[s==3?1:0]),
                     vk::buffer::descriptor(data->delta[s==3?0:1]),
-                    vk::buffer::descriptor(data->previous_emission)
+                    vk::buffer::descriptor(data->previous_emission),
+                    vk::buffer::descriptor(data->oriented_blockers)
                 }};
-                std::array<vk::WriteDescriptorSet,8> writes{};
+                std::array<vk::WriteDescriptorSet,9> writes{};
                 for(std::uint32_t i=0;i<writes.size();++i)
                 {
                     writes[i].dstSet=data->sets[s];
@@ -204,7 +213,7 @@ namespace transport
                                 vk::PipelineStageFlagBits::eComputeShader,
                                 {},{from_transfer},{},{});
 
-        const parameters p{data->patch_count,data->blocker_count,0,0};
+        const parameters p{data->patch_count,data->blocker_count,data->oriented_count,0};
         vk::record::pipeline(command,vk::PipelineBindPoint::eCompute,
                              data->pipelines[0]);
         command.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
@@ -221,7 +230,7 @@ namespace transport
         check();
         if(!command || iterations==0 || iterations>256 || (iterations&1u))
             throw std::invalid_argument("transport iterations must be even and <=256");
-        const parameters p{data->patch_count,data->blocker_count,0,0};
+        const parameters p{data->patch_count,data->blocker_count,data->oriented_count,0};
         vk::record::pipeline(command,vk::PipelineBindPoint::eCompute,
                              data->pipelines[1]);
         command.pushConstants(data->pipeline_layout,vk::ShaderStageFlagBits::eCompute,
@@ -240,7 +249,7 @@ namespace transport
         check();
         if(!command || terms==0 || terms>256)
             throw std::invalid_argument("invalid delta iteration count");
-        const parameters p{data->patch_count,data->blocker_count,0,0};
+        const parameters p{data->patch_count,data->blocker_count,data->oriented_count,0};
         // Inject delta E into the converged radiance solution. Set 3 writes
         // delta[0]; the input delta binding is unused by this stage.
         vk::record::pipeline(command,vk::PipelineBindPoint::eCompute,
@@ -302,7 +311,7 @@ namespace transport
                 vk::pipeline_layout::destroy(data->pipeline_layout);
             if(data->pool)device.destroyDescriptorPool(data->pool);
             if(data->layout)vk::descriptor_layout::destroy(data->layout);
-            for(auto* r:{&data->patches,&data->blockers,&data->exchange,
+            for(auto* r:{&data->patches,&data->blockers,&data->oriented_blockers,&data->exchange,
                          &data->radiance[0],&data->radiance[1],
                          &data->delta[0],&data->delta[1],
                          &data->previous_emission})
