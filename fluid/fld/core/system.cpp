@@ -255,6 +255,9 @@ namespace fld::system
         if(!data || !command)throw std::logic_error("Invalid fluid command");
         if(!std::isfinite(seconds) || seconds<0.f)
             throw std::invalid_argument("Invalid elapsed fluid time");
+        if(data->bucket_count==0 ||
+           (data->bucket_count&(data->bucket_count-1u))!=0)
+            throw std::logic_error("Fluid hash requires power-of-two buckets");
         if(seconds==0.f)return;
         // Render and physics rates are independent. Large frame stalls cannot
         // drive an unbounded GPU solve; record the simulated time separately.
