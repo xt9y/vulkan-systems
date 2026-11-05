@@ -68,8 +68,22 @@ namespace fld::system
            !settings.substeps || settings.spacing<=0.f ||
            settings.smoothing_radius<settings.spacing*1.8f ||
            initial.radius<=settings.spacing ||
+           settings.colliders.size()>64 ||
            !vk::device::get()->handle)
             throw std::invalid_argument("Invalid VulkanFluid GPU settings");
+        for(const auto &wall:settings.colliders)
+        {
+            if(!std::isfinite(wall.minimum.x) ||
+               !std::isfinite(wall.minimum.y) ||
+               !std::isfinite(wall.minimum.z) ||
+               !std::isfinite(wall.maximum.x) ||
+               !std::isfinite(wall.maximum.y) ||
+               !std::isfinite(wall.maximum.z) ||
+               wall.minimum.x>=wall.maximum.x ||
+               wall.minimum.y>=wall.maximum.y ||
+               wall.minimum.z>=wall.maximum.z)
+                throw std::invalid_argument("Invalid fluid box bounds");
+        }
 
         std::vector<particle> seeded;
         const auto spacing=settings.spacing;
@@ -100,6 +114,7 @@ namespace fld::system
         data=new state{};
         data->settings=settings;
         data->count=std::uint32_t(seeded.size());
+        data->collider_count=std::uint32_t(settings.colliders.size());
         auto device=vk::device::get()->handle;
         try
         {
@@ -118,10 +133,16 @@ namespace fld::system
                                              usage,memory);
             data->normals=vk::buffer::create(seeded.size()*sizeof(vec4),
                                               usage,memory);
+            data->boxes=vk::buffer::create(
+                std::max(std::size_t(1),settings.colliders.size())*sizeof(box),
+                usage,memory);
+            if(!settings.colliders.empty())
+                vk::buffer::write(data->boxes,settings.colliders.data(),
+                                  settings.colliders.size()*sizeof(box));
             vk::buffer::write(data->particles,seeded.data(),
                               seeded.size()*sizeof(particle));
 
-            std::array<vk::DescriptorSetLayoutBinding,6> bindings{};
+            std::array<vk::DescriptorSetLayoutBinding,7> bindings{};
             for(std::uint32_t i=0;i<bindings.size();++i)
             {
                 bindings[i].binding=i;
@@ -166,7 +187,7 @@ namespace fld::system
             }
 
             vk::DescriptorPoolSize size{
-                vk::DescriptorType::eStorageBuffer,6
+                vk::DescriptorType::eStorageBuffer,7
             };
             vk::DescriptorPoolCreateInfo pool{};
             pool.maxSets=1;
@@ -179,15 +200,16 @@ namespace fld::system
             allocation.pSetLayouts=&data->descriptor_layout;
             data->descriptors=device.allocateDescriptorSets(allocation).front();
 
-            const std::array<vk::DescriptorBufferInfo,6> buffers{{
+            const std::array<vk::DescriptorBufferInfo,7> buffers{{
                 vk::buffer::descriptor(data->particles),
                 vk::buffer::descriptor(data->heads),
                 vk::buffer::descriptor(data->next),
                 vk::buffer::descriptor(data->lambdas),
                 vk::buffer::descriptor(data->deltas),
-                vk::buffer::descriptor(data->normals)
+                vk::buffer::descriptor(data->normals),
+                vk::buffer::descriptor(data->boxes)
             }};
-            std::array<vk::WriteDescriptorSet,6> writes{};
+            std::array<vk::WriteDescriptorSet,7> writes{};
             for(std::uint32_t i=0;i<writes.size();++i)
             {
                 writes[i].dstSet=data->descriptors;
@@ -229,7 +251,7 @@ namespace fld::system
             data->settings.liquid.dynamic_viscosity
         };
         push.indices={data->count,data->bucket_count,
-                      data->settings.pressure_iterations,0};
+                      data->settings.pressure_iterations,data->collider_count};
         barrier(command); // RAW dependency from earlier queued submissions
         for(std::uint32_t sub=0;sub<data->settings.substeps;++sub)
         {
@@ -249,9 +271,14 @@ namespace fld::system
                     dispatch(command,2,data->count,push);
                 }
             }
+            // Rebuild the neighborhood after the final Jacobi correction.
+            dispatch(command,0,data->bucket_count,push);
+            dispatch(command,2,data->count,push);
             dispatch(command,6,data->count,push);         // final velocity
             dispatch(command,7,data->count,push);         // color gradient
             dispatch(command,8,data->count,push);         // capillary force
+            dispatch(command,9,data->count,push);         // neighbor velocity blend
+            dispatch(command,10,data->count,push);        // apply blended velocity
         }
         data->simulated_seconds+=dt*data->settings.substeps;
     }
@@ -276,6 +303,7 @@ namespace fld::system
             if(data->lambdas.handle)vk::buffer::destroy(data->lambdas);
             if(data->deltas.handle)vk::buffer::destroy(data->deltas);
             if(data->normals.handle)vk::buffer::destroy(data->normals);
+            if(data->boxes.handle)vk::buffer::destroy(data->boxes);
         }
         delete data;
         data=nullptr;
