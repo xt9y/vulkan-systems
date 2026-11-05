@@ -172,6 +172,8 @@ void main()
     // Intersect its reconstructed height analytically at the actual floor.
     bool film=false;
     float film_height=0.;
+    float film_fill=0.;
+    float film_core=0.;
     if(pc.grid.w>0u && ray.y<-.00001)
     {
         float support_y=pc.origin_cell.y+float(pc.grid.w)*h;
@@ -185,17 +187,20 @@ void main()
                 film_t=(support_y+h*f-near_point.y)/ray.y;
                 f=ground_fill((near_point+ray*film_t).xz);
             }
-            // Ignore diffuse VOF residue rather than shading it as
-            // a domain-sized rectangular puddle. Keep the stored
-            // volume unchanged: this is a render-only visibility test.
+            // The previous 0.075 / 0.22 thresholds hid ordinary shallow
+            // puddles once the volume was distributed across ground cells.
+            // Require a real solid-supported wet neighborhood but preserve
+            // thin liquid instead of discarding it at render time.
             float core=nearby_liquid((near_point+ray*film_t).xz);
-            if(f>.075 && core>.22 && film_t>=entry && film_t<exit_t &&
-               film_t<=scene_t+.005 && (!hit || film_t<t))
+            if(f>.012 && core>.030 && film_t>=entry && film_t<exit_t &&
+               film_t<=scene_t+.012 && (!hit || film_t<t))
             {
                 film=true;
                 hit=true;
                 t=film_t;
                 film_height=h*f;
+                film_fill=f;
+                film_core=core;
             }
         }
     }
@@ -217,7 +222,7 @@ void main()
         thickness=film_height/max(.15,abs(ray.y));
         // A shallow contact line is most visible through the changing
         // surface normal, not through an artificial colored tint.
-        meniscus=clamp(length(vec2(slope_x,slope_z))*1.8,0.,1.);
+        meniscus=smoothstep(.008,.09,length(vec2(slope_x,slope_z)));
     }
     else
     {
@@ -261,8 +266,20 @@ void main()
     vec3 light=normalize(vec3(.42,.85,.30));
     vec3 half_vector=normalize(light-ray);
     float specular=pow(max(dot(normal,half_vector),0.),128.);
-    color=mix(color,vec3(.58),fresnel)+vec3(specular*.55);
-    color+=vec3(.065*meniscus);
+    color=mix(color,vec3(.66),fresnel)+vec3(specular*.55);
+    if(film)
+    {
+        // Colorless, neutral dielectric sheen. A checker floor makes the
+        // reflection/refraction visible; no debug tint is reintroduced.
+        float sheen=.085+.12*clamp(film_fill,0.,1.);
+        color=mix(color,vec3(.74),sheen);
+        color+=vec3(.12*meniscus);
+        // Suppress isolated numerical traces smoothly without deleting
+        // actual low-volume fluid from simulation or abrupt hard cutoffs.
+        float presence=smoothstep(.007,.05,film_fill)*
+                       smoothstep(.018,.075,film_core);
+        color=mix(behind,color,presence);
+    }
     imageStore(liquid_layer,pixel,vec4(color,t));
 }
 #else
