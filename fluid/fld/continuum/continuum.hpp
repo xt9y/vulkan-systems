@@ -19,9 +19,21 @@ namespace fld::continuum
     };
     static_assert(sizeof(box)==32);
 
+    // Optional generalized-Newtonian Carreau rheology. Defaults to the
+    // original constant-viscosity water path when disabled. SI units.
+    struct rheology
+    {
+        float zero_shear_viscosity=0.f; // Pa*s
+        float high_shear_viscosity=0.f; // Pa*s; zero disables Carreau
+        float relaxation_seconds=0.f;  // s
+        float power_index=1.f;         // <1 shear-thinning
+        float substrate_drag=0.f;      // 1/s, coarse contact damping
+    };
+
     struct options
     {
         properties liquid{};
+        rheology flow{};
         std::uint32_t width=64,height=40,depth=64;
         float cell_size=.1f;
         vec3 origin{-3.2f,0.f,-3.2f};
