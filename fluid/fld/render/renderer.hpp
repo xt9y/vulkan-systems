@@ -13,6 +13,7 @@ namespace fld::render
         vk::Sampler sampler{};
         mat4 view_projection=mat4::identity();
         std::uint32_t width=0,height=0,low_width=0,low_height=0;
+        std::uint32_t render_stride=1;
         vk::ImageLayout depth_layout=vk::ImageLayout::eDepthStencilReadOnlyOptimal;
         vk::ImageLayout color_layout=vk::ImageLayout::eGeneral;
         bool reversed_depth=false;
@@ -45,7 +46,7 @@ namespace fld::render
     bool active();
     void init(const std::array<std::string,4> &paths,
               std::uint32_t frames,std::uint32_t width,std::uint32_t height,
-              float render_scale=.5f);
+              float render_scale=.5f,std::uint32_t render_stride=1);
     // Composite after opaque lighting; command must have GENERAL output.
     void record(vk::CommandBuffer command,std::uint32_t frame_index,
                 const input &target);
