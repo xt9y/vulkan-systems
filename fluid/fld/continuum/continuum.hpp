@@ -55,8 +55,6 @@ namespace fld::continuum
         vk::ImageLayout depth_layout=vk::ImageLayout::eDepthStencilReadOnlyOptimal;
         vk::ImageLayout color_layout=vk::ImageLayout::eGeneral;
         bool reversed_depth=false;
-        vec3 debug_color{.04f,1.f,.06f};
-        float debug_opacity=.85f;
     };
 
     // Generic GPU continuum liquid: a staggered MAC velocity field,
