@@ -8,10 +8,10 @@ namespace fld::blood
     struct material
     {
         float density=1060.f;                 // kg/m^3, whole blood
-        float viscosity_zero=.25f;           // Pa*s, low-shear Carreau fit
-        float viscosity_high=.0035f;         // Pa*s, high-shear limit
-        float relaxation_seconds=25.f;       // Carreau time constant
-        float shear_exponent=.25f;           // n<1 gives shear thinning
+        float viscosity_zero=.056f;           // Pa*s, low-shear Carreau fit
+        float viscosity_high=.00345f;         // Pa*s, high-shear limit
+        float relaxation_seconds=3.313f;       // Carreau time constant
+        float shear_exponent=.3568f;           // n<1 gives shear thinning
         float surface_tension=.058f;         // N/m (approximate)
         float advancing_angle=1.4f;         // radians
         float receding_angle=1.1f;          // radians
