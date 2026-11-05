@@ -40,7 +40,7 @@ void main()
     float h=pc.lighting.w*max(1.5,float((pc.sizes.z>>8u)&65535u)/100.0);
     // Conservative screen-space kernel support plus one full tile halo.
     float projection=abs(pc.transform[1][1]);
-    float r=clamp(h*projection*float(pc.sizes.y)*.5/clip.w,1.0,2048.0)+18.0;
+    float r=clamp(h*projection*float(pc.sizes.y)*.5/clip.w,1.0,2048.0)+2.0;
     ivec2 lo=clamp(ivec2(floor((center-vec2(r))/16.0)),
                    ivec2(0),ivec2(columns-1u,rows-1u));
     ivec2 hi=clamp(ivec2(floor((center+vec2(r))/16.0)),
@@ -50,9 +50,9 @@ void main()
         {
             uint tile=uint(y)*columns+uint(x);
             uint slot=atomicAdd(counts[tile],1u);
-            if(slot<256u)
-                indices[tile*256u+slot]=id;
-            // Overflow is flagged by counts>256 and the renderer checks
+            if(slot<2048u)
+                indices[tile*2048u+slot]=id;
+            // Overflow is flagged by counts>2048 and the renderer checks
             // the complete particle buffer rather than losing fluid.
         }
 }
