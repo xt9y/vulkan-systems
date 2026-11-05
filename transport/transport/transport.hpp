@@ -27,17 +27,18 @@ namespace transport
     static_assert(sizeof(blocker)==32);
 
     // Shader order: exchange matrix construction, Jacobi transport solve.
-    using shader_paths=std::array<std::string,2>;
+    using shader_paths=std::array<std::string,4>;
 
     struct state
     {
         vk::buffer::resource patches,blockers,exchange;
-        std::array<vk::buffer::resource,2> radiance;
+        std::array<vk::buffer::resource,2> radiance,delta;
+        vk::buffer::resource previous_emission;
         vk::DescriptorSetLayout layout{};
         vk::DescriptorPool pool{};
-        std::array<vk::DescriptorSet,2> sets{};
+        std::array<vk::DescriptorSet,4> sets{};
         vk::PipelineLayout pipeline_layout{};
-        std::array<vk::Pipeline,2> pipelines{};
+        std::array<vk::Pipeline,4> pipelines{};
         std::uint32_t patch_count=0,blocker_count=0;
     };
 
@@ -51,6 +52,9 @@ namespace transport
     // Even iteration count keeps the public output bound to radiance[0].
     // The scene is stable between calls; callers synchronize host updates.
     void record_solve(vk::CommandBuffer command,std::uint32_t iterations);
+    // Neumann delta update: retain previous lighting and only propagate changes
+    // to emission. Geometry/visibility must remain unchanged.
+    void record_delta(vk::CommandBuffer command,std::uint32_t terms);
     void update_emission(std::uint32_t index,vec4 emission);
     vk::DescriptorBufferInfo patches_descriptor();
     vk::DescriptorBufferInfo radiance_descriptor();

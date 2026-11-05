@@ -14,9 +14,12 @@ struct Blocker {
 
 layout(std430,binding=0) readonly buffer PatchBuffer { Patch patches[]; };
 layout(std430,binding=1) buffer ExchangeBuffer { float exchange[]; };
-layout(std430,binding=2) readonly buffer InputBuffer { vec4 input_radiance[]; };
+layout(std430,binding=2) buffer InputBuffer { vec4 input_radiance[]; };
 layout(std430,binding=3) writeonly buffer OutputBuffer { vec4 output_radiance[]; };
 layout(std430,binding=4) readonly buffer BlockerBuffer { Blocker blockers[]; };
+layout(std430,binding=5) readonly buffer DeltaInput { vec4 delta_input[]; };
+layout(std430,binding=6) writeonly buffer DeltaOutput { vec4 delta_output[]; };
+layout(std430,binding=7) buffer EmissionHistory { vec4 old_emission[]; };
 layout(push_constant) uniform Parameters {
     uint count;
     uint blocker_count;
@@ -79,6 +82,40 @@ void main()
     // Differential form-factor approximation, not an exact finite patch integral.
     exchange[index]=min(ca*cb*b.position_area.w /
                         (3.14159265359*max(r2,b.position_area.w/3.14159265359)),1.0);
+}
+#elif defined(TRANSPORT_INJECT)
+void main()
+{
+    uint i=gl_GlobalInvocationID.x;
+    if(i>=args.count)return;
+    vec4 delta=patches[i].emission-old_emission[i];
+    delta_output[i]=delta;
+    input_radiance[i]+=delta;
+    old_emission[i]=patches[i].emission;
+}
+#elif defined(TRANSPORT_PROPAGATE)
+void main()
+{
+    uint i=gl_GlobalInvocationID.x;
+    if(i>=args.count)return;
+    vec3 indirect=vec3(0);
+    float sum=0.0;
+    uint offset=i*args.count;
+    for(uint j=0;j<args.count;j++)
+    {
+        float weight=exchange[offset+j];
+        vec3 delta=delta_input[j].rgb;
+        if(weight==0.0 || all(lessThan(abs(delta),vec3(0.0000001))))
+        {
+            sum+=weight;
+            continue;
+        }
+        indirect+=weight*delta;
+        sum+=weight;
+    }
+    vec3 bounce=patches[i].albedo.rgb*(indirect/max(1.0,sum));
+    delta_output[i]=vec4(bounce,0.0);
+    input_radiance[i].rgb+=bounce;
 }
 #else
 void main()

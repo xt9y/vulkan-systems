@@ -6,3 +6,5 @@ This research branch is a CLEAN REBUILD, NOT a playable simulation.
 The old blood/ and CPU SPH/film implementation are deliberately absent.
 Physically motivated small-drop algorithms and GPU reconstruction follow
 the plan in fluid/research.md. Keep all physics values in SI units.
+
+  transport/ - reusable GPU diffuse surface exchange, Jacobi bootstrap, delta light propagation

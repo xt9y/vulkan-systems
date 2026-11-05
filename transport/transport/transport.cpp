@@ -85,12 +85,22 @@ namespace transport
             for(auto& b:data->radiance)
                 b=buffer(n*sizeof(vec4),vk::BufferUsageFlagBits::eStorageBuffer |
                          vk::BufferUsageFlagBits::eTransferDst);
+            for(auto& b:data->delta)
+                b=buffer(n*sizeof(vec4),vk::BufferUsageFlagBits::eStorageBuffer);
+            data->previous_emission=buffer(n*sizeof(vec4),
+                                            vk::BufferUsageFlagBits::eStorageBuffer,true);
+            std::vector<vec4> initial_emission;
+            initial_emission.reserve(n);
+            for(const auto& surface:surfaces)
+                initial_emission.push_back(surface.emission);
+            vk::buffer::write(data->previous_emission,initial_emission.data(),
+                              initial_emission.size()*sizeof(vec4));
             vk::buffer::write(data->patches,surfaces.data(),n*sizeof(patch));
             if(!obstacles.empty())
                 vk::buffer::write(data->blockers,obstacles.data(),
                                   obstacles.size()*sizeof(blocker));
 
-            std::array<vk::DescriptorSetLayoutBinding,5> bindings{};
+            std::array<vk::DescriptorSetLayoutBinding,8> bindings{};
             for(std::uint32_t i=0;i<bindings.size();++i)
             {
                 bindings[i].binding=i;
@@ -133,31 +143,35 @@ namespace transport
                 vk::shader::destroy(shader);
             }
 
-            vk::DescriptorPoolSize size{vk::DescriptorType::eStorageBuffer,10};
+            vk::DescriptorPoolSize size{vk::DescriptorType::eStorageBuffer,32};
             vk::DescriptorPoolCreateInfo pool{};
-            pool.maxSets=2;
+            pool.maxSets=4;
             pool.poolSizeCount=1;
             pool.pPoolSizes=&size;
             data->pool=device.createDescriptorPool(pool);
 
-            std::array<vk::DescriptorSetLayout,2> layouts{data->layout,data->layout};
+            std::array<vk::DescriptorSetLayout,4> layouts{
+                data->layout,data->layout,data->layout,data->layout};
             vk::DescriptorSetAllocateInfo alloc{};
             alloc.descriptorPool=data->pool;
-            alloc.descriptorSetCount=2;
+            alloc.descriptorSetCount=4;
             alloc.pSetLayouts=layouts.data();
             auto sets=device.allocateDescriptorSets(alloc);
-            data->sets={sets[0],sets[1]};
+            data->sets={sets[0],sets[1],sets[2],sets[3]};
 
-            for(std::uint32_t s=0;s<2;++s)
+            for(std::uint32_t s=0;s<4;++s)
             {
-                std::array<vk::DescriptorBufferInfo,5> infos{{
+                std::array<vk::DescriptorBufferInfo,8> infos{{
                     vk::buffer::descriptor(data->patches),
                     vk::buffer::descriptor(data->exchange),
-                    vk::buffer::descriptor(data->radiance[s]),
-                    vk::buffer::descriptor(data->radiance[1-s]),
-                    vk::buffer::descriptor(data->blockers)
+                    vk::buffer::descriptor(data->radiance[s==1?1:0]),
+                    vk::buffer::descriptor(data->radiance[s==1?0:1]),
+                    vk::buffer::descriptor(data->blockers),
+                    vk::buffer::descriptor(data->delta[s==3?1:0]),
+                    vk::buffer::descriptor(data->delta[s==3?0:1]),
+                    vk::buffer::descriptor(data->previous_emission)
                 }};
-                std::array<vk::WriteDescriptorSet,5> writes{};
+                std::array<vk::WriteDescriptorSet,8> writes{};
                 for(std::uint32_t i=0;i<writes.size();++i)
                 {
                     writes[i].dstSet=data->sets[s];
@@ -221,6 +235,36 @@ namespace transport
         }
     }
 
+    void record_delta(vk::CommandBuffer command,std::uint32_t terms)
+    {
+        check();
+        if(!command || terms==0 || terms>256)
+            throw std::invalid_argument("invalid delta iteration count");
+        const parameters p{data->patch_count,data->blocker_count,0,0};
+        // Inject delta E into the converged radiance solution. Set 3 writes
+        // delta[0]; the input delta binding is unused by this stage.
+        vk::record::pipeline(command,vk::PipelineBindPoint::eCompute,
+                             data->pipelines[2]);
+        command.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                                   data->pipeline_layout,0,{data->sets[3]},{});
+        command.pushConstants(data->pipeline_layout,vk::ShaderStageFlagBits::eCompute,
+                              0,sizeof(p),&p);
+        vk::record::dispatch(command,(data->patch_count+127)/128,1,1);
+        compute_barrier(command);
+
+        vk::record::pipeline(command,vk::PipelineBindPoint::eCompute,
+                             data->pipelines[3]);
+        for(std::uint32_t k=1;k<terms;++k)
+        {
+            // Each pass adds one more transport bounce of delta radiance.
+            command.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                                       data->pipeline_layout,0,
+                                       {data->sets[(k&1u)?2:3]},{});
+            vk::record::dispatch(command,(data->patch_count+127)/128,1,1);
+            compute_barrier(command);
+        }
+    }
+
     void update_emission(std::uint32_t index,vec4 value)
     {
         check();
@@ -259,7 +303,9 @@ namespace transport
             if(data->pool)device.destroyDescriptorPool(data->pool);
             if(data->layout)vk::descriptor_layout::destroy(data->layout);
             for(auto* r:{&data->patches,&data->blockers,&data->exchange,
-                         &data->radiance[0],&data->radiance[1]})
+                         &data->radiance[0],&data->radiance[1],
+                         &data->delta[0],&data->delta[1],
+                         &data->previous_emission})
                 if(r->handle)vk::buffer::destroy(*r);
         }
         delete data;

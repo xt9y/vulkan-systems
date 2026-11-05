@@ -6,15 +6,18 @@ transport::patch - surface center, area, normal, albedo, emission
 transport::blocker - axis-aligned visibility obstacle
 transport::init(patches, blockers, shaders)
 transport::record_build(command) - construct dense GPU patch exchange weights
-transport::record_solve(command, even_iterations) - Jacobi multiple-bounce radiosity
+transport::record_solve(command, even_iterations) - initial Jacobi multibounce solution
+transport::record_delta(command, terms) - update precomputed lighting by propagating emission changes
 transport::update_emission(index, value) - change light after GPU synchronization
 transport::radiance_descriptor() - GPU buffer for consumer renderer
 transport::shutdown()
 
-Compile transport.comp twice with glslangValidator -V:
+Compile transport.comp four times with glslangValidator -V:
 -DTRANSPORT_BUILD for exchange weights
 -DTRANSPORT_SOLVE for Jacobi solve (default branch)
+-DTRANSPORT_INJECT for source-delta injection
+-DTRANSPORT_PROPAGATE for delta-bounce propagation
 
 Limitations: O(N^2) memory/work, approximate differential form factors,
-diffuse-only, static geometry until record_build, no sparse residual scheduling.
+diffuse-only, static geometry until record_build, no sparse active-frontier scheduling.
 Not a completed Causal Radiance Graph or proven real-time GI breakthrough.
