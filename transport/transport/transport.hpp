@@ -71,5 +71,6 @@ namespace transport
     vk::DescriptorBufferInfo patches_descriptor();
     vk::DescriptorBufferInfo radiance_descriptor();
     vk::DescriptorBufferInfo direct_descriptor();
+    vk::DescriptorBufferInfo oriented_descriptor();
     void shutdown();
 }

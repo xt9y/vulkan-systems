@@ -323,6 +323,12 @@ namespace transport
         return vk::buffer::descriptor(data->direct);
     }
 
+    vk::DescriptorBufferInfo oriented_descriptor()
+    {
+        check();
+        return vk::buffer::descriptor(data->oriented_blockers);
+    }
+
     void shutdown()
     {
         if(!data)return;
