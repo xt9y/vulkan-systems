@@ -236,13 +236,16 @@ void main()
         fields[w_off(0u)+wi(c)]=0.;fields[w_off(1u)+wi(c)]=0.;
     }
 #elif defined(CONT_ADVECT_VELOCITY)
+    // Air is not simulated as falling water. Keep velocities outside
+    // the active liquid and its immediate interface at zero so numerical
+    // VOF traces cannot be transported across the entire finite grid.
     vec3 base=pc.origin_cell.xyz;
     if(c.x<=int(nx()) && c.y<int(ny()) && c.z<int(nz()))
     {
         ivec3 l=c-ivec3(1,0,0);
         vec3 world=base+(vec3(c)+vec3(0.,.5,.5))*h;
         float value=0.;
-        if(!solid(l)&&!solid(c))
+        if(!solid(l)&&!solid(c) && (wet(l)||wet(c)))
         {
             vec3 old=velocity(world);
             value=tri_u((world-old*dt-base)/h-vec3(0.,.5,.5),0u);
@@ -258,7 +261,7 @@ void main()
         ivec3 bottom=c-ivec3(0,1,0);
         vec3 world=base+(vec3(c)+vec3(.5,0.,.5))*h;
         float value=0.;
-        if(!solid(bottom)&&!solid(c))
+        if(!solid(bottom)&&!solid(c) && (wet(bottom)||wet(c)))
         {
             vec3 old=velocity(world);
             value=tri_v((world-old*dt-base)/h-vec3(.5,0.,.5),0u);
@@ -275,7 +278,7 @@ void main()
         ivec3 back=c-ivec3(0,0,1);
         vec3 world=base+(vec3(c)+vec3(.5,.5,0.))*h;
         float value=0.;
-        if(!solid(back)&&!solid(c))
+        if(!solid(back)&&!solid(c) && (wet(back)||wet(c)))
         {
             vec3 old=velocity(world);
             value=tri_w((world-old*dt-base)/h-vec3(.5,.5,0.),0u);
