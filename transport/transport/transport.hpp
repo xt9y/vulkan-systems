@@ -35,18 +35,18 @@ namespace transport
     static_assert(sizeof(oriented_blocker)==80);
 
     // Shader order: exchange construction, Jacobi solve, delta injection, delta propagation.
-    using shader_paths=std::array<std::string,4>;
+    using shader_paths=std::array<std::string,5>;
 
     struct state
     {
         vk::buffer::resource patches,blockers,oriented_blockers,exchange;
         std::array<vk::buffer::resource,2> radiance,delta;
-        vk::buffer::resource previous_emission;
+        vk::buffer::resource previous_emission,direct;
         vk::DescriptorSetLayout layout{};
         vk::DescriptorPool pool{};
         std::array<vk::DescriptorSet,4> sets{};
         vk::PipelineLayout pipeline_layout{};
-        std::array<vk::Pipeline,4> pipelines{};
+        std::array<vk::Pipeline,5> pipelines{};
         std::uint32_t patch_count=0,blocker_count=0,oriented_count=0;
     };
 
@@ -58,6 +58,9 @@ namespace transport
     // Build is required when geometry, visibility or patch areas change.
     // Records GPU writes and all necessary internal compute barriers.
     void record_build(vk::CommandBuffer command);
+    // Computes the first-bounce component to replace its low-resolution
+    // approximation with high-quality per-pixel area-light sampling.
+    void record_direct(vk::CommandBuffer command);
     // Even iteration count keeps the public output bound to radiance[0].
     // The scene is stable between calls; callers synchronize host updates.
     void record_solve(vk::CommandBuffer command,std::uint32_t iterations);
@@ -67,5 +70,6 @@ namespace transport
     void update_emission(std::uint32_t index,vec4 emission);
     vk::DescriptorBufferInfo patches_descriptor();
     vk::DescriptorBufferInfo radiance_descriptor();
+    vk::DescriptorBufferInfo direct_descriptor();
     void shutdown();
 }

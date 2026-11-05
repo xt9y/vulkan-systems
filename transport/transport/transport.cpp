@@ -94,6 +94,8 @@ namespace transport
                 b=buffer(n*sizeof(vec4),vk::BufferUsageFlagBits::eStorageBuffer);
             data->previous_emission=buffer(n*sizeof(vec4),
                                             vk::BufferUsageFlagBits::eStorageBuffer,true);
+            data->direct=buffer(n*sizeof(vec4),
+                                vk::BufferUsageFlagBits::eStorageBuffer);
             std::vector<vec4> initial_emission;
             initial_emission.reserve(n);
             for(const auto& surface:surfaces)
@@ -108,7 +110,7 @@ namespace transport
                 vk::buffer::write(data->oriented_blockers,oriented.data(),
                                   oriented.size()*sizeof(oriented_blocker));
 
-            std::array<vk::DescriptorSetLayoutBinding,9> bindings{};
+            std::array<vk::DescriptorSetLayoutBinding,10> bindings{};
             for(std::uint32_t i=0;i<bindings.size();++i)
             {
                 bindings[i].binding=i;
@@ -151,7 +153,7 @@ namespace transport
                 vk::shader::destroy(shader);
             }
 
-            vk::DescriptorPoolSize size{vk::DescriptorType::eStorageBuffer,36};
+            vk::DescriptorPoolSize size{vk::DescriptorType::eStorageBuffer,40};
             vk::DescriptorPoolCreateInfo pool{};
             pool.maxSets=4;
             pool.poolSizeCount=1;
@@ -169,7 +171,7 @@ namespace transport
 
             for(std::uint32_t s=0;s<4;++s)
             {
-                std::array<vk::DescriptorBufferInfo,9> infos{{
+                std::array<vk::DescriptorBufferInfo,10> infos{{
                     vk::buffer::descriptor(data->patches),
                     vk::buffer::descriptor(data->exchange),
                     vk::buffer::descriptor(data->radiance[s==1?1:0]),
@@ -178,9 +180,10 @@ namespace transport
                     vk::buffer::descriptor(data->delta[s==3?1:0]),
                     vk::buffer::descriptor(data->delta[s==3?0:1]),
                     vk::buffer::descriptor(data->previous_emission),
-                    vk::buffer::descriptor(data->oriented_blockers)
+                    vk::buffer::descriptor(data->oriented_blockers),
+                    vk::buffer::descriptor(data->direct)
                 }};
-                std::array<vk::WriteDescriptorSet,9> writes{};
+                std::array<vk::WriteDescriptorSet,10> writes{};
                 for(std::uint32_t i=0;i<writes.size();++i)
                 {
                     writes[i].dstSet=data->sets[s];
@@ -222,6 +225,21 @@ namespace transport
                               0,sizeof(p),&p);
         const auto edges=std::uint64_t(data->patch_count)*data->patch_count;
         vk::record::dispatch(command,std::uint32_t((edges+127)/128),1,1);
+        compute_barrier(command);
+    }
+
+    void record_direct(vk::CommandBuffer command)
+    {
+        check();
+        if(!command)throw std::invalid_argument("null command buffer");
+        const parameters p{data->patch_count,data->blocker_count,data->oriented_count,0};
+        vk::record::pipeline(command,vk::PipelineBindPoint::eCompute,
+                             data->pipelines[4]);
+        command.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                                   data->pipeline_layout,0,{data->sets[0]},{});
+        command.pushConstants(data->pipeline_layout,vk::ShaderStageFlagBits::eCompute,
+                              0,sizeof(p),&p);
+        vk::record::dispatch(command,(data->patch_count+127)/128,1,1);
         compute_barrier(command);
     }
 
@@ -299,6 +317,12 @@ namespace transport
         return vk::buffer::descriptor(data->radiance[0]);
     }
 
+    vk::DescriptorBufferInfo direct_descriptor()
+    {
+        check();
+        return vk::buffer::descriptor(data->direct);
+    }
+
     void shutdown()
     {
         if(!data)return;
@@ -314,7 +338,7 @@ namespace transport
             for(auto* r:{&data->patches,&data->blockers,&data->oriented_blockers,&data->exchange,
                          &data->radiance[0],&data->radiance[1],
                          &data->delta[0],&data->delta[1],
-                         &data->previous_emission})
+                         &data->previous_emission,&data->direct})
                 if(r->handle)vk::buffer::destroy(*r);
         }
         delete data;
