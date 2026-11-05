@@ -16,6 +16,9 @@ namespace fld::blood
         float advancing_angle=1.4f;         // radians
         float receding_angle=1.1f;          // radians
         float substrate_drag=3.f;           // s^-1, visual contact damping
+        continuum::vec3 shallow_color{.68f,.055f,.041f}; // linear RGB
+        float optical_density=26.f;          // 1/m, thicker = darker
+
     };
 
     continuum::options configure(continuum::options settings,
