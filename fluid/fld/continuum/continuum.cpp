@@ -45,6 +45,7 @@ namespace fld::continuum
             std::vector<frame> frames;
             std::uint32_t screen_width=0,screen_height=0;
             std::uint32_t low_width=0,low_height=0,active_vof=0;
+            std::uint32_t support_layer=0; // 0 disables thin-ground film
             bool seeded=false;
         };
         state* data=nullptr;
@@ -234,6 +235,28 @@ namespace fld::continuum
             float(screen_width)*settings.render_scale)));
         data->low_height=std::max(1u,std::uint32_t(std::ceil(
             float(screen_height)*settings.render_scale)));
+        // Identify the actual upper face of a scene-owned solid collider
+        // below the drop. Only use aligned grid faces for thin-film rendering.
+        // Physics always uses the full voxelized collider field independently.
+        float support=-std::numeric_limits<float>::infinity();
+        for(const auto& collider:settings.colliders)
+        {
+            if(initial.center.x<collider.minimum.x ||
+               initial.center.x>collider.maximum.x ||
+               initial.center.z<collider.minimum.z ||
+               initial.center.z>collider.maximum.z ||
+               collider.maximum.y>initial.center.y ||
+               collider.maximum.y<=support)continue;
+            support=collider.maximum.y;
+        }
+        if(std::isfinite(support))
+        {
+            const float layer=(support-settings.origin.y)/settings.cell_size;
+            const float rounded=std::round(layer);
+            if(std::abs(layer-rounded)<.01f && rounded>=1.f &&
+               rounded<float(settings.height))
+                data->support_layer=std::uint32_t(rounded);
+        }
         auto device=vk::device::get()->handle;
         try
         {
@@ -443,7 +466,7 @@ namespace fld::continuum
                  std::clamp(target.debug_color.y,0.f,1.f),
                  std::clamp(target.debug_color.z,0.f,1.f),
                  std::clamp(target.debug_opacity,0.f,1.f)};
-        rp.grid={o.width,o.height,o.depth,0u};
+        rp.grid={o.width,o.height,o.depth,data->support_layer};
         rp.screen={data->low_width,data->low_height,
                    target.reversed_depth?1u:0u,data->active_vof};
         dispatch_render(command,0,f,rp);
