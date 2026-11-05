@@ -1,0 +1,20 @@
+VulkanTransport
+GPU diffuse patch transport baseline using VulkanEngine only.
+build.c builds the VulkanTransport static library.
+
+transport::patch - surface center, area, normal, albedo, emission
+transport::blocker - axis-aligned visibility obstacle
+transport::init(patches, blockers, shaders)
+transport::record_build(command) - construct dense GPU patch exchange weights
+transport::record_solve(command, even_iterations) - Jacobi multiple-bounce radiosity
+transport::update_emission(index, value) - change light after GPU synchronization
+transport::radiance_descriptor() - GPU buffer for consumer renderer
+transport::shutdown()
+
+Compile transport.comp twice with glslangValidator -V:
+-DTRANSPORT_BUILD for exchange weights
+-DTRANSPORT_SOLVE for Jacobi solve (default branch)
+
+Limitations: O(N^2) memory/work, approximate differential form factors,
+diffuse-only, static geometry until record_build, no sparse residual scheduling.
+Not a completed Causal Radiance Graph or proven real-time GI breakthrough.
