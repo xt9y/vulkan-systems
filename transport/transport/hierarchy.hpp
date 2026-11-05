@@ -29,6 +29,7 @@ namespace transport::hierarchy
         std::uint32_t reciprocal_pairs=0;
         float initial_max_row=0.f,global_scale=1.f,graph_build_ms=0.f;
         float residual=0.f,reciprocity_max_error=0.f;
+        float operator_norm_upper=0.f,discrete_error_bound=0.f;
     };
 
     class solver
@@ -55,6 +56,9 @@ namespace transport::hierarchy
         void record_residual(vk::CommandBuffer command);
         // Only after the recorded GPU submission is complete.
         float residual() const;
+        // Certified upper bound for the *discrete* linear transport system,
+        // not for spatial/visibility quadrature errors.
+        float error_bound() const;
         const statistics& metrics() const;
         vk::DescriptorBufferInfo patches_descriptor() const;
         vk::DescriptorBufferInfo radiance_descriptor() const;
