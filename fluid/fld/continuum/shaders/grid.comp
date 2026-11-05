@@ -143,9 +143,54 @@ float free_pressure(ivec3 fluid_cell,ivec3 neighbor,uint pbank)
     if(solid(neighbor))return 0.;
     return surface_pressure(fluid_cell);
 }
-float flux(float face,float left,float right)
+// The same face flux is evaluated by both adjacent cells. An outgoing
+// donor budget prevents negative volume; an incoming cell budget prevents
+// overfilling. Flux limiting preserves the finite-volume global mass sum.
+float outgoing(ivec3 c)
 {
-    return face>0.?face*left:face*right;
+    if(!valid(c) || solid(c))return 0.;
+    return fraction(c,pc.flags.x)*(
+        max(0.,face_u(c+ivec3(1,0,0),0u))+
+        max(0.,-face_u(c,0u))+
+        max(0.,face_v(c+ivec3(0,1,0),0u))+
+        max(0.,-face_v(c,0u))+
+        max(0.,face_w(c+ivec3(0,0,1),0u))+
+        max(0.,-face_w(c,0u)));
+}
+float incoming(ivec3 c)
+{
+    if(!valid(c) || solid(c))return 0.;
+    return max(0.,-face_u(c+ivec3(1,0,0),0u))*
+               fraction(c+ivec3(1,0,0),pc.flags.x)+
+           max(0.,face_u(c,0u))*
+               fraction(c-ivec3(1,0,0),pc.flags.x)+
+           max(0.,-face_v(c+ivec3(0,1,0),0u))*
+               fraction(c+ivec3(0,1,0),pc.flags.x)+
+           max(0.,face_v(c,0u))*
+               fraction(c-ivec3(0,1,0),pc.flags.x)+
+           max(0.,-face_w(c+ivec3(0,0,1),0u))*
+               fraction(c+ivec3(0,0,1),pc.flags.x)+
+           max(0.,face_w(c,0u))*
+               fraction(c-ivec3(0,0,1),pc.flags.x);
+}
+float supply(ivec3 c)
+{
+    float amount=fraction(c,pc.flags.x);
+    return min(1.,amount/max(1e-10,pc.physical.x/pc.origin_cell.w*outgoing(c)));
+}
+float capacity(ivec3 c)
+{
+    float amount=fraction(c,pc.flags.x);
+    float available=1.-amount+pc.physical.x/pc.origin_cell.w*outgoing(c);
+    return clamp(available/max(1e-10,pc.physical.x/pc.origin_cell.w*incoming(c)),0.,1.);
+}
+float limited_flux(float speed,ivec3 left,ivec3 right)
+{
+    if(speed>=0.)
+        return speed*fraction(left,pc.flags.x)*
+               min(supply(left),capacity(right));
+    return speed*fraction(right,pc.flags.x)*
+           min(supply(right),capacity(left));
 }
 
 void main()
@@ -308,19 +353,15 @@ void main()
     if(!inside)return;
     if(solid(c)){fields[vof_off(1u-pc.flags.x)+ci(c)]=0.;return;}
     float own=fraction(c,pc.flags.x);
-    // Conservative finite-volume upwind flux on shared MAC faces.
-    float xp=flux(face_u(c+ivec3(1,0,0),0u),own,
-                  fraction(c+ivec3(1,0,0),pc.flags.x));
-    float xm=flux(face_u(c,0u),fraction(c-ivec3(1,0,0),pc.flags.x),own);
-    float yp=flux(face_v(c+ivec3(0,1,0),0u),own,
-                  fraction(c+ivec3(0,1,0),pc.flags.x));
-    float ym=flux(face_v(c,0u),fraction(c-ivec3(0,1,0),pc.flags.x),own);
-    float zp=flux(face_w(c+ivec3(0,0,1),0u),own,
-                  fraction(c+ivec3(0,0,1),pc.flags.x));
-    float zm=flux(face_w(c,0u),fraction(c-ivec3(0,0,1),pc.flags.x),own);
+    // Shared limited face flux: unlike independent cell clamping, this
+    // conserves global liquid volume for an enclosed grid (up to roundoff).
+    float xp=limited_flux(face_u(c+ivec3(1,0,0),0u),c,c+ivec3(1,0,0));
+    float xm=limited_flux(face_u(c,0u),c-ivec3(1,0,0),c);
+    float yp=limited_flux(face_v(c+ivec3(0,1,0),0u),c,c+ivec3(0,1,0));
+    float ym=limited_flux(face_v(c,0u),c-ivec3(0,1,0),c);
+    float zp=limited_flux(face_w(c+ivec3(0,0,1),0u),c,c+ivec3(0,0,1));
+    float zm=limited_flux(face_w(c,0u),c-ivec3(0,0,1),c);
     float updated=own-dt/h*(xp-xm+yp-ym+zp-zm);
-    // Bounded donor-cell advection. CFL must stay below 1 to preserve mass
-    // without clipping; the API uses fixed substeps and a velocity limit.
     fields[vof_off(1u-pc.flags.x)+ci(c)]=clamp(updated,0.,1.);
 #endif
 }
