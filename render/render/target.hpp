@@ -25,6 +25,11 @@ namespace render
         target(const target&)=delete;
         target& operator=(const target&)=delete;
         void create(const target_description& description);
+        // Build a framebuffer for a render pass owned elsewhere. Caller must
+        // keep the render pass and attachment views alive through reset().
+        void create_framebuffer(vk::RenderPass pass,
+                                const std::vector<vk::ImageView>& views,
+                                vk::Extent2D extent,std::uint32_t layers=1);
         void reset();
         vk::RenderPass pass() const{return pass_;}
         vk::Framebuffer framebuffer() const{return framebuffer_;}
@@ -33,5 +38,6 @@ namespace render
         vk::RenderPass pass_{};
         vk::Framebuffer framebuffer_{};
         vk::Extent2D extent_{};
+        bool owns_pass_=false;
     };
 }

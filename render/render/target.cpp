@@ -33,6 +33,7 @@ namespace render
         try
         {
             pass_=vk::render_pass::create(pass_info);
+            owns_pass_=true;
             vk::FramebufferCreateInfo frame_info{};
             frame_info.renderPass=pass_;
             frame_info.attachmentCount=std::uint32_t(description.views.size());
@@ -50,11 +51,33 @@ namespace render
         }
     }
 
+    void target::create_framebuffer(vk::RenderPass pass,
+                                    const std::vector<vk::ImageView>& views,
+                                    vk::Extent2D extent,std::uint32_t layers)
+    {
+        if(pass_||framebuffer_)throw std::logic_error("target already created");
+        if(!pass||views.empty()||!extent.width||!extent.height||!layers)
+            throw std::invalid_argument("invalid external render pass/framebuffer");
+        vk::FramebufferCreateInfo info{};
+        info.renderPass=pass;
+        info.attachmentCount=std::uint32_t(views.size());
+        info.pAttachments=views.data();
+        info.width=extent.width;
+        info.height=extent.height;
+        info.layers=layers;
+        // Do not take ownership of the caller's pass even on failure.
+        framebuffer_=vk::framebuffer::create(info);
+        pass_=pass;
+        extent_=extent;
+        owns_pass_=false;
+    }
+
     void target::reset()
     {
         if(framebuffer_)vk::framebuffer::destroy(framebuffer_);
         framebuffer_=vk::Framebuffer{};
-        if(pass_)vk::render_pass::destroy(pass_);
+        if(pass_&&owns_pass_)vk::render_pass::destroy(pass_);
+        owns_pass_=false;
         pass_=vk::RenderPass{};
         extent_=vk::Extent2D{};
     }
