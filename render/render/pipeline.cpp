@@ -78,7 +78,7 @@ namespace render
         vk::PipelineDepthStencilStateCreateInfo depth{};
         depth.depthTestEnable=state.depth_test;
         depth.depthWriteEnable=state.depth_write;
-        depth.depthCompareOp=vk::CompareOp::eLessOrEqual;
+        depth.depthCompareOp=state.depth_compare;
 
         vk::PipelineColorBlendAttachmentState default_attachment{};
         default_attachment.blendEnable=false;

@@ -1,0 +1,90 @@
+#version 450
+
+layout(local_size_x = 128) in;
+
+struct Instance
+{
+    mat4 model;
+    mat4 normal;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer Transforms
+{
+    Instance instances[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer Bounds
+{
+    vec4 spheres[];
+};
+
+layout(std430, set = 0, binding = 2) buffer Visible
+{
+    uint visible_ids[];
+};
+
+layout(std430, set = 0, binding = 3) buffer Draw
+{
+    uint index_count;
+    uint instance_count;
+    uint first_index;
+    int vertex_offset;
+    uint first_instance;
+};
+
+layout(push_constant) uniform Culling
+{
+    vec4 planes[6];
+    uint count;
+    uint indices;
+} pc;
+
+// One atomic per workgroup instead of one per visible instance.
+shared uint prefix[128];
+shared uint group_base;
+
+void main()
+{
+    uint id = gl_GlobalInvocationID.x;
+    uint lane = gl_LocalInvocationID.x;
+
+    if (id == 0u)
+    {
+        index_count = pc.indices;
+        first_index = 0u;
+        vertex_offset = 0;
+        first_instance = 0u;
+    }
+    bool keep = id < pc.count;
+
+    if (keep)
+    {
+        vec4 sphere = spheres[id];
+        for (uint i = 0; i < 6; ++i)
+        {
+            if (dot(pc.planes[i], vec4(sphere.xyz, 1.0)) < -sphere.w)
+            {
+                keep = false;
+                break;
+            }
+        }
+    }
+
+    prefix[lane] = keep ? 1u : 0u;
+    barrier();
+
+    for (uint offset = 1; offset < 128; offset <<= 1)
+    {
+        uint left = lane >= offset ? prefix[lane - offset] : 0u;
+        barrier();
+        prefix[lane] += left;
+        barrier();
+    }
+
+    if (lane == 0)
+        group_base = atomicAdd(instance_count, prefix[127]);
+    barrier();
+
+    if (keep)
+        visible_ids[group_base + prefix[lane] - 1u] = id;
+}
