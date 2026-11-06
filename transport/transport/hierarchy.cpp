@@ -51,11 +51,11 @@ namespace transport::hierarchy
         enum kernel : std::uint32_t
         {
             seed=0,aggregate=1,gather=2,emission_aggregate=3,
-            direct=4,inject=5,propagate=6,residual_kernel=7
+            direct=4,inject=5,propagate=6,residual_kernel=7,indirect=8
         };
-        constexpr std::array<const char*,8> kernel_names{{
+        constexpr std::array<const char*,9> kernel_names{{
             "seed","aggregate","gather","emission","direct","inject",
-            "propagate","residual"
+            "propagate","residual","indirect"
         }};
 
         vk::buffer::resource make_buffer(std::size_t bytes,
@@ -99,10 +99,14 @@ namespace transport::hierarchy
         }
 
         bool occluded(vec3 a,vec3 b,
-                      const std::vector<transport::oriented_blocker>& boxes)
+                      const std::vector<transport::oriented_blocker>& boxes,
+                      int owner_a=-1,int owner_b=-1)
         {
             const vec3 ray=b-a;
-            for(const auto& box:boxes)
+            for(std::size_t k=0;k<boxes.size();++k)
+            {
+                if(int(k)==owner_a || int(k)==owner_b)continue;
+                const auto& box=boxes[k]
             {
                 const vec3 rel=a-xyz(box.center);
                 const vec3 axes[]{xyz(box.axis_x),xyz(box.axis_y),xyz(box.axis_z)};
@@ -137,10 +141,14 @@ namespace transport::hierarchy
         // must split instead of replacing partial visibility by a binary
         // three-ray decision.
         bool maybe_blocked(vec3 a,vec3 b,float radius,
-                           const std::vector<transport::oriented_blocker>& boxes)
+                           const std::vector<transport::oriented_blocker>& boxes,
+                           int owner=-1)
         {
             const vec3 ray=b-a;
-            for(const auto& box:boxes)
+            for(std::size_t k=0;k<boxes.size();++k)
+            {
+                if(int(k)==owner)continue;
+                const auto& box=boxes[k]
             {
                 const vec3 axes[]{xyz(box.axis_x),xyz(box.axis_y),xyz(box.axis_z)};
                 const vec3 start=a-xyz(box.center);
@@ -172,7 +180,8 @@ namespace transport::hierarchy
         }
 
         float kernel(vec3 a,vec3 na,vec3 b,vec3 nb,
-                     const std::vector<transport::oriented_blocker>& boxes)
+                     const std::vector<transport::oriented_blocker>& boxes,
+                     int owner_a=-1,int owner_b=-1)
         {
             const vec3 d=b-a;
             const float r2=dot(d,d);
@@ -181,7 +190,7 @@ namespace transport::hierarchy
             const float ca=std::max(0.f,dot(na,d)*inv);
             const float cb=std::max(0.f,-dot(nb,d)*inv);
             if(ca*cb==0.f)return 0.f;
-            if(occluded(a+na*.001f,b+nb*.001f,boxes))return 0.f;
+            if(occluded(a+na*.001f,b+nb*.001f,boxes,owner_a,owner_b))return 0.f;
             return ca*cb/(pi*r2);
         }
 
@@ -194,7 +203,8 @@ namespace transport::hierarchy
             for(int a=0;a<4;a++)
             for(int b=0;b<4;b++)
                 sum+=kernel(quad_sample(receiver,a),na,
-                            quad_sample(sender,b),nb,boxes);
+                            quad_sample(sender,b),nb,boxes,
+                            receiver.owner_blocker,sender.owner_blocker);
             return sender.value.position_area.w*sum/16.f;
         }
 
@@ -314,7 +324,7 @@ namespace transport::hierarchy
                     node.extent_radius.w+
                         .5f*(length(xyz(patch.tangent_u))+
                              length(xyz(patch.tangent_v))),
-                    boxes);
+                    boxes,patch.owner_blocker);
                 if(count>1 && (self || !distant || !coherent || !clear))
                 {
                     walk(receiver,node.range_children[2]);
@@ -323,7 +333,8 @@ namespace transport::hierarchy
                 }
                 float weight=count==1?
                     leaf_form_factor(patch,surface_data[order[first]],boxes):
-                    node.center_area.w*kernel(pa,na,pb,nb,boxes);
+                    node.center_area.w*kernel(pa,na,pb,nb,boxes,
+                                              patch.owner_blocker);
                 if(weight>1e-10f)
                 {
                     if(links.size()>=config.max_edges)
@@ -362,12 +373,12 @@ namespace transport::hierarchy
         vk::buffer::resource patches,nodes,order,offsets,links,history;
         vk::buffer::resource oriented,readback;
         std::array<vk::buffer::resource,2> radiance,delta;
-        vk::buffer::resource node_values,first,residual_value;
+        vk::buffer::resource node_values,first,indirect_light,residual_value;
         vk::DescriptorSetLayout descriptor_layout{};
         vk::DescriptorPool pool{};
         std::array<vk::DescriptorSet,4> sets{};
         vk::PipelineLayout pipeline_layout{};
-        std::array<vk::Pipeline,8> pipelines{};
+        std::array<vk::Pipeline,9> pipelines{};
     };
 
     solver::solver()=default;
@@ -391,7 +402,9 @@ namespace transport::hierarchy
             for(const auto& v:values)
                 for(const float x:{v.x,v.y,v.z,v.w})
                     if(!std::isfinite(x))throw std::invalid_argument("nonfinite patch");
-            if(p.position_area.w<=0.f || length(xyz(p.normal))<.5f)
+            if(p.position_area.w<=0.f || length(xyz(p.normal))<.5f ||
+               s.owner_blocker<-1 ||
+               s.owner_blocker>=std::int32_t(boxes.size()))
                 throw std::invalid_argument("invalid area/normal");
             for(const float x:{p.albedo.x,p.albedo.y,p.albedo.z})
                 if(x<0.f||x>=1.f)throw std::invalid_argument("invalid albedo");
@@ -474,6 +487,8 @@ namespace transport::hierarchy
             s.node_values=make_buffer(graph.nodes.size()*sizeof(vec4),
                           vk::BufferUsageFlagBits::eStorageBuffer,false);
             s.first=make_buffer(bytes,vk::BufferUsageFlagBits::eStorageBuffer,false);
+            s.indirect_light=make_buffer(bytes,
+                vk::BufferUsageFlagBits::eStorageBuffer,false);
             s.residual_value=make_buffer(16,
                           vk::BufferUsageFlagBits::eStorageBuffer |
                           vk::BufferUsageFlagBits::eTransferDst |
@@ -481,7 +496,7 @@ namespace transport::hierarchy
             s.readback=make_buffer(16,vk::BufferUsageFlagBits::eTransferDst,true);
 
             const auto dev=vk::device::get()->handle;
-            std::array<vk::DescriptorSetLayoutBinding,12> bindings{};
+            std::array<vk::DescriptorSetLayoutBinding,13> bindings{};
             for(std::uint32_t i=0;i<bindings.size();i++)
             {
                 bindings[i].binding=i;
@@ -524,7 +539,7 @@ namespace transport::hierarchy
                 vk::shader::destroy(module);
             }
 
-            vk::DescriptorPoolSize pool_size{vk::DescriptorType::eStorageBuffer,48};
+            vk::DescriptorPoolSize pool_size{vk::DescriptorType::eStorageBuffer,52};
             vk::DescriptorPoolCreateInfo pool{};
             pool.maxSets=4;
             pool.poolSizeCount=1;
@@ -544,7 +559,7 @@ namespace transport::hierarchy
             {
                 const auto& input=j<2?s.radiance[j]:s.delta[j-2];
                 const auto& output=j<2?s.radiance[1-j]:s.delta[3-j];
-                std::array<vk::DescriptorBufferInfo,12> infos{{
+                std::array<vk::DescriptorBufferInfo,13> infos{{
                     vk::buffer::descriptor(s.patches),
                     vk::buffer::descriptor(s.nodes),
                     vk::buffer::descriptor(s.order),
@@ -556,10 +571,11 @@ namespace transport::hierarchy
                     vk::buffer::descriptor(s.first),
                     vk::buffer::descriptor(s.history),
                     vk::buffer::descriptor(s.radiance[0]),
-                    vk::buffer::descriptor(s.residual_value)
+                    vk::buffer::descriptor(s.residual_value),
+                    vk::buffer::descriptor(s.indirect_light)
                 }};
-                std::array<vk::WriteDescriptorSet,12> writes{};
-                for(std::uint32_t i=0;i<12;i++)
+                std::array<vk::WriteDescriptorSet,13> writes{};
+                for(std::uint32_t i=0;i<13;i++)
                 {
                     writes[i].dstSet=s.sets[j];
                     writes[i].dstBinding=i;
@@ -610,6 +626,7 @@ namespace transport::hierarchy
             dispatch(command,s,aggregate,i&1u);
             dispatch(command,s,gather,i&1u);
         }
+        dispatch(command,s,indirect,0);
     }
 
     void solver::record_refine(vk::CommandBuffer command,std::uint32_t iterations)
@@ -623,6 +640,7 @@ namespace transport::hierarchy
             dispatch(command,s,aggregate,i&1u);
             dispatch(command,s,gather,i&1u);
         }
+        dispatch(command,s,indirect,0);
     }
 
     void solver::update_emission(std::uint32_t index,vec4 emission)
@@ -650,6 +668,7 @@ namespace transport::hierarchy
         }
         dispatch(command,s,emission_aggregate,0);
         dispatch(command,s,direct,0);
+        dispatch(command,s,indirect,0);
     }
 
     void solver::record_residual(vk::CommandBuffer command)
@@ -722,6 +741,12 @@ namespace transport::hierarchy
         if(!state_)throw std::logic_error("hierarchy not initialized");
         return vk::buffer::descriptor(state_->first);
     }
+    vk::DescriptorBufferInfo solver::indirect_descriptor() const
+    {
+        if(!state_)throw std::logic_error("hierarchy not initialized");
+        return vk::buffer::descriptor(state_->indirect_light);
+    }
+
     vk::DescriptorBufferInfo solver::oriented_descriptor() const
     {
         if(!state_)throw std::logic_error("hierarchy not initialized");
@@ -742,7 +767,7 @@ namespace transport::hierarchy
             for(auto* b:{&s.patches,&s.nodes,&s.order,&s.offsets,&s.links,
                          &s.history,&s.oriented,&s.readback,&s.radiance[0],
                          &s.radiance[1],&s.delta[0],&s.delta[1],
-                         &s.node_values,&s.first,&s.residual_value})
+                         &s.node_values,&s.first,&s.indirect_light,&s.residual_value})
                 if(b->handle)vk::buffer::destroy(*b);
         }
         state_.reset();
