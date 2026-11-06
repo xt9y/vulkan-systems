@@ -9,3 +9,8 @@ with its own build.c, extensionless readme, and namespaced public headers.
 GPU and render own no game or fluid policy; simulations supply GPU
 geometry/resources and renderer consumes them with explicit synchronization.
 VulkanEngine must be initialized by the host before using these systems.
+
+Optional root build.c produces a combined VulkanSystems static library containing
+GPU and render, for applications that use both. The independent module build.c
+files remain available. The upload batch manages staging, fences and command
+buffers; callers must retire pending uploads before destroying VulkanEngine.

@@ -9,6 +9,7 @@ VulkanGPU — reusable C++17 VulkanEngine GPU resources and computation.
   gpu/pipeline.*          generic pipeline layout
   gpu/compute.*           SPIR-V compute and indirect dispatch
   gpu/transfer.*          GPU buffer copy/fill recording
+  gpu/upload.hpp          asynchronous fenced staging batches for buffers and RGBA8 textures
   gpu/graph.*             ordered passes; buffer/image hazards and transitions
 
 No fluid, game or renderer policy. Initialize VulkanEngine first.

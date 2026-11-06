@@ -7,4 +7,5 @@
 #include "pipeline.hpp"
 #include "compute.hpp"
 #include "transfer.hpp"
+#include "upload.hpp"
 #include "graph.hpp"
