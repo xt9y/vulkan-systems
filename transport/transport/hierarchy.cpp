@@ -9,6 +9,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
 
 namespace transport::hierarchy
 {
@@ -454,6 +455,7 @@ namespace transport::hierarchy
             graph_builder graph(surfaces,boxes,config);
             graph.build();
             s.reduction_batches=graph.batches;
+            s.info.reduction_levels=std::uint32_t(graph.batches.size());
             s.info.surface_count=std::uint32_t(surfaces.size());
             s.info.node_count=std::uint32_t(graph.nodes.size());
             s.info.edge_count=std::uint32_t(graph.links.size());
@@ -742,6 +744,12 @@ namespace transport::hierarchy
         region.dstOffset=0;
         region.size=4;
         command.copyBuffer(s.residual_value.handle,s.readback.handle,{region});
+        vk::MemoryBarrier host{};
+        host.srcAccessMask=vk::AccessFlagBits::eTransferWrite;
+        host.dstAccessMask=vk::AccessFlagBits::eHostRead;
+        command.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                vk::PipelineStageFlagBits::eHost,
+                                {},{host},{},{});
     }
 
     float solver::residual() const
