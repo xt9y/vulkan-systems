@@ -106,8 +106,7 @@ namespace transport::hierarchy
             for(std::size_t k=0;k<boxes.size();++k)
             {
                 if(int(k)==owner_a || int(k)==owner_b)continue;
-                const auto& box=boxes[k]
-            {
+                const auto& box=boxes[k];
                 const vec3 rel=a-xyz(box.center);
                 const vec3 axes[]{xyz(box.axis_x),xyz(box.axis_y),xyz(box.axis_z)};
                 const vec3 pos{dot(rel,axes[0]),dot(rel,axes[1]),dot(rel,axes[2])};
@@ -148,8 +147,7 @@ namespace transport::hierarchy
             for(std::size_t k=0;k<boxes.size();++k)
             {
                 if(int(k)==owner)continue;
-                const auto& box=boxes[k]
-            {
+                const auto& box=boxes[k];
                 const vec3 axes[]{xyz(box.axis_x),xyz(box.axis_y),xyz(box.axis_z)};
                 const vec3 start=a-xyz(box.center);
                 const vec3 p{dot(start,axes[0]),dot(start,axes[1]),
