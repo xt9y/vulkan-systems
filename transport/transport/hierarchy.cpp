@@ -227,7 +227,8 @@ namespace transport::hierarchy
             std::vector<std::uint32_t> order,rank,offsets,depths;
             std::vector<std::pair<std::uint32_t,std::uint32_t>> batches;
             std::vector<link> links;
-            float maximum_row=0.f,global_scale=1.f;
+            float maximum_row=0.f,corrected_max_row=0.f,global_scale=1.f;
+            std::uint32_t corrected_receivers=0;
 
             graph_builder(const std::vector<surface>& s,
                           const std::vector<transport::oriented_blocker>& o,
@@ -360,6 +361,7 @@ namespace transport::hierarchy
             {
                 build_tree(0,std::uint32_t(order.size()));
                 for(std::uint32_t i=0;i<order.size();i++)rank[order[i]]=i;
+                std::vector<float> raw_rows(surface_data.size(),0.f);
                 for(std::uint32_t i=0;i<surface_data.size();i++)
                 {
                     offsets.push_back(std::uint32_t(links.size()));
@@ -367,14 +369,54 @@ namespace transport::hierarchy
                     float total=0.f;
                     for(std::uint32_t j=offsets.back();j<links.size();j++)
                         total+=links[j].factor;
+                    raw_rows[i]=total;
                     maximum_row=std::max(maximum_row,total);
                 }
                 offsets.push_back(std::uint32_t(links.size()));
-                // Global scaling preserves near-pair reciprocity but is a
-                // biased safety clamp. Track the scale for accuracy reporting.
-                global_scale=maximum_row>1.f?1.f/maximum_row:1.f;
-                if(global_scale<1.f)
-                    for(auto& edge:links)edge.factor*=global_scale;
+
+                // Preserve energy conservation without darkening every
+                // unrelated surface when one quadrature row overestimates
+                // its total incoming solid angle. Near leaf-pair weights
+                // remain reciprocal: Fij *= si*sj, with 0 < si,sj <= 1.
+                // For hierarchical sources, use area-weighted node scales.
+                std::vector<float> patch_scale(surface_data.size(),1.f);
+                for(std::uint32_t i=0;i<raw_rows.size();i++)
+                    if(raw_rows[i]>1.f)
+                    {
+                        patch_scale[i]=1.f/raw_rows[i];
+                        corrected_receivers++;
+                    }
+
+                std::vector<float> node_scale(nodes.size(),1.f);
+                for(std::size_t n=nodes.size();n-- >0;)
+                {
+                    const auto& node=nodes[n];
+                    const auto first=node.range_children[0];
+                    if(node.range_children[1]==1u)
+                        node_scale[n]=patch_scale[order[first]];
+                    else
+                    {
+                        const auto left=node.range_children[2];
+                        const auto right=node.range_children[3];
+                        node_scale[n]=(
+                            node_scale[left]*nodes[left].center_area.w+
+                            node_scale[right]*nodes[right].center_area.w)/
+                            node.center_area.w;
+                    }
+                }
+                for(std::uint32_t i=0;i<surface_data.size();i++)
+                {
+                    float corrected=0.f;
+                    for(std::uint32_t j=offsets[i];j<offsets[i+1];j++)
+                    {
+                        auto& edge=links[j];
+                        edge.factor*=patch_scale[i]*node_scale[edge.source];
+                        corrected+=edge.factor;
+                    }
+                    corrected_max_row=std::max(corrected_max_row,corrected);
+                }
+                if(corrected_max_row>1.0001f)
+                    throw std::logic_error("transport row energy bound violated");
 
                 // Append node IDs in descending-depth batches, after the
                 // patch permutation. Every node is processed exactly once.
@@ -460,7 +502,9 @@ namespace transport::hierarchy
             s.info.node_count=std::uint32_t(graph.nodes.size());
             s.info.edge_count=std::uint32_t(graph.links.size());
             s.info.initial_max_row=graph.maximum_row;
-             s.info.global_scale=graph.global_scale;
+            s.info.corrected_max_row=graph.corrected_max_row;
+            s.info.corrected_receivers=graph.corrected_receivers;
+            s.info.global_scale=graph.global_scale;
             float maximum_reflectance=0.f;
             for(const auto& patch:surfaces)
                 maximum_reflectance=std::max({
@@ -469,7 +513,7 @@ namespace transport::hierarchy
                     patch.value.albedo.z
                 });
             s.info.operator_norm_upper=maximum_reflectance*
-                graph.maximum_row*graph.global_scale;
+                graph.corrected_max_row;
             // Validate reciprocity of near-field finite-area leaf links.
             // Clustered links are approximations and are not included here.
             std::unordered_map<std::uint64_t,float> flux;
