@@ -13,6 +13,9 @@ namespace transport::hierarchy
     {
         transport::patch value{};
         vec4 tangent_u{},tangent_v{};
+        // Optional index into the supplied convex occluders. Rays leaving
+        // this surface must not be blocked by its own approximate box.
+        std::int32_t owner_blocker=-1;
     };
 
     struct options
@@ -63,6 +66,7 @@ namespace transport::hierarchy
         vk::DescriptorBufferInfo patches_descriptor() const;
         vk::DescriptorBufferInfo radiance_descriptor() const;
         vk::DescriptorBufferInfo direct_descriptor() const;
+        vk::DescriptorBufferInfo indirect_descriptor() const;
         vk::DescriptorBufferInfo oriented_descriptor() const;
         void shutdown();
 
