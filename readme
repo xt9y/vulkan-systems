@@ -1,10 +1,12 @@
 vulkan-systems
-  fluid/ - generic VulkanEngine-backed fluid library
-  archive/legacy-fluid-blood-v5-20261104 - pre-rebuild implementation
+  gpu/        generic VulkanEngine GPU resources, compute, synchronization
+  render/     generic Vulkan graphics pipelines, targets, mesh and draws
+  bvh/        GPU LBVH spatial acceleration
+  transport/  GPU diffuse light transport
+  fluid/      continuous-field Navier-Stokes research references (no solver)
 
-This research branch is a CLEAN REBUILD, NOT a playable simulation.
-The old blood/ and CPU SPH/film implementation are deliberately absent.
-Physically motivated small-drop algorithms and GPU reconstruction follow
-the plan in fluid/research.md. Keep all physics values in SI units.
-
-  transport/ - reusable GPU diffuse surface exchange, Jacobi bootstrap, delta light propagation
+Each implemented system is an independent C++17 c build static library
+with its own build.c, extensionless readme, and namespaced public headers.
+GPU and render own no game or fluid policy; simulations supply GPU
+geometry/resources and renderer consumes them with explicit synchronization.
+VulkanEngine must be initialized by the host before using these systems.
