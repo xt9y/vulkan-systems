@@ -33,6 +33,7 @@ GPU compiler variants:
   glslangValidator -V -DHIER_INJECT hierarchy.comp
   glslangValidator -V -DHIER_PROPAGATE hierarchy.comp
   glslangValidator -V -DHIER_RESIDUAL hierarchy.comp
+  glslangValidator -V -DHIER_INDIRECT hierarchy.comp
 
 Important limits:
   This is an experimental adaptive hierarchical diffuse approximation,
