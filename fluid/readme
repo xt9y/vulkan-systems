@@ -1,0 +1,2 @@
+Goal: physically realistic 3D incompressible liquid simulation as continuous fields, without fluid particles or a spatial velocity grid.
+Start with divergence-free Laplacian eigenfunction/Fourier-Galerkin Navier–Stokes; investigate level-set free surfaces and mesh-free pressure/boundaries. Validate volume, momentum, energy, viscosity, surface tension and obstacle interactions.
