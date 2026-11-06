@@ -32,6 +32,7 @@ namespace net::stream {
         // Returns datagrams to send with the caller-owned UDP socket.
         std::vector<bytes> flush(std::size_t byte_budget, clock::time_point now);
         bool pop(bytes& completed);
+        std::size_t ready_size() const noexcept { return completed_.empty()?0:completed_.front().size(); }
         std::size_t pending_bytes() const noexcept { return queued_bytes_; }
         void clear() noexcept;
     private:

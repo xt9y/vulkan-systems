@@ -81,6 +81,8 @@ bool channel::accept(const void* input,std::size_t size,clock::time_point now) {
         for(auto it=outgoing_.begin();it!=outgoing_.end();++it) {
             if(it->id!=id || it->payload.size()!=total || it->acked.size()!=count)continue;
             if(!it->acked[part]) {
+                // Ignore acknowledgments for fragments not yet transmitted.
+                if(it->last_sent[part]==clock::time_point{})return false;
                 it->acked[part]=1;
                 if(!--it->remaining) {
                     queued_bytes_-=it->payload.size();

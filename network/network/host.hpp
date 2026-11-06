@@ -37,5 +37,6 @@ namespace net {
         bool active_=false;
         std::map<std::uint64_t,client> peers_;
         std::deque<delivery> received_;
+        std::size_t received_bytes_=0;
     };
 }
