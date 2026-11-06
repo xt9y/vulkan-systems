@@ -47,6 +47,14 @@ Protocol restrictions:
   expose those APIs to external/untrusted game traffic.
 
 Build:
+  The c build tool exports Git files without submodules. network/mbedtls_prepare.cmake
+  is injected before the upstream Mbed TLS project configuration, fetches the
+  Mbed TLS framework dependency at the exact upstream Gitlink revision
+  dde0c4a0e448a0552f18817dcea633bb851fd288, and verifies its commit.
+  This dependency needs Git access during first-time CMake configuration.
+  In offline environments, pre-populate the pinned framework in the Mbed TLS
+  source cache. Unavailable or mismatched framework sources fail the build.
+
   Mbed TLS 3.6.7 source is pinned and built as a static CMake dependency
   of VulkanNetwork (mbedtls, mbedx509, mbedcrypto).
   Mbed TLS is Apache-2.0 licensed.
