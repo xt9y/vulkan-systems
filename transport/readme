@@ -10,9 +10,13 @@ transport:: (legacy)
 transport::hierarchy::solver (new)
   hierarchy.hpp, hierarchy.cpp, shaders/hierarchy.comp
   CPU spatial hierarchy with adaptive cluster/patch interaction selection.
-  GPU compressed row (CSR) exchange links, area-weighted cluster reduction.
-  Physically reciprocal symmetric 2x2x2x2 quadrature for individual near
-  patch pairs; approximate center exchange for distant source clusters.
+  GPU compressed row (CSR) exchange links and a bottom-up, level-scheduled
+  GPU reduction. Each reduction visits each hierarchy node once (linear
+  work); it no longer rescans each cluster's complete patch range.
+  Symmetric finite-area quadrature with 4x4 samples on each patch for
+  very close interactions and 2x2 for more distant leaf pairs. Leaf-pair
+  reciprocity is preserved by using the same symmetric geometric kernel.
+  Far source clusters still use approximate center exchange.
   Adaptive visibility queries against oriented boxes at graph build time.
   Static multibounce diffuse transport using ping-pong GPU Jacobi passes.
   Direct bounce separated for high-resolution primary-light reconstruction.
@@ -43,8 +47,9 @@ Important limits:
   not exact GI or a new algorithm without prior art.
   Dense all-pair storage is avoided; finite-memory links are not proof
   of O(N) cost for every geometry and visibility arrangement.
-  GPU node aggregation currently loops over patch ranges (O(N log N)
-  work for balanced trees), not an optimized multilevel reduction.
+  GPU node aggregation uses depth-ordered reduction passes with memory
+  barriers and O(N) work per aggregation. Dispatch count scales with tree
+  depth; no M2 GPU timings are available yet.
   Geometry-change invalidation/rebuilds are not yet incremental.
   Visibility uses oriented boxes rather than full triangle BVH.
   Far-cluster visibility checks are sampled and not conservative.
