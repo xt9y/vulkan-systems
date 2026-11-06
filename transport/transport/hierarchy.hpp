@@ -36,7 +36,7 @@ namespace transport::hierarchy
     {
     public:
         struct state; // Opaque implementation data, not part of the GPU API.
-        solver()=default;
+        solver();
         ~solver();
         solver(const solver&)=delete;
         solver& operator=(const solver&)=delete;
