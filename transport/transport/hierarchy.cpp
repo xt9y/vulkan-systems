@@ -90,10 +90,10 @@ namespace transport::hierarchy
                                 {},{memory},{},{});
         }
 
-        vec3 quad_sample(const surface& s,int index)
+        vec3 quad_sample(const surface& s,int index,int resolution)
         {
-            const float u=(float(index&1)+.5f)/2.f-.5f;
-            const float v=(float(index>>1)+.5f)/2.f-.5f;
+            const float u=(float(index%resolution)+.5f)/float(resolution)-.5f;
+            const float v=(float(index/resolution)+.5f)/float(resolution)-.5f;
             return xyz(s.value.position_area)+xyz(s.tangent_u)*u+
                    xyz(s.tangent_v)*v;
         }
@@ -197,13 +197,24 @@ namespace transport::hierarchy
         {
             const vec3 na=normalize(xyz(receiver.value.normal));
             const vec3 nb=normalize(xyz(sender.value.normal));
+            // Near interactions need more quadrature points: with only
+            // four samples per patch, corner-adjacent finite surfaces can
+            // substantially violate the expected energy bound.
+            const float separation=length(
+                xyz(receiver.value.position_area)-
+                xyz(sender.value.position_area));
+            const float extent=std::sqrt(receiver.value.position_area.w)+
+                               std::sqrt(sender.value.position_area.w);
+            const int resolution=separation<1.5f*extent?4:2;
+            const int samples=resolution*resolution;
             float sum=0.f;
-            for(int a=0;a<4;a++)
-            for(int b=0;b<4;b++)
-                sum+=kernel(quad_sample(receiver,a),na,
-                            quad_sample(sender,b),nb,boxes,
+            for(int a=0;a<samples;a++)
+            for(int b=0;b<samples;b++)
+                sum+=kernel(quad_sample(receiver,a,resolution),na,
+                            quad_sample(sender,b,resolution),nb,boxes,
                             receiver.owner_blocker,sender.owner_blocker);
-            return sender.value.position_area.w*sum/16.f;
+            return sender.value.position_area.w*sum/
+                   float(samples*samples);
         }
 
         struct graph_builder
