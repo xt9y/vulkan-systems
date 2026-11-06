@@ -18,10 +18,11 @@ layout(std430,binding=4) readonly buffer Links { Link links[]; };
 layout(std430,binding=5) readonly buffer InputRadiance { vec4 input_light[]; };
 layout(std430,binding=6) writeonly buffer OutputRadiance { vec4 output_light[]; };
 layout(std430,binding=7) buffer NodeRadiance { vec4 node_light[]; };
-layout(std430,binding=8) writeonly buffer DirectRadiance { vec4 first_bounce[]; };
+layout(std430,binding=8) buffer DirectRadiance { vec4 first_bounce[]; };
 layout(std430,binding=9) buffer EmissionHistory { vec4 old_emission[]; };
 layout(std430,binding=10) buffer FinalRadiance { vec4 final_light[]; };
 layout(std430,binding=11) buffer ResidualValue { uint maximum_residual; };
+layout(std430,binding=12) writeonly buffer IndirectRadiance { vec4 cached_indirect[]; };
 layout(push_constant) uniform Parameters {
     uint patch_count;
     uint node_count;
@@ -98,6 +99,18 @@ void main()
     vec3 bounce=gather(i);
     output_light[i]=vec4(bounce,0);
     final_light[i].rgb+=bounce;
+}
+#elif defined(HIER_INDIRECT)
+void main()
+{
+    uint i=gl_GlobalInvocationID.x;
+    if(i>=param.patch_count)return;
+    // Store the non-negative higher-order contribution in a separate cache.
+    // The renderer can then reconstruct per-pixel direct light without
+    // subtracting two interpolated (and possibly overshooting) fields.
+    vec3 indirect=max(final_light[i].rgb-
+        first_bounce[i].rgb-patches[i].emission.rgb,vec3(0.0));
+    cached_indirect[i]=vec4(indirect,0.0);
 }
 #elif defined(HIER_RESIDUAL)
 void main()
