@@ -29,6 +29,7 @@ namespace transport::hierarchy
     struct statistics
     {
         std::uint32_t surface_count=0,node_count=0,edge_count=0;
+        std::uint32_t reduction_levels=0;
         std::uint32_t reciprocal_pairs=0;
         float initial_max_row=0.f,global_scale=1.f,graph_build_ms=0.f;
         float residual=0.f,reciprocity_max_error=0.f;
