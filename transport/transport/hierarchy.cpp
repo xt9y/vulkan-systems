@@ -212,7 +212,8 @@ namespace transport::hierarchy
             const std::vector<transport::oriented_blocker>& boxes;
             options config;
             std::vector<gpu_node> nodes;
-            std::vector<std::uint32_t> order,rank,offsets;
+            std::vector<std::uint32_t> order,rank,offsets,depths;
+            std::vector<std::pair<std::uint32_t,std::uint32_t>> batches;
             std::vector<link> links;
             float maximum_row=0.f,global_scale=1.f;
 
@@ -227,10 +228,12 @@ namespace transport::hierarchy
                 offsets.reserve(s.size()+1);
             }
 
-            std::uint32_t build_tree(std::uint32_t first,std::uint32_t last)
+            std::uint32_t build_tree(std::uint32_t first,std::uint32_t last,
+                                     std::uint32_t depth=0)
             {
                 const auto id=std::uint32_t(nodes.size());
                 nodes.emplace_back();
+                depths.push_back(depth);
                 vec3 center{},normal_sum{};
                 float area=0.f;
                 const float inf=std::numeric_limits<float>::max();
@@ -288,8 +291,8 @@ namespace transport::hierarchy
                         const auto pb=xyz(surface_data[b].value.position_area);
                         return component(pa,axis)<component(pb,axis);
                     });
-                    const auto left=build_tree(first,mid);
-                    const auto right=build_tree(mid,last);
+                    const auto left=build_tree(first,mid,depth+1);
+                    const auto right=build_tree(mid,last,depth+1);
                     nodes[id].range_children[2]=left;
                     nodes[id].range_children[3]=right;
                 }
@@ -360,6 +363,28 @@ namespace transport::hierarchy
                 global_scale=maximum_row>1.f?1.f/maximum_row:1.f;
                 if(global_scale<1.f)
                     for(auto& edge:links)edge.factor*=global_scale;
+
+                // Append node IDs in descending-depth batches, after the
+                // patch permutation. Every node is processed exactly once.
+                // CPU setup is linear; GPU aggregation now costs O(nodes)
+                // rather than scanning the entire subtree of every node.
+                const std::uint32_t leaf_count=
+                    std::uint32_t(surface_data.size());
+                const auto max_depth=*std::max_element(
+                    depths.begin(),depths.end());
+                std::vector<std::vector<std::uint32_t>> levels(max_depth+1);
+                for(std::uint32_t i=0;i<depths.size();++i)
+                    levels[depths[i]].push_back(i);
+                for(std::size_t d=levels.size();d-- >0;)
+                {
+                    const std::uint32_t start=
+                        std::uint32_t(order.size())-leaf_count;
+                    order.insert(order.end(),levels[d].begin(),levels[d].end());
+                    batches.emplace_back(start,
+                        std::uint32_t(levels[d].size()));
+                }
+                if(order.size()!=leaf_count+nodes.size())
+                    throw std::logic_error("invalid hierarchy reduction schedule");
             }
         };
     }
@@ -368,6 +393,7 @@ namespace transport::hierarchy
     {
         statistics info{};
         std::vector<surface> surfaces;
+        std::vector<std::pair<std::uint32_t,std::uint32_t>> reduction_batches;
         vk::buffer::resource patches,nodes,order,offsets,links,history;
         vk::buffer::resource oriented,readback;
         std::array<vk::buffer::resource,2> radiance,delta;
@@ -416,6 +442,7 @@ namespace transport::hierarchy
             const auto t0=std::chrono::steady_clock::now();
             graph_builder graph(surfaces,boxes,config);
             graph.build();
+            s.reduction_batches=graph.batches;
             s.info.surface_count=std::uint32_t(surfaces.size());
             s.info.node_count=std::uint32_t(graph.nodes.size());
             s.info.edge_count=std::uint32_t(graph.links.size());
@@ -600,13 +627,23 @@ namespace transport::hierarchy
                                  state.pipelines[mode]);
             command.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
                                        state.pipeline_layout,0,{state.sets[set]},{});
-            const parameters p{state.info.surface_count,state.info.node_count,0,0};
-            command.pushConstants(state.pipeline_layout,
-                vk::ShaderStageFlagBits::eCompute,0,sizeof(p),&p);
-            const auto count=mode==aggregate||mode==emission_aggregate?
-                state.info.node_count:state.info.surface_count;
-            vk::record::dispatch(command,(count+127)/128,1,1);
-            barrier(command);
+            const auto run=[&](std::uint32_t offset,std::uint32_t count)
+            {
+                if(!count)return;
+                const parameters p{state.info.surface_count,
+                                   state.info.node_count,offset,count};
+                command.pushConstants(state.pipeline_layout,
+                    vk::ShaderStageFlagBits::eCompute,0,sizeof(p),&p);
+                vk::record::dispatch(command,(count+127)/128,1,1);
+                barrier(command);
+            };
+            if(mode==aggregate || mode==emission_aggregate)
+            {
+                for(const auto& batch:state.reduction_batches)
+                    run(batch.first,batch.second);
+            }
+            else
+                run(0,state.info.surface_count);
         }
     }
 
