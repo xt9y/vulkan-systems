@@ -1,0 +1,18 @@
+VulkanRender — generic C++17 Vulkan draw recording; no physics dependency.
+  build.c                  standalone c build static library
+  render/render.hpp        public umbrella API
+  render/pipeline.*        SPIR-V graphics pipelines, basic and native states
+  render/target.*          arbitrary color/depth render target and framebuffer
+  render/mesh.hpp          non-owning GPU vertex/index geometry view
+  render/material.hpp      non-owning graphics pipeline and shader bindings
+  render/renderer.*        pass helpers, indexed and GPU-indirect draws
+  render/camera.hpp        optional camera payload (not a required shader ABI)
+  render/light.hpp         optional light payload (not a required shader ABI)
+
+Uses VulkanEngine exclusively. Host owns the device, swapchain, queue,
+submissions, fences, and resource lifetimes. Shader stage files are SPIR-V.
+No mandated shading model, vertex layout, material, lighting, or format.
+The native pipeline route permits custom render approaches. Renderer.draw
+can be recorded inside an external/dynamic rendering scope or a target pass.
+Physics may produce mesh or indirect arguments entirely on GPU; caller
+inserts compute->graphics/indirect barriers via VulkanGPU or explicit commands.

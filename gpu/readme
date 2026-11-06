@@ -1,0 +1,19 @@
+VulkanGPU — reusable C++17 VulkanEngine GPU resources and computation.
+  build.c                 standalone c build static library
+  gpu/gpu.hpp             umbrella public API
+  gpu/device.hpp          access VulkanEngine's device and queues
+  gpu/buffer.*            owned GPU buffer; explicit host-visible uploads
+  gpu/image.*             owned images and views
+  gpu/shader.*            SPIR-V module owner
+  gpu/descriptors.*       arbitrary buffer/image descriptor bindings
+  gpu/pipeline.*          generic pipeline layout
+  gpu/compute.*           SPIR-V compute and indirect dispatch
+  gpu/transfer.*          GPU buffer copy/fill recording
+  gpu/graph.*             ordered passes; buffer/image hazards and transitions
+
+No fluid, game or renderer policy. Initialize VulkanEngine first.
+Host owns command buffers, queue submissions, swapchain, fences, and lifetime.
+No per-frame CPU readback is required. All shaders are external SPIR-V.
+Graph tracks whole buffers and exact image ranges on one queue. Import
+previous image layouts and external accesses, and synchronize cross-queue
+and in-flight frames separately. Descriptor writes need host synchronization.
