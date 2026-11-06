@@ -244,8 +244,13 @@ namespace transport::hierarchy
                 }
                 if(area<=0.f)throw std::runtime_error("invalid cluster area");
                 center=center/area;
-                const vec3 normal=normalize(normal_sum);
-                float spread=1.f,radius=0.f;
+                // Mixed-face clusters can have zero summed normals.
+                // Such clusters must subdivide, never produce NaNs.
+                const float normal_length=length(normal_sum);
+                const vec3 normal=normal_length>1e-7f?
+                    normal_sum/normal_length:
+                    normalize(xyz(surface_data[order[first]].value.normal));
+                float spread=normal_length>1e-7f?1.f:-1.f,radius=0.f;
                 for(std::uint32_t i=first;i<last;i++)
                 {
                     const auto& p=surface_data[order[i]].value;
