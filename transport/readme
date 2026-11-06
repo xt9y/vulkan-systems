@@ -16,6 +16,9 @@ transport::hierarchy::solver (new)
   Adaptive visibility queries against oriented boxes at graph build time.
   Static multibounce diffuse transport using ping-pong GPU Jacobi passes.
   Direct bounce separated for high-resolution primary-light reconstruction.
+  A non-negative indirect-only cache is stored separately for the viewer.
+  Optional surface.owner_blocker prevents a convex face from being falsely
+  occluded by the approximate box representing the same object.
   Changed-emission Neumann delta propagation without a dense rebuild.
   Residual checks with GPU atomic maximum and host-visible readback.
   A conditional upper bound on the discrete radiosity-solution error is
