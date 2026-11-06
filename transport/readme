@@ -28,7 +28,8 @@ transport::hierarchy::solver (new)
   A conditional upper bound on the discrete radiosity-solution error is
   calculated from the maximum transport row sum and surface reflectance.
   Discrete solve can continue with record_refine() to a chosen tolerance.
-  Graph stats: surface/node/link counts, build ms, row sums, global scale,
+  Graph stats: surface/node/link counts, reduction levels, build ms,
+  uncorrected/corrected row sums, number of corrected receivers,
   sampled reciprocity error, and actual discrete equation residual.
 
 GPU compiler variants:
@@ -53,7 +54,9 @@ Important limits:
   Geometry-change invalidation/rebuilds are not yet incremental.
   Visibility uses oriented boxes rather than full triangle BVH.
   Far-cluster visibility checks are sampled and not conservative.
-  Global row scaling prevents amplification but is a biased safeguard.
+  Local symmetric row/source energy corrections replace scene-wide
+  attenuation. They preserve near leaf-pair reciprocity but remain
+  approximate when hierarchical far-field links are used.
   Surface reflectance is RGB Lambertian; specular, glass, volumes,
   spectral rendering, caustics and unbiased correction are absent.
   A low equation residual means convergence of the approximate
