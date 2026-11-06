@@ -1,12 +1,30 @@
-VulkanNetwork - portable UDP sockets plus reliable ordered-independent message transport.
-Header network/network.hpp. Uses C++17 and WinSock2 or POSIX sockets, no Vulkan.
-host owns a socket and one reliable stream channel per endpoint. Client and
-server use the same API: start(port), send(peer, bytes), pump(), pop(delivery).
-Channels support datagram fragmentation, checksums, duplicate rejection,
-fragment acknowledgments, bounded queue/window and timed retransmission.
-Application owns encoding, authorization, congestion/bandwidth policy, and
-game-specific message types. Traffic is unencrypted; use a secure transport
-when sending confidential or untrusted traffic. Both endpoints must agree
-on stream::settings.mtu. Bounds are configurable but throughput is limited
-by hardware, network and CPU. Do not interpret host as internet security,
-DDoS protection, NAT traversal, or a TCP/QUIC replacement.
+VulkanNetwork - reusable C++17 WinSock2/POSIX UDP and reliable byte messages.
+  network/network.hpp       umbrella API
+  network/endpoint.*        IPv4 and IPv6 address resolution and comparison
+  network/socket.*          nonblocking UDP socket and timed readability
+  network/stream.*          bounded fragmentation, ACKs, retransmission, pacing
+  network/session.*         channels over a caller-owned UDP socket
+  network/host.*            dedicated-socket adapter for network::session
+
+A game can route its own movement/weapon packets through one UDP socket and
+send independent reliable scene bytes using a net::session over that socket.
+Feed VSN1 datagrams to session.accept(peer,packet,size), call session.pump(socket)
+to dispatch data and ACKs, and session.pop(delivery) for complete byte messages.
+Game-specific decoding, session tokens, authorization and scene revisions stay
+with the consumer. When allow_unknown_peers=false, call open() after application
+authentication. host provides start/send/pump/pop on its own socket.
+
+Each channel imposes payload/queue/window limits and an AIMD-style send window.
+Delivery queues have configurable memory caps; fragment timeouts/retries and
+duplicate suppression are bounded. The default UDP bind is IPv4; explicitly
+bind "::" for IPv6/dual-stack when supported. Both peers must use the same
+stream::settings.mtu and stream protocol. Existing VSCN game packets are NOT
+compatible with this transport; both sides must be upgraded together.
+
+SECURITY: This is UNENCRYPTED and unauthenticated transport. FNV checksums are
+not MACs. Do not expose sensitive data or trust Internet peers without adding
+audited authenticated encryption (e.g. DTLS or QUIC) and rate-limit/access rules.
+No guaranteed throughput or latency exists on arbitrary networks. The current
+AIMD is a starting point, not a standards-grade congestion controller or
+substitute for loss, reordering, abuse and soak testing.
+

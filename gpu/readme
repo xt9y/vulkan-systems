@@ -1,22 +1,26 @@
-VulkanGPU — reusable C++17 VulkanEngine GPU resources and computation.
-  gpu/gpu.hpp            umbrella public API
-  gpu/buffer.*           owned GPU buffer and host-visible uploads
-  gpu/image.*            owned images/views
-  gpu/shader.*           SPIR-V modules
-  gpu/descriptors.*      arbitrary descriptor bindings
-  gpu/pipeline.*         pipeline layout
-  gpu/compute.*          generic compute and indirect dispatch
-  gpu/transfer.*         buffer copy/fill
-  gpu/upload.hpp         asynchronous fenced staging batches
-  gpu/texture_cache.*    RGBA8 texture residency, caching and views
-  gpu/graph.*            explicit ordered passes/barriers
-  gpu/culler.*           frustum-sphere culling and instance compaction
-  gpu/shaders/cull.comp  reference GLSL culling shader
+VulkanGPU - reusable C++17 VulkanEngine resources and compute.
+  gpu/gpu.hpp              umbrella API
+  gpu/resource.hpp         move-only owned buffer/image and creation helpers
+  gpu/buffer.*             owned GPU buffer, mapped uploads
+  gpu/image.*              owned GPU image/view
+  gpu/descriptors.*        owned arbitrary descriptor layouts/pools/sets
+  gpu/shader.*             SPIR-V shader modules
+  gpu/pipeline.*           compute pipeline layout
+  gpu/compute.*            generic compute dispatch
+  gpu/transfer.*           buffer copy/fill operations
+  gpu/upload.hpp           asynchronous fenced staging
+  gpu/texture_cache.*      RGBA8 residency cache
+  gpu/graph.*              explicit accesses, pass barriers
+  gpu/culler.*             frustum sphere compaction to indirect draws
+  gpu/shaders/cull.comp    reference shader
 
-Host initializes VulkanEngine and owns queues, swapchain, frame fences.
-Texture cache replacement and retirement require no in-flight GPU reads.
-Culling shader is supplied as compiled SPIR-V at initialization; consumers
-can compile the bundled GLSL shader or use a binary compatible variant.
-Culling descriptors require binding 0 transforms, 1 sphere bounds,
-2 visible compact IDs, 3 indirect arguments. Call begin/dispatch/end
-in order, outside render passes. Culling is not occlusion culling.
+owned_buffer and owned_image wrap VulkanEngine resource structs with RAII,
+move-only semantics, and raw handle compatibility. create_buffer/create_image
+return owned resources. Ensure all referencing GPU work has finished before
+replacing or destroying them.
+
+Host owns device, queue, swapchain and frame fences. Texture replacement and
+descriptor writes cannot race in-flight reads. Culling descriptors use binding
+0 transforms, 1 sphere bounds, 2 visible IDs and 3 indirect draw arguments.
+The caller supplies compiled SPIR-V. Culling is not occlusion culling.
+

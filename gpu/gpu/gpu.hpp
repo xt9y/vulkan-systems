@@ -1,6 +1,7 @@
 #pragma once
 #include "device.hpp"
 #include "buffer.hpp"
+#include "resource.hpp"
 #include "image.hpp"
 #include "shader.hpp"
 #include "descriptors.hpp"

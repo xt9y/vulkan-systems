@@ -4,6 +4,7 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <iterator>
 
 namespace net::stream {
 namespace {
@@ -44,6 +45,8 @@ channel::channel(settings limits):limits_(limits) {
        !limits_.window || limits_.retransmit.count()<=0 ||
        limits_.receive_timeout.count()<=0)
         throw std::invalid_argument("invalid reliable stream settings");
+    congestion_window_=std::min<std::size_t>(32,limits_.window);
+    slow_start_threshold_=std::min<std::size_t>(64,limits_.window);
 }
 std::uint32_t channel::queue(bytes payload) {
     if(payload.empty() || payload.size()>limits_.max_message ||
@@ -81,9 +84,16 @@ bool channel::accept(const void* input,std::size_t size,clock::time_point now) {
         for(auto it=outgoing_.begin();it!=outgoing_.end();++it) {
             if(it->id!=id || it->payload.size()!=total || it->acked.size()!=count)continue;
             if(!it->acked[part]) {
-                // Ignore acknowledgments for fragments not yet transmitted.
+                // Datagram acknowledgments cannot authorize unsent fragments.
                 if(it->last_sent[part]==clock::time_point{})return false;
                 it->acked[part]=1;
+                if(it->in_flight.erase(part))--flying_;
+                if(congestion_window_<slow_start_threshold_) {
+                    if(congestion_window_<limits_.window)++congestion_window_;
+                } else if(++window_acks_>=congestion_window_) {
+                    if(congestion_window_<limits_.window)++congestion_window_;
+                    window_acks_=0;
+                }
                 if(!--it->remaining) {
                     queued_bytes_-=it->payload.size();
                     outgoing_.erase(it);
@@ -151,33 +161,49 @@ std::vector<bytes> channel::flush(std::size_t budget,clock::time_point now) {
         acks_.pop_front();
     }
     const auto cap=limits_.mtu-header_size;
+    // Keep the hot path proportional to the actual number of in-flight
+    // fragments (the congestion window), not the total scene size.
     for(bool progress=true;progress && budget>=header_size+1;) {
         progress=false;
         for(auto& message:outgoing_) {
             if(budget<header_size+1)break;
-            std::size_t in_flight=0;
-            for(std::size_t i=0;i<message.acked.size();++i)
-                if(!message.acked[i] && message.last_sent[i]!=clock::time_point{})
-                    ++in_flight;
-            for(std::size_t i=0;i<message.acked.size();++i) {
-                if(message.acked[i])continue;
-                const bool sent=message.last_sent[i]!=clock::time_point{};
-                if(sent && now-message.last_sent[i]<limits_.retransmit)continue;
-                if(!sent && in_flight>=limits_.window)continue;
-                const auto offset=i*cap;
-                const auto length=std::min(cap,message.payload.size()-offset);
-                if(budget<header_size+length)continue;
-                auto data=packet(data_flag,message.id,
-                    std::uint32_t(message.payload.size()),std::uint32_t(i),
-                    std::uint32_t(message.acked.size()),
-                    message.payload.data()+offset,length);
-                budget-=data.size();
-                result.push_back(std::move(data));
-                message.last_sent[i]=now;
-                if(!sent)++in_flight;
-                progress=true;
-                break; // fair scheduling between streams
+            const auto count=message.acked.size();
+            std::size_t chosen=count;
+            bool retry=false;
+            for(const auto& flight:message.in_flight) {
+                if(now-flight.second>=limits_.retransmit) {
+                    chosen=flight.first;
+                    retry=true;
+                    break;
+                }
             }
+            if(chosen==count && flying_<congestion_window_ &&
+               message.next_unsent<count)
+                chosen=message.next_unsent;
+            if(chosen==count)continue;
+            const auto offset=chosen*cap;
+            const auto length=std::min(cap,message.payload.size()-offset);
+            if(budget<header_size+length)continue;
+            if(retry && (last_loss_==clock::time_point{} ||
+                         now-last_loss_>=limits_.retransmit)) {
+                slow_start_threshold_=std::max<std::size_t>(2,congestion_window_/2);
+                congestion_window_=slow_start_threshold_;
+                window_acks_=0;
+                last_loss_=now;
+            }
+            auto data=packet(data_flag,message.id,
+                std::uint32_t(message.payload.size()),std::uint32_t(chosen),
+                std::uint32_t(count),
+                message.payload.data()+offset,length);
+            budget-=data.size();
+            result.push_back(std::move(data));
+            message.last_sent[chosen]=now;
+            message.in_flight[chosen]=now;
+            if(!retry) {
+                ++message.next_unsent;
+                ++flying_;
+            }
+            progress=true;
         }
     }
     return result;
@@ -192,5 +218,8 @@ bool channel::pop(bytes& out) {
 void channel::clear() noexcept {
     outgoing_.clear(); incoming_.clear(); history_.clear(); acks_.clear();
     completed_.clear(); queued_bytes_=receive_bytes_=completed_bytes_=0; next_id_=1;
+    flying_=0; congestion_window_=std::min<std::size_t>(32,limits_.window);
+    slow_start_threshold_=std::min<std::size_t>(64,limits_.window);
+    window_acks_=0; last_loss_={};
 }
 }

@@ -1,12 +1,16 @@
 vulkan-systems
-  gpu/       generic VulkanEngine GPU resource management and compute
-  render/    graphics pipelines, targets, mesh draws
+  gpu/       VulkanEngine resource ownership, staging, shaders, compute, culling
+  render/    frame scheduling, targets, HDR/LDR buffers, pipelines, draws
   bvh/       GPU LBVH acceleration
   spatial/   CPU BVH index and frustum queries
-  network/   nonblocking UDP and generic reliable message streaming
+  network/   dual-stack UDP, reliable datagram session and host
   jobs/      bounded multithreaded jobs and completion queue
 
-Each module has independent build.c, minimal C++17 public API.
-Root build.c exports VulkanSystems (gpu/render), VulkanSpatial, VulkanNetwork
-and VulkanJobs as independent static-library targets. GPU modules depend
-on VulkanEngine; network and jobs do not. The host manages GPU lifetime.
+Each module has a standalone build.c with C++17 APIs.
+Root build.c exports VulkanSystems (gpu/render), VulkanSpatial, VulkanNetwork,
+and VulkanJobs as independent static library targets. GPU and render depend
+on VulkanEngine. Network and jobs do not depend on Vulkan.
+
+Host initializes and shuts down the Vulkan device and swapchain.
+No game-specific scene serialization, weapon logic, or authority rules live here.
+

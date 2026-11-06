@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -41,6 +42,8 @@ namespace net::stream {
             bytes payload;
             std::vector<std::uint8_t> acked;
             std::vector<clock::time_point> last_sent;
+            std::map<std::size_t,clock::time_point> in_flight;
+            std::size_t next_unsent = 0;
             std::size_t remaining = 0;
         };
         struct incoming {
@@ -54,6 +57,11 @@ namespace net::stream {
         std::size_t queued_bytes_ = 0;
         std::size_t receive_bytes_ = 0;
         std::size_t completed_bytes_ = 0;
+        std::size_t flying_ = 0;
+        std::size_t congestion_window_ = 32;
+        std::size_t slow_start_threshold_ = 64;
+        std::size_t window_acks_ = 0;
+        clock::time_point last_loss_{};
         std::deque<outgoing> outgoing_;
         std::unordered_map<std::uint32_t, incoming> incoming_;
         std::deque<std::uint32_t> history_;

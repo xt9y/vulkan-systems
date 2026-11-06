@@ -1,6 +1,7 @@
 #pragma once
 #include "pipeline.hpp"
 #include "target.hpp"
+#include "postprocess.hpp"
 #include "mesh.hpp"
 #include "material.hpp"
 #include "renderer.hpp"

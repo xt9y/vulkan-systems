@@ -1,18 +1,25 @@
-VulkanRender — generic C++17 Vulkan draw recording; no physics dependency.
-  build.c                  standalone c build static library
-  render/render.hpp        public umbrella API
-  render/pipeline.*        SPIR-V graphics pipelines, basic and native states
-  render/target.*          arbitrary color/depth render target and framebuffer
-  render/mesh.hpp          non-owning GPU vertex/index geometry view
-  render/material.hpp      non-owning graphics pipeline and shader bindings
-  render/renderer.*        pass helpers, indexed and GPU-indirect draws
-  render/camera.hpp        optional camera payload (not a required shader ABI)
-  render/light.hpp         optional light payload (not a required shader ABI)
+VulkanRender - reusable C++17 VulkanEngine rendering.
+  render/render.hpp         umbrella API
+  render/frame.*            two+ in-flight command/fence and present scheduler
+  render/postprocess.*      owned offscreen HDR/LDR targets and presentation pass
+  render/pipeline.*         graphics pipeline creation from SPIR-V
+  render/target.*           arbitrary color/depth render pass and framebuffer
+  render/mesh.hpp           non-owning vertex and index views
+  render/material.hpp       non-owning descriptor and push-constant bindings
+  render/renderer.*         pass, indexed/indirect draw helpers
+  render/camera.hpp         optional camera payload
+  render/light.hpp          optional light payload
 
-Uses VulkanEngine exclusively. Host owns the device, swapchain, queue,
-submissions, fences, and resource lifetimes. Shader stage files are SPIR-V.
-No mandated shading model, vertex layout, material, lighting, or format.
-The native pipeline route permits custom render approaches. Renderer.draw
-can be recorded inside an external/dynamic rendering scope or a target pass.
-Physics may produce mesh or indirect arguments entirely on GPU; caller
-inserts compute->graphics/indirect barriers via VulkanGPU or explicit commands.
+frame_scheduler.create(frames), resize(swapchain image count), wait(), begin(),
+then render to ticket.command and submit(ticket). Handle out-of-date/suboptimal
+swapchain results in the host and recreate resources only after device idle.
+The host owns surface creation, format/present-mode choice and VulkanEngine
+lifecycle. It also controls shader semantics, camera, lighting and passes.
+
+postprocess_targets creates sampled/storage HDR and LDR GPU images and views
+per swapchain image. presentation_targets constructs the swapchain-compatible
+pass and framebuffers; the caller supplies shaders, descriptor sets, and effects.
+
+No fixed vertex layout, tonemapper, lighting implementation, or game semantics.
+GPU work referencing a render target must complete before its owner resets.
+
