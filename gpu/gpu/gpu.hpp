@@ -9,3 +9,5 @@
 #include "transfer.hpp"
 #include "upload.hpp"
 #include "graph.hpp"
+#include "culler.hpp"
+#include "texture_cache.hpp"

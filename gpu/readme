@@ -1,20 +1,22 @@
 VulkanGPU — reusable C++17 VulkanEngine GPU resources and computation.
-  build.c                 standalone c build static library
-  gpu/gpu.hpp             umbrella public API
-  gpu/device.hpp          access VulkanEngine's device and queues
-  gpu/buffer.*            owned GPU buffer; explicit host-visible uploads
-  gpu/image.*             owned images and views
-  gpu/shader.*            SPIR-V module owner
-  gpu/descriptors.*       arbitrary buffer/image descriptor bindings
-  gpu/pipeline.*          generic pipeline layout
-  gpu/compute.*           SPIR-V compute and indirect dispatch
-  gpu/transfer.*          GPU buffer copy/fill recording
-  gpu/upload.hpp          asynchronous fenced staging batches for buffers and RGBA8 textures
-  gpu/graph.*             ordered passes; buffer/image hazards and transitions
+  gpu/gpu.hpp            umbrella public API
+  gpu/buffer.*           owned GPU buffer and host-visible uploads
+  gpu/image.*            owned images/views
+  gpu/shader.*           SPIR-V modules
+  gpu/descriptors.*      arbitrary descriptor bindings
+  gpu/pipeline.*         pipeline layout
+  gpu/compute.*          generic compute and indirect dispatch
+  gpu/transfer.*         buffer copy/fill
+  gpu/upload.hpp         asynchronous fenced staging batches
+  gpu/texture_cache.*    RGBA8 texture residency, caching and views
+  gpu/graph.*            explicit ordered passes/barriers
+  gpu/culler.*           frustum-sphere culling and instance compaction
+  gpu/shaders/cull.comp  reference GLSL culling shader
 
-No fluid, game or renderer policy. Initialize VulkanEngine first.
-Host owns command buffers, queue submissions, swapchain, fences, and lifetime.
-No per-frame CPU readback is required. All shaders are external SPIR-V.
-Graph tracks whole buffers and exact image ranges on one queue. Import
-previous image layouts and external accesses, and synchronize cross-queue
-and in-flight frames separately. Descriptor writes need host synchronization.
+Host initializes VulkanEngine and owns queues, swapchain, frame fences.
+Texture cache replacement and retirement require no in-flight GPU reads.
+Culling shader is supplied as compiled SPIR-V at initialization; consumers
+can compile the bundled GLSL shader or use a binary compatible variant.
+Culling descriptors require binding 0 transforms, 1 sphere bounds,
+2 visible compact IDs, 3 indirect arguments. Call begin/dispatch/end
+in order, outside render passes. Culling is not occlusion culling.
