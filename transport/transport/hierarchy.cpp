@@ -331,6 +331,8 @@ namespace transport::hierarchy
         std::array<vk::Pipeline,8> pipelines{};
     };
 
+    solver::solver()=default;
+
     solver::~solver(){shutdown();}
 
     void solver::init(const std::vector<surface>& surfaces,
