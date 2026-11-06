@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <string>
 
@@ -35,7 +36,11 @@ public:
     // Returns true for VSN1 datagrams even if rejected as invalid.
     bool accept(const endpoint::resource& peer,const void* data,
                 std::size_t length,stream::clock::time_point now=stream::clock::now());
-    // Send queued data/acks and drain delivered messages with bounded memory.
+    // Accepts any datagram sender (raw UDP or authenticated DTLS).
+    using datagram_sender=std::function<bool(const endpoint::resource&,const void*,std::size_t)>;
+    void pump(const datagram_sender& transmit,std::size_t byte_budget=256*1024,
+              stream::clock::time_point now=stream::clock::now());
+    // Compatibility adapter for dedicated UDP hosts.
     void pump(const socket::resource& udp,std::size_t byte_budget=256*1024,
               stream::clock::time_point now=stream::clock::now());
     bool pop(delivery& out);

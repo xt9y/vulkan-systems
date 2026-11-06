@@ -3,7 +3,7 @@ vulkan-systems
   render/    frame scheduling, targets, HDR/LDR buffers, pipelines, draws
   bvh/       GPU LBVH acceleration
   spatial/   CPU BVH index and frustum queries
-  network/   dual-stack UDP, reliable datagram session and host
+  network/   IPv4/IPv6 UDP, DTLS 1.2 mTLS, reliable session and host
   jobs/      bounded multithreaded jobs and completion queue
 
 Each module has a standalone build.c with C++17 APIs.

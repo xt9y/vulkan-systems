@@ -48,7 +48,7 @@ bool session::accept(const endpoint::resource& peer,const void* input,
         it->second.last_seen=now;
     return true;
 }
-void session::pump(const socket::resource& udp,std::size_t byte_budget,
+void session::pump(const datagram_sender& transmit,std::size_t byte_budget,
                    stream::clock::time_point now) {
     for(auto it=peers_.begin();it!=peers_.end();) {
         auto& client=it->second;
@@ -70,12 +70,18 @@ void session::pump(const socket::resource& udp,std::size_t byte_budget,
         }
         auto packets=client.channel.flush(byte_budget,now);
         for(const auto& packet:packets) {
-            socket::send(udp,client.peer,packet.data(),packet.size());
+            transmit(client.peer,packet.data(),packet.size());
             byte_budget-=packet.size();
         }
         ++it;
         if(!byte_budget)break;
     }
+}
+void session::pump(const socket::resource& udp,std::size_t budget,
+                   stream::clock::time_point now) {
+    pump([&](const endpoint::resource& peer,const void* bytes,std::size_t size) {
+        return socket::send(udp,peer,bytes,size);
+    },budget,now);
 }
 bool session::pop(delivery& out) {
     if(received_.empty())return false;
