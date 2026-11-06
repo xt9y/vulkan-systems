@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <deque>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -78,7 +79,7 @@ namespace gpu::upload
                                  vk::DeviceSize capacity = 0)
         {
             if (!data || !bytes)
-                throw std::invalid_argument("Invalid static mesh upload");
+                throw std::invalid_argument("Invalid GPU buffer upload");
 
             vk::buffer::resource source{};
             vk::buffer::resource destination{};
@@ -115,7 +116,10 @@ namespace gpu::upload
         {
             if (!pixels || !width || !height)
                 throw std::invalid_argument("Invalid texture upload");
-            const std::size_t bytes = std::size_t(width) * height * 4;
+            if (std::size_t(width) > std::numeric_limits<std::size_t>::max() /
+                                     std::size_t(height) / 4u)
+                throw std::overflow_error("RGBA8 texture size overflow");
+            const std::size_t bytes = std::size_t(width) * height * 4u;
             auto source = vk::buffer::create(
                 bytes, vk::BufferUsageFlagBits::eTransferSrc,
                 vk::MemoryPropertyFlagBits::eHostVisible |

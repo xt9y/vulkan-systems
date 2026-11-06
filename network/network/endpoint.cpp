@@ -18,7 +18,7 @@ namespace net::endpoint
 
         if (error != 0)
         {
-            throw std::runtime_error("Cannot resolve server: " + host);
+            throw std::runtime_error("Cannot resolve UDP endpoint: " + host);
         }
 
         resource result;
