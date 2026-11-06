@@ -27,6 +27,7 @@ namespace render
         vk::SampleCountFlagBits samples=vk::SampleCountFlagBits::e1;
         bool depth_test=true;
         bool depth_write=true;
+        vk::CompareOp depth_compare=vk::CompareOp::eLessOrEqual;
         bool depth_bias=false;
         bool primitive_restart=false;
         std::vector<vk::VertexInputBindingDescription> bindings;

@@ -88,6 +88,8 @@ namespace gpu
                     state=&states_.back();
                 }
                 const bool initial=!state->valid;
+                if(initial && !next.writes)
+                    throw std::logic_error("first read of uninitialized GPU graph resource; import its prior state");
                 const auto before=state->last;
                 const bool transition=bool(next.image) &&
                     (initial || before.layout!=next.layout);

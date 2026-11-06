@@ -52,13 +52,15 @@ namespace render
             command_.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                         surface.layout,0,surface.sets,
                                         surface.dynamic_offsets);
-        if(!surface.push_constants.empty())
+        const auto push_bytes=surface.push_data?surface.push_size:surface.push_constants.size();
+        const auto* push=surface.push_data?surface.push_data:surface.push_constants.data();
+        if(push_bytes)
         {
-            if((surface.push_constants.size()&3u) || !surface.push_stages)
+            if((push_bytes&3u) || !surface.push_stages || !push ||
+               push_bytes>UINT32_MAX)
                 throw std::invalid_argument("invalid material push constants");
             command_.pushConstants(surface.layout,surface.push_stages,0,
-                                   std::uint32_t(surface.push_constants.size()),
-                                   surface.push_constants.data());
+                                   std::uint32_t(push_bytes),push);
         }
         for(const auto& stream:geometry.streams)
         {
