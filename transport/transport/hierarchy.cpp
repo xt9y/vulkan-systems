@@ -132,6 +132,45 @@ namespace transport::hierarchy
             return false;
         }
 
+        // Conservative broad-phase for an entire source cluster. If a
+        // blocker intersects the segment swept by its bounding sphere, we
+        // must split instead of replacing partial visibility by a binary
+        // three-ray decision.
+        bool maybe_blocked(vec3 a,vec3 b,float radius,
+                           const std::vector<transport::oriented_blocker>& boxes)
+        {
+            const vec3 ray=b-a;
+            for(const auto& box:boxes)
+            {
+                const vec3 axes[]{xyz(box.axis_x),xyz(box.axis_y),xyz(box.axis_z)};
+                const vec3 start=a-xyz(box.center);
+                const vec3 p{dot(start,axes[0]),dot(start,axes[1]),
+                             dot(start,axes[2])};
+                const vec3 d{dot(ray,axes[0]),dot(ray,axes[1]),dot(ray,axes[2])};
+                const vec3 extent=xyz(box.half_extent);
+                float lo=0.f,hi=1.f;
+                bool separated=false;
+                for(int axis=0;axis<3;axis++)
+                {
+                    const float x=component(p,axis),v=component(d,axis);
+                    const float half=component(extent,axis)+radius;
+                    if(std::abs(v)<1e-8f)
+                    {
+                        if(std::abs(x)>half){separated=true;break;}
+                    }
+                    else
+                    {
+                        const float t0=(-half-x)/v,t1=(half-x)/v;
+                        lo=std::max(lo,std::min(t0,t1));
+                        hi=std::min(hi,std::max(t0,t1));
+                        if(lo>hi){separated=true;break;}
+                    }
+                }
+                if(!separated && hi>=lo)return true;
+            }
+            return false;
+        }
+
         float kernel(vec3 a,vec3 na,vec3 b,vec3 nb,
                      const std::vector<transport::oriented_blocker>& boxes)
         {
@@ -211,8 +250,12 @@ namespace transport::hierarchy
                 {
                     const auto& p=surface_data[order[i]].value;
                     spread=std::min(spread,dot(normal,normalize(xyz(p.normal))));
+                    const auto& geometry=surface_data[order[i]];
+                    const float extent=.5f*(
+                        length(xyz(geometry.tangent_u))+
+                        length(xyz(geometry.tangent_v)));
                     radius=std::max(radius,length(xyz(p.position_area)-center)+
-                                    .71f*std::sqrt(p.position_area.w));
+                                    extent);
                 }
                 nodes[id].center_area=vec4(center,area);
                 nodes[id].normal_spread=vec4(normal,spread);
@@ -258,30 +301,21 @@ namespace transport::hierarchy
                 const bool distant=distance>1e-5f &&
                     radius/distance<config.far_field_ratio;
                 const bool coherent=node.normal_spread.w>=config.normal_threshold;
-                bool stable_visibility=false,visible=false;
-                if(count>1 && !self && distant && coherent)
-                {
-                    const vec3 start=pa+na*.001f;
-                    const auto visible_patch=[&](std::uint32_t i)
-                    {
-                        const auto& p=surface_data[order[i]].value;
-                        return !occluded(start,xyz(p.position_area)+
-                            normalize(xyz(p.normal))*.001f,boxes);
-                    };
-                    const auto v0=visible_patch(first);
-                    const auto v1=visible_patch(first+count/2);
-                    const auto v2=visible_patch(first+count-1);
-                    stable_visibility=v0==v1&&v1==v2;
-                    visible=v0;
-                }
-                if(count>1 && (self || !distant || !coherent ||
-                               !stable_visibility))
+                // Only collapse a cluster if visibility is provably clear
+                // under a conservative source-region bound. This cannot
+                // silently drop partially illuminated clusters.
+                const bool clear=!maybe_blocked(
+                    pa+na*.001f,pb,
+                    node.extent_radius.w+
+                        .5f*(length(xyz(patch.tangent_u))+
+                             length(xyz(patch.tangent_v))),
+                    boxes);
+                if(count>1 && (self || !distant || !coherent || !clear))
                 {
                     walk(receiver,node.range_children[2]);
                     walk(receiver,node.range_children[3]);
                     return;
                 }
-                if(count>1 && !visible)return;
                 float weight=count==1?
                     leaf_form_factor(patch,surface_data[order[first]],boxes):
                     node.center_area.w*kernel(pa,na,pb,nb,boxes);
