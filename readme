@@ -3,7 +3,6 @@ vulkan-systems
   render/     generic Vulkan graphics pipelines, targets, mesh and draws
   bvh/        GPU LBVH spatial acceleration
   transport/  GPU diffuse light transport
-  fluid/      continuous-field Navier-Stokes research references (no solver)
 
 Each implemented system is an independent C++17 c build static library
 with its own build.c, extensionless readme, and namespaced public headers.
