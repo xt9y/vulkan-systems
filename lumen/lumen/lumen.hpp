@@ -65,6 +65,16 @@ struct outputs {
     vk::Image reflections{};
 };
 
+// Measured previous-frame GPU time; unavailable on queues without timestamps.
+// Excludes swapchain present and CPU submission/wait time.
+struct performance {
+    float raster_ms=0.f;
+    float composite_ms=0.f;
+    float total_ms=0.f;
+    bool supported=false;
+    bool valid=false;
+};
+
 class system {
 public:
     system();
@@ -89,6 +99,7 @@ public:
     void record(vk::CommandBuffer command, const frame& current_frame);
     void compose(vk::CommandBuffer command);
     outputs result() const noexcept;
+    performance gpu_performance() const noexcept;
     bool implemented() const noexcept; // True once the Cornell demo can render.
     void reset() noexcept;
 
