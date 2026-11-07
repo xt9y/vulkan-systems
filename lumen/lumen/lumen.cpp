@@ -6,6 +6,7 @@
 #include <gpu/image.hpp>
 #include <gpu/descriptors.hpp>
 #include <gpu/compute.hpp>
+#include <cstdint>
 #include <render/target.hpp>
 #include <render/pipeline.hpp>
 #include <render/renderer.hpp>
@@ -167,6 +168,30 @@ struct alignas(16) camera_data {
 };
 static_assert(sizeof(camera_data)==64);
 
+// Keep these fixed bounds consistent with lumen/shaders.hpp.
+// Only a bounded fraction of the 12x8x12 radiance field is refreshed each frame.
+constexpr std::uint32_t radiance_probe_count=12*8*12;
+constexpr std::uint32_t radiance_update_count=96;
+constexpr vk::DeviceSize radiance_cache_bytes=
+    vk::DeviceSize(radiance_probe_count)*4u*4u*sizeof(float);
+struct radiance_constants {
+    std::uint32_t frame=0,revision=0;
+};
+static_assert(sizeof(radiance_constants)==8);
+
+// Shared BVH traversal implementation is inserted into both shader entrypoints.
+// It is kept in one GLSL definition, not duplicated across compute/fragment.
+std::string with_tracing(const char* source)
+{
+    std::string result(source);
+    const std::string marker="/* LUMEN_SHARED_TRACING */";
+    const auto offset=result.find(marker);
+    if(offset==std::string::npos)
+        throw std::runtime_error("missing shared Lumen ray traversal marker");
+    result.replace(offset,marker.size(),shaders::shared_tracing);
+    return result;
+}
+
 vk::ImageViewCreateInfo image_view(vk::Format format,vk::ImageAspectFlags aspect) {
     vk::ImageViewCreateInfo view{};
     view.viewType=vk::ImageViewType::e2D;
@@ -220,11 +245,12 @@ struct system::implementation {
     gbuffer surfaces{};
 
     gpu::buffer vertex_buffer,faces_buffer,trace_nodes,trace_triangles;
+    gpu::buffer radiance_probes;
     gpu::image color,depth,surface_cache;
     render::target target;
     render::pipeline geometry_pipeline,composite_pipeline;
-    gpu::compute cache_pipeline;
-    gpu::descriptors geometry_sets,composite_sets,cache_sets;
+    gpu::compute cache_pipeline,radiance_pipeline;
+    gpu::descriptors geometry_sets,composite_sets,cache_sets,radiance_sets;
     vk::PipelineLayout geometry_layout{},composite_layout{};
     vk::Sampler sampler{};
     render::mesh box_mesh,fullscreen;
@@ -237,8 +263,9 @@ struct system::implementation {
     bool timestamp_pending=false;
     bool ready=false;
     bool cache_valid=false,cache_dirty=true;
+    bool radiance_initialized=false;
     std::string geometry_vertex_spv,geometry_fragment_spv;
-    std::string composite_vertex_spv,composite_fragment_spv,cache_spv;
+    std::string composite_vertex_spv,composite_fragment_spv,cache_spv,radiance_spv;
 
     ~implementation(){release();}
 
@@ -254,6 +281,7 @@ struct system::implementation {
             geometry_pipeline.reset();
             composite_pipeline.reset();
             cache_pipeline.reset();
+            radiance_pipeline.reset();
             if(geometry_layout)vk::pipeline_layout::destroy(geometry_layout);
             if(composite_layout)vk::pipeline_layout::destroy(composite_layout);
             geometry_layout=vk::PipelineLayout{};
@@ -261,12 +289,15 @@ struct system::implementation {
             composite_sets.reset();
             geometry_sets.reset();
             cache_sets.reset();
+            radiance_sets.reset();
             if(sampler)vk::device::get()->handle.destroySampler(sampler);
             sampler=vk::Sampler{};
             target.reset(); // framebuffer must be destroyed before image views
             depth.reset();
             color.reset();
             surface_cache.reset();
+            radiance_probes.reset();
+            radiance_initialized=false;
             cache_valid=false;
             cache_dirty=true;
             vertex_buffer.reset();
@@ -346,6 +377,10 @@ struct system::implementation {
                                storage,host_memory);
         trace_triangles.upload(accel.triangles.data(),
                                accel.triangles.size()*sizeof(bvh::triangle));
+        radiance_probes.create(radiance_cache_bytes,
+            vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferDst,
+            vk::MemoryPropertyFlagBits::eDeviceLocal);
         box_mesh.vertex_count=vertex_count;
         box_mesh.streams={{0,vertex_buffer.handle(),0}};
         fullscreen.vertex_count=3;
@@ -397,10 +432,14 @@ struct system::implementation {
         auto cards_binding=scene_binding;
         cards_binding.binding=3;
         cards_binding.descriptorType=vk::DescriptorType::eCombinedImageSampler;
-        geometry_sets.create({scene_binding,nodes_binding,triangles_binding,cards_binding});
+        auto probes_binding=scene_binding;
+        probes_binding.binding=4;
+        geometry_sets.create({scene_binding,nodes_binding,triangles_binding,
+                              cards_binding,probes_binding});
         geometry_sets.write_buffer(0,0,faces_buffer.descriptor());
         geometry_sets.write_buffer(0,1,trace_nodes.descriptor());
         geometry_sets.write_buffer(0,2,trace_triangles.descriptor());
+        geometry_sets.write_buffer(0,4,radiance_probes.descriptor());
 
         auto cache_storage=scene_binding;
         cache_storage.binding=1;
@@ -414,6 +453,23 @@ struct system::implementation {
         cache_write.imageView=surface_cache.view();
         cache_write.imageLayout=vk::ImageLayout::eGeneral;
         cache_sets.write_image(0,1,cache_write);
+
+        auto radiance_faces=scene_binding;
+        auto radiance_nodes=nodes_binding;
+        auto radiance_triangles=triangles_binding;
+        auto radiance_cards=cards_binding;
+        auto radiance_buffer=probes_binding;
+        radiance_faces.stageFlags=vk::ShaderStageFlagBits::eCompute;
+        radiance_nodes.stageFlags=vk::ShaderStageFlagBits::eCompute;
+        radiance_triangles.stageFlags=vk::ShaderStageFlagBits::eCompute;
+        radiance_cards.stageFlags=vk::ShaderStageFlagBits::eCompute;
+        radiance_buffer.stageFlags=vk::ShaderStageFlagBits::eCompute;
+        radiance_sets.create({radiance_faces,radiance_nodes,radiance_triangles,
+                              radiance_cards,radiance_buffer});
+        radiance_sets.write_buffer(0,0,faces_buffer.descriptor());
+        radiance_sets.write_buffer(0,1,trace_nodes.descriptor());
+        radiance_sets.write_buffer(0,2,trace_triangles.descriptor());
+        radiance_sets.write_buffer(0,4,radiance_probes.descriptor());
 
         vk::DescriptorSetLayoutBinding image_binding{};
         image_binding.binding=0;
@@ -439,11 +495,17 @@ struct system::implementation {
         cards_read.imageView=surface_cache.view();
         cards_read.imageLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
         geometry_sets.write_image(0,3,cards_read);
+        radiance_sets.write_image(0,3,cards_read);
 
         cache_spv=compile("cards","comp",shaders::cards_comp);
         cache_pipeline.create(cache_spv,{cache_sets.layout()});
+        const std::string radiance_source=with_tracing(shaders::radiance_comp);
+        radiance_spv=compile("radiance","comp",radiance_source.c_str());
+        radiance_pipeline.create(radiance_spv,{radiance_sets.layout()},
+                                sizeof(radiance_constants));
         geometry_vertex_spv=compile("geometry","vert",shaders::geometry_vert);
-        geometry_fragment_spv=compile("geometry","frag",shaders::geometry_frag);
+        const std::string fragment_source=with_tracing(shaders::geometry_frag);
+        geometry_fragment_spv=compile("geometry","frag",fragment_source.c_str());
         composite_vertex_spv=compile("composite","vert",shaders::composite_vert);
         composite_fragment_spv=compile("composite","frag",shaders::composite_frag);
 
@@ -520,9 +582,11 @@ struct system::implementation {
             gpu_stats.supported=true;
         }
         ready=true;
-        std::cout<<"[lumen] Stage 4: "<<accel.triangles.size()
+        std::cout<<"[lumen] Stage 5: "<<accel.triangles.size()
                  <<" triangles / "<<accel.nodes.size()
                  <<" BVH nodes | cards=16 x 64x64"
+                 <<" | world probes="<<radiance_probe_count
+                 <<" updates/frame="<<radiance_update_count
                  <<" | scene render="<<render_extent.width<<"x"<<render_extent.height
                  <<" (swapchain "<<extent.width<<"x"<<extent.height<<")"
                  <<" | GPU timestamps "
