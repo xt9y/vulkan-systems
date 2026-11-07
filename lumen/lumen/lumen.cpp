@@ -168,6 +168,12 @@ struct alignas(16) camera_data {
 };
 static_assert(sizeof(camera_data)==64);
 
+struct screen_constants {
+    camera_data camera;
+    std::array<float,4> trace_parameters;
+};
+static_assert(sizeof(screen_constants)==80);
+
 // Keep these fixed bounds consistent with lumen/shaders.hpp.
 // Only a bounded fraction of the 12x8x12 radiance field is refreshed each frame.
 constexpr std::uint32_t radiance_probe_count=12*8*12;
@@ -594,7 +600,7 @@ struct system::implementation {
         const std::string screen_source=with_tracing(shaders::screen_comp);
         screen_spv=compile("screen","comp",screen_source.c_str());
         screen_pipeline.create(screen_spv,{screen_sets.layout()},
-                               sizeof(camera_data));
+                               sizeof(screen_constants));
         geometry_vertex_spv=compile("geometry","vert",shaders::geometry_vert);
         const std::string fragment_source=with_tracing(shaders::geometry_frag);
         geometry_fragment_spv=compile("geometry","frag",fragment_source.c_str());
@@ -674,7 +680,7 @@ struct system::implementation {
             gpu_stats.supported=true;
         }
         ready=true;
-        std::cout<<"[lumen] Stage 6: "<<accel.triangles.size()
+        std::cout<<"[lumen] Stage 7: "<<accel.triangles.size()
                  <<" triangles / "<<accel.nodes.size()
                  <<" BVH nodes | cards=16 x 64x64"
                  <<" | world probes="<<radiance_probe_count
@@ -682,6 +688,7 @@ struct system::implementation {
                                                     1u,radiance_probe_count)
                  <<" rays/update="<<std::clamp(options.rays_per_probe,1u,16u)
                  <<" | screen probes="<<screen_extent.width<<"x"<<screen_extent.height
+                 <<" trace=8 steps+"<<options.screen_trace_distance<<"m BVH fallback"
                  <<" | scene render="<<render_extent.width<<"x"<<render_extent.height
                  <<" (swapchain "<<extent.width<<"x"<<extent.height<<")"
                  <<" | GPU timestamps "
@@ -869,10 +876,14 @@ struct system::implementation {
                 vk::PipelineStageFlags(vk::PipelineStageFlagBits::eTopOfPipe),
             vk::PipelineStageFlagBits::eComputeShader,
             {},{},{},barriers);
+        const screen_constants push{
+            current_camera,
+            {std::clamp(options.screen_trace_distance,.5f,8.f),
+             std::clamp(options.screen_trace_strength,0.f,.25f),0.f,0.f}
+        };
         screen_pipeline.dispatch(cmd,(screen_extent.width+7)/8,
                                  (screen_extent.height+7)/8,1,
-                                 {screen_sets.set()},&current_camera,
-                                 sizeof(current_camera));
+                                 {screen_sets.set()},&push,sizeof(push));
         for(auto& barrier:barriers)
         {
             barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
@@ -1032,7 +1043,7 @@ bool system::implemented() const noexcept {
 }
 const char* system::status() const noexcept {
     return implemented()?
-        "stage 6: visibility-aware screen probe gather":
+        "stage 7: screen traces with BVH fallback":
         "not initialized";
 }
 void system::reset() noexcept {impl_.reset();}
