@@ -4,58 +4,42 @@ Public headers:
   network/network.hpp
   network/endpoint.hpp         IPv4/IPv6 address and peer identity
   network/socket.hpp           low-level unencrypted UDP; internal transport use
-  network/secure.hpp           certificate-verified, mutually authenticated DTLS 1.2
+  network/secure.hpp           automatic server identity, pinned DTLS 1.2
   network/stream.hpp           reliable messages, ordering-independent, congestion window
   network/session.hpp          reliable channels over a supplied datagram sender
-  network/host.hpp             low-level dedicated UDP host (unencrypted)
 
 Secure transport:
-- net::secure::create(role, settings, local_port, bind_host) initializes Mbed TLS.
-- Default automatic mode is enabled explicitly with settings.automatic_identity=true,
-  storage_directory=<persistent user config path>. Client sets trust_identity to
-  the stable configured host:port to pin the destination separately per endpoint.
-- On first startup the server generates a P-256 private key at storage_directory/
-  server.key using the Mbed TLS RNG; it remains on disk with restricted access.
-  Every server launch generates a fresh one-year self-signed certificate using
-  the persisted key. Rotating the certificate does not change its public-key pin.
-- Client does NOT need a key, certificate, CA or external OpenSSL executable.
-  It verifies the remote certificate's public key against a stored SHA-256
-  SubjectPublicKeyInfo fingerprint; on first contact the key is pinned under
-  storage_directory/pins/<hash-of-configured-host:port>.pin.
-- WARNING: first contact is trust-on-first-use. The client cannot know it
-  connected to the intended server if an attacker intercepted the very first
-  handshake. For high-assurance external servers, use an independent trust
-  anchor or verify the server's displayed key fingerprint out-of-band.
-- A changed public key after initial enrollment is rejected. Never
-  silently regenerate client pins after unexpected identity changes.
-- Optional explicit strict mTLS remains supported by supplying ca_file,
-  certificate_file, private_key_file, and server_name (client); this uses
-  VERIFY_REQUIRED on both ends with trusted X.509 chains.
-- Both modes encrypt and authenticate all application data through DTLS,
-  with no plaintext game traffic or fallback.
-- All peers on a UDP socket get distinct Mbed TLS contexts, and the DTLS
-  record layer gives confidentiality, integrity and replay protection.
-- The library's peer map is single-thread owned; do not concurrently call
-  send/receive/destroy on one resource without synchronization.
-- net::session uses net::secure::send as its datagram sender and sends
-  reliable and fragmentable messages through the secured tunnel.
+- Only supported game transport: authenticated and encrypted DTLS 1.2.
+- net::secure::create(role, settings, port, bind_host) creates a secure endpoint.
+- settings.storage_directory points at a writable per-user config directory.
+  A server creates a persistent P-256 private key and a renewable certificate.
+- Client settings.trust_identity is the configured host:port. On the first
+  authenticated cryptographic handshake, the client's trust-on-first-use
+  mechanism stores the server's SHA-256 public-key fingerprint.
+- A later changed fingerprint is rejected. First-use trust cannot prove the
+  intended server's identity against an active on-path attacker. An independent
+  server identity channel is required for that additional guarantee.
+- Client keys, client certificates, external OpenSSL scripts, CA distribution,
+  plaintext and alternate network modes are not part of this implementation.
+- All gameplay and reliable scene packets use the authenticated DTLS channel.
+- net::session fragments, acknowledges and retries inside DTLS without owning
+  its own UDP socket. Only net::secure binds to the UDP socket.
+- Calling net::secure::connect after a session timeout creates a fresh DTLS
+  handshake while retaining the trusted server key on the client's disk.
+- The DTLS peer collection is single-thread-owned; callers must serialize use.
 
 Protocol restrictions:
 - Both endpoints must run the same version of the application and wire
-  protocol. A previous plaintext VSN1/game client cannot join a secure server.
-- DTLS is not a complete authorization system: the game still enforces
-  game-session tokens and endpoint ownership after certificate verification.
-- In automatic mode the server does NOT authenticate client identities.
-  Application-level player admission, permissions and bans are still needed.
-  Certificate pinning alone does not authorize a player.
-- Explicit mTLS mode authenticates certificates, not game accounts.
+  protocol. An earlier plaintext game client cannot join this server.
+- DTLS does not authenticate individual clients; the game must enforce
+  admission control, permissions and bans. A game-session token is not a
+  user account identity.
 - Bounded queues and DTLS cookies reduce trivial resource attacks but do not
   constitute DDoS protection. Nonblocking handshake and packet-loss testing
   are essential before deploying on an untrusted Internet network.
-- DTLS 1.2 provides no QUIC-style stream transport, congestion-managed
-  connection multiplexing, certificate provisioning or NAT traversal.
-- Low-level net::socket and net::host are intentionally unencrypted. Do not
-  expose those APIs to external/untrusted game traffic.
+- DTLS 1.2 provides no automatic NAT traversal, dynamic DNS or relay.
+- network/socket.hpp exposes raw UDP primitives needed internally by DTLS,
+  but is not an alternate gameplay transport.
 
 Build:
   The c build tool exports Git files without submodules. network/mbedtls_prepare.cmake
