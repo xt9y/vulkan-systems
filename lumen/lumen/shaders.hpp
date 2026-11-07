@@ -515,7 +515,10 @@ bool trace_screen(vec3 origin,vec3 direction,float limit,uint receiver,
     radiance=vec3(0.0);
     for(int i=0;i<8;i++)
     {
-        float t=limit*(float(i)+1.0)/8.0;
+        // Quadratic spacing improves near-contact ray coverage at the same
+        // fixed eight depth fetches (important on low-end GPUs).
+        float step=(float(i)+1.0)/8.0;
+        float t=limit*step*step;
         vec3 relative=origin+direction*t-camera.eye.xyz;
         float view_z=dot(relative,forward);
         if(view_z<camera.projection.z || view_z>=camera.projection.w)
