@@ -329,7 +329,7 @@ struct system::implementation {
         const float cp=std::cos(pitch),sp=std::sin(pitch);
         const float sy=std::sin(yaw),cy=std::cos(yaw);
         const point forward{cp*sy,sp,-cp*cy};
-        const point right{ -forward[2],0,forward[0] };
+        const point right{ cy,0,sy };
         const point up{ -sp*sy,cp,sp*cy };
         const auto& eye=current.view.position;
         camera_data camera{{
