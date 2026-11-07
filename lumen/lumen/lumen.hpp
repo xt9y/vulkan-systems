@@ -5,8 +5,8 @@
 
 namespace lumen {
 
-// Lumen-style rendering API: Cornell demo with material cards, BVH direct
-// lighting and budgeted world-space diffuse radiance probes. Reflections pending.
+// Lumen-style Cornell demo: BVH direct shadows, material cards, bounded
+// world radiance cache and screen-probe gathering. Reflections are pending.
 enum class demo_scene : std::uint8_t {
     none,
     cornell_box
