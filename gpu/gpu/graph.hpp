@@ -36,6 +36,10 @@ namespace gpu
         void execute(vk::CommandBuffer command);
         void clear_passes(){passes_.clear();}
         void clear_states(){states_.clear();}
+        // Drop tracked states before destroying or replacing GPU resources.
+        // Call only after submissions using those resources have completed.
+        void forget(vk::Buffer buffer);
+        void forget(vk::Image image);
         void import(const access& previous);
     private:
         struct pass
