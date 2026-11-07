@@ -351,12 +351,12 @@ layout(std430,set=0,binding=4) buffer RadianceProbes {
 layout(push_constant) uniform Update {
     uint frame_number;
     uint revision;
+    uint updates_per_frame;
+    uint rays_per_probe;
 } params;
 
 const ivec3 PROBE_GRID=ivec3(12,8,12);
 const uint PROBE_COUNT=1152u;
-const uint UPDATE_COUNT=96u;
-const int RAYS_PER_PROBE=8;
 const vec3 GRID_MIN=vec3(.25,.24,.25);
 const vec3 GRID_MAX=vec3(5.30,5.22,5.34);
 
@@ -401,8 +401,9 @@ bool occupied(vec3 p)
 void main()
 {
     uint thread=gl_GlobalInvocationID.x;
-    if(thread>=UPDATE_COUNT)return;
-    uint id=(params.frame_number*UPDATE_COUNT+thread)%PROBE_COUNT;
+    uint updates=clamp(params.updates_per_frame,1u,PROBE_COUNT);
+    if(thread>=updates)return;
+    uint id=(params.frame_number*updates+thread)%PROBE_COUNT;
     ivec3 cell=ivec3(int(id%12u),int((id/12u)%8u),int(id/96u));
     vec3 origin=probe_position(cell);
     if(occupied(origin))
@@ -418,10 +419,11 @@ void main()
     random_bits(seed);
     vec3 l0=vec3(0.0),lx=vec3(0.0),ly=vec3(0.0),lz=vec3(0.0);
     float spin=2.0*PI*random01(seed);
-    for(int ray=0;ray<RAYS_PER_PROBE;ray++)
+    int samples=int(clamp(params.rays_per_probe,1u,16u));
+    for(int ray=0;ray<samples;ray++)
     {
         // Uniform-sphere stratification with per-update rotation.
-        float z=1.0-2.0*(float(ray)+random01(seed))/float(RAYS_PER_PROBE);
+        float z=1.0-2.0*(float(ray)+random01(seed))/float(samples);
         float a=spin+2.3999632*float(ray)+6.2831853*random01(seed);
         float radial=sqrt(max(0.0,1.0-z*z));
         vec3 direction=vec3(cos(a)*radial,sin(a)*radial,z);
@@ -450,7 +452,7 @@ void main()
         lz+=incident*direction.z;
     }
 
-    float inv=1.0/float(RAYS_PER_PROBE);
+    float inv=1.0/float(samples);
     l0*=inv;
     lx*=3.0*inv;
     ly*=3.0*inv;
