@@ -28,7 +28,7 @@ resource create(role side, settings config, std::uint16_t port = 0,
                 const std::string& bind_host = "0.0.0.0");
 void destroy(resource& connection) noexcept;
 // Called initially and on a reconnect: discards the previous DTLS session,
-// // regenerates the handshake, and retains the pinned server key on disk.
+// regenerates the handshake, and retains the pinned server key on disk.
 void connect(const resource& connection, const endpoint::resource& remote);
 bool send(const resource& connection, const endpoint::resource& peer,
           const void* bytes, std::size_t size);
