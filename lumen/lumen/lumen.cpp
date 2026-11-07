@@ -523,8 +523,20 @@ struct system::implementation {
         radiance_triangles.stageFlags=vk::ShaderStageFlagBits::eCompute;
         radiance_cards.stageFlags=vk::ShaderStageFlagBits::eCompute;
         radiance_buffer.stageFlags=vk::ShaderStageFlagBits::eCompute;
+        auto lighting_texture=radiance_cards;
+        lighting_texture.binding=9;
         radiance_sets.create({radiance_faces,radiance_nodes,radiance_triangles,
-                              radiance_cards,radiance_buffer});
+                              radiance_cards,radiance_buffer,lighting_texture});
+
+        auto lighting_output=radiance_cards;
+        lighting_output.binding=10;
+        lighting_output.descriptorType=vk::DescriptorType::eStorageImage;
+        lighting_sets.create({radiance_faces,radiance_nodes,radiance_triangles,
+                              radiance_cards,radiance_buffer,lighting_output});
+        lighting_sets.write_buffer(0,0,faces_buffer.descriptor());
+        lighting_sets.write_buffer(0,1,trace_nodes.descriptor());
+        lighting_sets.write_buffer(0,2,trace_triangles.descriptor());
+        lighting_sets.write_buffer(0,4,radiance_probes.descriptor());
         radiance_sets.write_buffer(0,0,faces_buffer.descriptor());
         radiance_sets.write_buffer(0,1,trace_nodes.descriptor());
         radiance_sets.write_buffer(0,2,trace_triangles.descriptor());
@@ -543,17 +555,18 @@ struct system::implementation {
         }
         composite_sets.create(composite_bindings);
 
-        std::vector<vk::DescriptorSetLayoutBinding> screen_bindings(9);
-        for(std::uint32_t i=0;i<9;i++)
+        std::vector<vk::DescriptorSetLayoutBinding> screen_bindings(11);
+        for(std::uint32_t i=0;i<11;i++)
         {
             auto& binding=screen_bindings[i];
             binding.binding=i;
             binding.descriptorCount=1;
             binding.stageFlags=vk::ShaderStageFlagBits::eCompute;
-            binding.descriptorType=(i==3 || i==5 || i==6)?
+            binding.descriptorType=(i==3 || i==5 || i==6 || i==9)?
                 vk::DescriptorType::eCombinedImageSampler:
-                (i>=7?vk::DescriptorType::eStorageImage:
-                 vk::DescriptorType::eStorageBuffer);
+                ((i==7 || i==8 || i==10)?
+                    vk::DescriptorType::eStorageImage:
+                    vk::DescriptorType::eStorageBuffer);
         }
         screen_sets.create(screen_bindings);
         screen_sets.write_buffer(0,0,faces_buffer.descriptor());
@@ -584,6 +597,18 @@ struct system::implementation {
         geometry_sets.write_image(0,3,cards_read);
         radiance_sets.write_image(0,3,cards_read);
         screen_sets.write_image(0,3,cards_read);
+        lighting_sets.write_image(0,3,cards_read);
+
+        vk::DescriptorImageInfo lit_read{};
+        lit_read.sampler=sampler;
+        lit_read.imageView=surface_lighting.view();
+        lit_read.imageLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+        radiance_sets.write_image(0,9,lit_read);
+        screen_sets.write_image(0,9,lit_read);
+        vk::DescriptorImageInfo lit_write{};
+        lit_write.imageView=surface_lighting.view();
+        lit_write.imageLayout=vk::ImageLayout::eGeneral;
+        lighting_sets.write_image(0,10,lit_write);
 
         vk::DescriptorImageInfo depth_read{};
         depth_read.sampler=depth_sampler;
@@ -602,7 +627,7 @@ struct system::implementation {
             info.imageLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
             composite_sets.write_image(0,binding,info);
         };
-        screen_read(screen_light,2);
+        screen_read(screen_gather,2);
         screen_read(screen_meta,3);
 
         const auto screen_write=[&](const gpu::image& image,
@@ -615,9 +640,14 @@ struct system::implementation {
         };
         screen_write(screen_light,7);
         screen_write(screen_meta,8);
+        screen_write(screen_gather,10);
 
         cache_spv=compile("cards","comp",shaders::cards_comp);
         cache_pipeline.create(cache_spv,{cache_sets.layout()});
+        const std::string lighting_source=with_tracing(shaders::lighting_comp);
+        lighting_spv=compile("surface_lighting","comp",lighting_source.c_str());
+        lighting_pipeline.create(lighting_spv,{lighting_sets.layout()},
+                                sizeof(light_constants));
         const std::string radiance_source=with_tracing(shaders::radiance_comp);
         radiance_spv=compile("radiance","comp",radiance_source.c_str());
         radiance_pipeline.create(radiance_spv,{radiance_sets.layout()},
@@ -705,14 +735,16 @@ struct system::implementation {
             gpu_stats.supported=true;
         }
         ready=true;
-        std::cout<<"[lumen] Stage 7: "<<accel.triangles.size()
+        std::cout<<"[lumen] Lit Surface Cache + directional Screen Radiance Cache: "
+                 <<accel.triangles.size()
                  <<" triangles / "<<accel.nodes.size()
-                 <<" BVH nodes | cards=16 x 64x64"
+                 <<" BVH nodes | lit cards=16 x 64x64"
                  <<" | world probes="<<radiance_probe_count
                  <<" updates/frame="<<std::clamp(options.probe_updates_per_frame,
                                                     1u,radiance_probe_count)
                  <<" rays/update="<<std::clamp(options.rays_per_probe,1u,16u)
                  <<" | screen probes="<<screen_extent.width<<"x"<<screen_extent.height
+                 <<" directions=8x8"
                  <<" trace=8 steps+"<<options.screen_trace_distance<<"m BVH fallback"
                  <<" | scene render="<<render_extent.width<<"x"<<render_extent.height
                  <<" (swapchain "<<extent.width<<"x"<<extent.height<<")"
