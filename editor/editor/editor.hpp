@@ -74,6 +74,8 @@ namespace editor
         void set_labels(std::vector<screen_label> labels);
         void set_properties(std::uint64_t object,std::vector<property> values);
         void handle(const input& events);
+        // Host reports CPU frame presentation interval (not GPU pass time).
+        void set_frame_time(double milliseconds);
         std::vector<action> take_actions();
         draw_list paint(int width,int height) const;
         bool visible() const;
@@ -85,6 +87,9 @@ namespace editor
         bool visible_=false,cursor_free_=false;
         menu menu_=menu::none;
         int selected_row_=0;
+        int scroll_first_=0;
+        double frame_time_ms_=0;
+
         std::uint64_t selected_object_=0;
         std::vector<object_type> catalog_;
         std::vector<screen_label> labels_;
