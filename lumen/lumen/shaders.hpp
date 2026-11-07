@@ -173,6 +173,59 @@ vec3 direct_area_light(vec3 position,vec3 normal,vec3 albedo)
 
 )glsl";
 
+inline constexpr const char* shared_irradiance=R"glsl(
+struct Probe {
+    vec4 l0,lx,ly,lz;
+};
+layout(std430,set=0,binding=4) readonly buffer RadianceProbes {
+    Probe probes[];
+};
+const ivec3 PROBE_GRID=ivec3(12,8,12);
+const vec3 GRID_MIN=vec3(.25,.24,.25);
+const vec3 GRID_MAX=vec3(5.30,5.22,5.34);
+
+vec3 indirect_irradiance(vec3 position,vec3 normal)
+{
+    vec3 biased=position+normal*.075;
+    vec3 coordinate=clamp(
+        (biased-GRID_MIN)/(GRID_MAX-GRID_MIN)*vec3(PROBE_GRID-1),
+        vec3(0.0),vec3(PROBE_GRID-1)-vec3(.001));
+    ivec3 base=ivec3(floor(coordinate));
+    vec3 fraction=fract(coordinate);
+    vec3 sum=vec3(0.0);
+    float weights=0.0;
+    for(int z=0;z<2;z++)
+    for(int y=0;y<2;y++)
+    for(int x=0;x<2;x++)
+    {
+        ivec3 cell=base+ivec3(x,y,z);
+        uint id=uint(cell.x+cell.y*12+cell.z*96);
+        Probe probe=probes[id];
+        if(probe.l0.w<.5)continue;
+        vec3 probe_pos=mix(GRID_MIN,GRID_MAX,
+                           vec3(cell)/vec3(PROBE_GRID-1));
+        vec3 toward=probe_pos-position;
+        float distance=length(toward);
+        // Normal-biased interpolation avoids sampling deeply behind walls
+        // and rejects cache probes underneath the receiver surface.
+        float facing=clamp((dot(normal,toward)/max(distance,.01)+.15)*2.0,
+                            0.0,1.0);
+        float weight=(x==0?1.0-fraction.x:fraction.x)*
+                     (y==0?1.0-fraction.y:fraction.y)*
+                     (z==0?1.0-fraction.z:fraction.z);
+        weight*=max(.002,facing*facing);
+        vec3 irradiance=probe.l0.rgb+
+            (2.0/3.0)*(probe.lx.rgb*normal.x+
+                        probe.ly.rgb*normal.y+
+                        probe.lz.rgb*normal.z);
+        sum+=max(irradiance,vec3(0.0))*weight;
+        weights+=weight;
+    }
+    return weights>.0001?sum/weights:vec3(0.0);
+}
+
+)glsl";
+
 inline constexpr const char* geometry_vert=R"glsl(#version 450
 layout(location=0) in vec3 position;
 layout(location=1) in vec3 normal;
@@ -237,68 +290,20 @@ layout(set=0,binding=3) uniform sampler2D surface_cards;
 
 /* LUMEN_SHARED_TRACING */
 
-struct Probe {
-    vec4 l0,lx,ly,lz;
-};
-layout(std430,set=0,binding=4) readonly buffer RadianceProbes {
-    Probe probes[];
-};
-const ivec3 PROBE_GRID=ivec3(12,8,12);
-const vec3 GRID_MIN=vec3(.25,.24,.25);
-const vec3 GRID_MAX=vec3(5.30,5.22,5.34);
-
-vec3 indirect_irradiance(vec3 position,vec3 normal)
-{
-    vec3 biased=position+normal*.075;
-    vec3 coordinate=clamp(
-        (biased-GRID_MIN)/(GRID_MAX-GRID_MIN)*vec3(PROBE_GRID-1),
-        vec3(0.0),vec3(PROBE_GRID-1)-vec3(.001));
-    ivec3 base=ivec3(floor(coordinate));
-    vec3 fraction=fract(coordinate);
-    vec3 sum=vec3(0.0);
-    float weights=0.0;
-    for(int z=0;z<2;z++)
-    for(int y=0;y<2;y++)
-    for(int x=0;x<2;x++)
-    {
-        ivec3 cell=base+ivec3(x,y,z);
-        uint id=uint(cell.x+cell.y*12+cell.z*96);
-        Probe probe=probes[id];
-        if(probe.l0.w<.5)continue;
-        vec3 probe_pos=mix(GRID_MIN,GRID_MAX,
-                           vec3(cell)/vec3(PROBE_GRID-1));
-        vec3 toward=probe_pos-position;
-        float distance=length(toward);
-        // Normal-biased interpolation avoids sampling deeply behind walls
-        // and rejects cache probes underneath the receiver surface.
-        float facing=clamp((dot(normal,toward)/max(distance,.01)+.15)*2.0,
-                            0.0,1.0);
-        float weight=(x==0?1.0-fraction.x:fraction.x)*
-                     (y==0?1.0-fraction.y:fraction.y)*
-                     (z==0?1.0-fraction.z:fraction.z);
-        weight*=max(.002,facing*facing);
-        vec3 irradiance=probe.l0.rgb+
-            (2.0/3.0)*(probe.lx.rgb*normal.x+
-                        probe.ly.rgb*normal.y+
-                        probe.lz.rgb*normal.z);
-        sum+=max(irradiance,vec3(0.0))*weight;
-        weights+=weight;
-    }
-    return weights>.0001?sum/weights:vec3(0.0);
-}
+/* LUMEN_SHARED_IRRADIANCE */
 
 void main()
 {
     if(any(greaterThan(surface_emission,vec3(0.0))))
     {
-        hdr_color=vec4(surface_emission,1.0);
+        hdr_color=vec4(surface_emission,float(surface_index+1u));
         return;
     }
     vec3 normal=normalize(surface_normal);
     vec3 albedo=cached_albedo(world_position,surface_index);
     vec3 direct=direct_area_light(world_position,normal,albedo);
     vec3 indirect=albedo*indirect_irradiance(world_position,normal);
-    hdr_color=vec4(max(direct+indirect,vec3(0.0)),1.0);
+    hdr_color=vec4(max(direct+indirect,vec3(0.0)),float(surface_index+1u));
 }
 )glsl";
 
@@ -467,6 +472,123 @@ void main()
 }
 )glsl";
 
+
+inline constexpr const char* screen_comp=R"glsl(#version 450
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+struct Face {
+    vec4 origin,u,v,normal,albedo,emission,metric;
+};
+layout(std430,set=0,binding=0) readonly buffer CornellFaces {
+    Face faces[];
+};
+layout(set=0,binding=3) uniform sampler2D surface_cards;
+const float PI=3.14159265358979323846;
+const float EPSILON=0.0015;
+const int FACE_COUNT=16;
+const int CARD_SIZE=64;
+/* LUMEN_SHARED_TRACING */
+/* LUMEN_SHARED_IRRADIANCE */
+
+layout(set=0,binding=5) uniform sampler2D scene_color;
+layout(set=0,binding=6) uniform sampler2D scene_depth;
+layout(rgba16f,set=0,binding=7) writeonly uniform image2D screen_light;
+layout(rgba16f,set=0,binding=8) writeonly uniform image2D screen_meta;
+
+layout(push_constant) uniform Camera {
+    vec4 eye,right,up,projection;
+} camera;
+
+float linear_depth(float z)
+{
+    float n=camera.projection.z,f=camera.projection.w;
+    return n*f/max(f-z*(f-n),.00001);
+}
+void main()
+{
+    ivec2 tile=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 tiles=imageSize(screen_light);
+    if(any(greaterThanEqual(tile,tiles)))return;
+    ivec2 size=textureSize(scene_color,0);
+    ivec2 pixel=min(tile*16+ivec2(8),size-1);
+    vec4 sample_color=texelFetch(scene_color,pixel,0);
+    float z=texelFetch(scene_depth,pixel,0).r;
+    uint id=uint(sample_color.a+.5);
+    if(id<1u || id>16u || z>=.99999)
+    {
+        imageStore(screen_light,tile,vec4(0.0));
+        imageStore(screen_meta,tile,vec4(0.0));
+        return;
+    }
+    Face surface=faces[id-1u];
+    if(any(greaterThan(surface.emission.rgb,vec3(0.0))))
+    {
+        imageStore(screen_light,tile,vec4(0.0));
+        imageStore(screen_meta,tile,vec4(0.0));
+        return;
+    }
+
+    float view_z=linear_depth(z);
+    vec2 ndc=(vec2(pixel)+.5)/vec2(size)*2.0-1.0;
+    vec3 forward=cross(camera.up.xyz,camera.right.xyz);
+    vec3 position=camera.eye.xyz+
+        (forward+camera.right.xyz*ndc.x*camera.projection.x*camera.projection.y-
+         camera.up.xyz*ndc.y*camera.projection.x)*view_z;
+    vec3 normal=normalize(surface.normal.xyz);
+
+    // Screen probes reuse world-space incident light, but replace its
+    // interpolation with visibility-tested local gathering at the receiver.
+    vec3 unoccluded=indirect_irradiance(position,normal);
+    vec3 biased=position+normal*.075;
+    vec3 coordinate=clamp(
+        (biased-GRID_MIN)/(GRID_MAX-GRID_MIN)*vec3(PROBE_GRID-1),
+        vec3(0.0),vec3(PROBE_GRID-1)-vec3(.001));
+    ivec3 base=ivec3(floor(coordinate));
+    vec3 fraction=fract(coordinate);
+    vec3 gathered=vec3(0.0);
+    float weights=0.0;
+    int tests=0;
+    for(int dz=0;dz<2;dz++)
+    for(int dy=0;dy<2;dy++)
+    for(int dx=0;dx<2;dx++)
+    {
+        ivec3 cell=base+ivec3(dx,dy,dz);
+        uint probe_id=uint(cell.x+cell.y*12+cell.z*96);
+        Probe probe=probes[probe_id];
+        if(probe.l0.w<.5)continue;
+        vec3 probe_pos=mix(GRID_MIN,GRID_MAX,
+                           vec3(cell)/vec3(PROBE_GRID-1));
+        vec3 delta=probe_pos-position;
+        float distance=length(delta);
+        float facing=clamp((dot(normal,delta)/max(distance,.01)+.15)*2.0,
+                            0.0,1.0);
+        float w=(dx==0?1.0-fraction.x:fraction.x)*
+                (dy==0?1.0-fraction.y:fraction.y)*
+                (dz==0?1.0-fraction.z:fraction.z);
+        w*=max(.002,facing*facing);
+        if(w<=.0001)continue;
+        // Bound BVH work to four local rays per 16x16 screen tile.
+        if(tests<4 && w>.04 && distance>.05 && facing>.05)
+        {
+            tests++;
+            vec3 direction=delta/distance;
+            if(blocked(position+normal*.012,direction,max(.01,distance-.03)))
+                w*=.02;
+        }
+        vec3 irradiance=probe.l0.rgb+
+            (2.0/3.0)*(probe.lx.rgb*normal.x+
+                        probe.ly.rgb*normal.y+
+                        probe.lz.rgb*normal.z);
+        gathered+=max(irradiance,vec3(0.0))*w;
+        weights+=w;
+    }
+    vec3 local=weights>.0001?gathered/weights:unoccluded;
+    vec3 correction=clamp(local-unoccluded,-unoccluded*.8,vec3(.4));
+    correction*=cached_albedo(position,id-1u);
+    imageStore(screen_light,tile,vec4(correction,float(id)));
+    imageStore(screen_meta,tile,vec4(position,view_z));
+}
+)glsl";
+
 inline constexpr const char* composite_vert=R"glsl(#version 450
 layout(location=0) out vec2 uv;
 void main()
@@ -481,14 +603,58 @@ void main()
 
 inline constexpr const char* composite_frag=R"glsl(#version 450
 layout(set=0,binding=0) uniform sampler2D color_image;
+layout(set=0,binding=1) uniform sampler2D depth_image;
+layout(set=0,binding=2) uniform sampler2D screen_light;
+layout(set=0,binding=3) uniform sampler2D screen_meta;
 layout(push_constant) uniform Display {
     uint manual_gamma;
 } display;
 layout(location=0) in vec2 uv;
 layout(location=0) out vec4 color_out;
+
+float linear_depth(float z)
+{
+    const float n=.05,f=200.0;
+    return n*f/max(f-z*(f-n),.00001);
+}
 void main()
 {
-    vec3 hdr=max(texture(color_image,uv).rgb,vec3(0.0));
+    vec3 hdr=texture(color_image,uv).rgb;
+    ivec2 size=textureSize(color_image,0);
+    ivec2 pixel=clamp(ivec2(uv*vec2(size)),ivec2(0),size-1);
+    float id=texelFetch(color_image,pixel,0).a;
+    float z=texelFetch(depth_image,pixel,0).r;
+    if(id>.5 && z<.99999)
+    {
+        float distance=linear_depth(z);
+        vec2 coord=(vec2(pixel)-vec2(8.0))/16.0;
+        ivec2 origin=ivec2(floor(coord));
+        vec2 fraction=fract(coord);
+        ivec2 probe_size=textureSize(screen_light,0);
+        vec3 correction=vec3(0.0);
+        float sum=0.0;
+        for(int y=0;y<2;y++)
+        for(int x=0;x<2;x++)
+        {
+            ivec2 tile=origin+ivec2(x,y);
+            if(any(lessThan(tile,ivec2(0)))||
+               any(greaterThanEqual(tile,probe_size)))continue;
+            vec4 light=texelFetch(screen_light,tile,0);
+            if(abs(light.a-id)>.1)continue;
+            vec4 meta=texelFetch(screen_meta,tile,0);
+            float difference=abs(meta.a-distance);
+            float tolerance=max(.10,.04*distance);
+            if(difference>tolerance)continue;
+            float weight=(x==0?1.0-fraction.x:fraction.x)*
+                         (y==0?1.0-fraction.y:fraction.y);
+            weight*=1.0-smoothstep(0.0,tolerance,difference);
+            correction+=light.rgb*weight;
+            sum+=weight;
+        }
+        if(sum>.001)
+            hdr+=(correction/sum)*min(.75,sum*1.25);
+    }
+    hdr=max(hdr,vec3(0.0));
     vec3 mapped=hdr/(vec3(1.0)+hdr);
     if(display.manual_gamma!=0u)
         mapped=pow(mapped,vec3(1.0/2.2));
