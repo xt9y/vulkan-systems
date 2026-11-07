@@ -5,8 +5,8 @@
 
 namespace lumen {
 
-// Stable entry point for a Lumen-style indirect lighting and reflection system.
-// Only the interface is present. Implementations are intentionally no-op.
+// Stable Lumen-style renderer API. Stage 1 implements the rasterized Cornell
+// demo and presentation; indirect light, caches and reflections remain no-op.
 enum class demo_scene : std::uint8_t {
     none,
     cornell_box
@@ -59,7 +59,7 @@ struct gbuffer {
     vk::Extent2D extent{};
 };
 
-// Future offscreen lighting outputs. Null until GI is implemented.
+// Indirect/reflection outputs stay null until the corresponding stages exist.
 struct outputs {
     vk::Image diffuse{};
     vk::Image reflections{};
@@ -85,11 +85,11 @@ public:
     void invalidate(); // Future cache invalidation on scene/light changes.
 
     // record() runs before the host render pass; compose() runs inside it.
-    // These functions intentionally emit zero GPU commands in this skeleton.
+    // Stage 1 records Cornell rasterization and its presentation composite.
     void record(vk::CommandBuffer command, const frame& current_frame);
     void compose(vk::CommandBuffer command);
     outputs result() const noexcept;
-    bool implemented() const noexcept; // Always false until the engine exists.
+    bool implemented() const noexcept; // True once the Stage 1 demo can render.
     void reset() noexcept;
 
 private:
