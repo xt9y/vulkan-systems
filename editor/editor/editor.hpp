@@ -58,6 +58,7 @@ namespace editor
     struct draw_command
     {
         enum class type { rectangle,text } kind=type::rectangle;
+        enum class alignment { left,center,right } text_alignment=alignment::left;
         int x=0,y=0,width=0,height=0,scale=2;
         color tint{};
         std::string text;
