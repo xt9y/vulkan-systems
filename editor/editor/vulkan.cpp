@@ -113,8 +113,8 @@ namespace editor::vulkan
         void load_font(font_data& out)
         {
             const std::string sheet=
-                "•!\\\"#$%&'••*+,-./0123456789:;<=>?_"
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZ\\\\^_`abcdefghijklmnopqrstuvwxyz";
+                "•!\"#$%&'••*+,-./0123456789:;<=>?_"
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ\\^_`abcdefghijklmnopqrstuvwxyz";
             for(int character=33;character<127;++character)
             {
                 const auto index=sheet.find(char(character));
