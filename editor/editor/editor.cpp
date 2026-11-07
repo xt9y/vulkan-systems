@@ -14,8 +14,13 @@ namespace editor
         constexpr color highlight{0.23f,0.19f,0.32f,1};
         constexpr color label_color{0.20f,0.37f,0.35f,1};
         constexpr color selected_label_color{0.45f,0.12f,0.12f,1};
-        constexpr int row_height=27;
+        // Fixed palette/layout deliberately mirrors the old Rogue editor.
+        constexpr int line_height=24;
         constexpr int text_scale=2;
+        constexpr int side_margin=14;
+        constexpr int panel_width_limit=464;
+        constexpr int panel_padding=34;
+        constexpr int header_height=100;
 
         struct rectangle { int x,y,w,h; };
         rectangle label_rect(const screen_label& label,int width,int height)
@@ -48,6 +53,72 @@ namespace editor
             item.text=std::move(content);
             out.push_back(std::move(item));
         }
+        std::vector<std::string> wrap(const std::string& value,int columns)
+        {
+            columns=std::max(1,columns);
+            std::vector<std::string> lines;
+            std::string line,word;
+            const auto append=[&](const std::string& item)
+            {
+                std::size_t offset=0;
+                while(offset<item.size())
+                {
+                    const auto remaining=std::size_t(columns)-line.size();
+                    if(!remaining)
+                    {
+                        lines.push_back(line);
+                        line.clear();
+                        continue;
+                    }
+                    const auto count=std::min(remaining,item.size()-offset);
+                    line+=item.substr(offset,count);
+                    offset+=count;
+                    if(offset<item.size())
+                    {
+                        lines.push_back(line);
+                        line.clear();
+                    }
+                }
+            };
+            const auto flush_word=[&]()
+            {
+                if(word.empty())return;
+                if(!line.empty() && line.size()+1+word.size()>
+                    std::size_t(columns))
+                {
+                    lines.push_back(line);
+                    line.clear();
+                }
+                if(!line.empty())line+=' ';
+                append(word);
+                word.clear();
+            };
+            for(char c:value)
+            {
+                if(c==' ' || c=='\n')
+                {
+                    flush_word();
+                    if(c=='\n')
+                    {
+                        lines.push_back(line);
+                        line.clear();
+                    }
+                }
+                else word+=c;
+            }
+            flush_word();
+            if(!line.empty() || lines.empty())lines.push_back(line);
+            return lines;
+        }
+
+        // Single source of geometry for all menu modes (including idle).
+        rectangle editor_panel(int width,int height)
+        {
+            const int x=side_margin,y=side_margin;
+            return {x,y,std::max(0,std::min(panel_width_limit,width-x*2)),
+                    std::max(0,height-y*2)};
+        }
+
         std::string display(const property& p)
         {
             if(p.kind==property_kind::boolean)
@@ -93,6 +164,15 @@ namespace editor
             selected_row_=std::clamp(selected_row_,0,
                 std::max(0,int(properties_[object].size())-1));
     }
+    void session::set_frame_time(double milliseconds)
+    {
+        if(!std::isfinite(milliseconds) || milliseconds<=0)return;
+        std::lock_guard<std::mutex> lock(mutex_);
+        // Smoothing avoids rapidly changing numbers dominating the overlay.
+        frame_time_ms_=frame_time_ms_>0
+            ? frame_time_ms_*0.85+milliseconds*0.15 : milliseconds;
+    }
+
     void session::handle(const input& events)
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -103,6 +183,7 @@ namespace editor
             visible_=!visible_;
             menu_=menu::none;
             selected_row_=0;
+            scroll_first_=0;
         }
         if(!visible_)return;
         if(events.escape)
@@ -166,6 +247,7 @@ namespace editor
         {
             menu_=menu::insert;
             selected_row_=0;
+            scroll_first_=0;
             return;
         }
         if(events.click && cursor_free_)
@@ -182,6 +264,7 @@ namespace editor
                 {
                     selected_object_=it->object;
                     selected_row_=0;
+                    scroll_first_=0;
                     menu_=menu::properties;
                     break;
                 }
@@ -202,6 +285,7 @@ namespace editor
         std::lock_guard<std::mutex> lock(mutex_);
         draw_list out;
         if(!visible_ || width<=0 || height<=0)return out;
+
         for(const auto& item:labels_)
         {
             if(!item.visible || !item.object)continue;
@@ -211,62 +295,106 @@ namespace editor
             border(out,r,frame);
             text(out,r.x+10,r.y+8,item.text);
         }
-        if(menu_==menu::none)
+
+        // A single full-height panel replaces the former temporary status
+        // bar and short content-sized popups. No key legends are rendered.
+        const rectangle panel=editor_panel(width,height);
+        if(panel.w<80 || panel.h<100)return out;
+        solid(out,panel,background);
+        border(out,panel,frame);
+        const char* heading=menu_==menu::insert?"----- INSERT -----":
+            menu_==menu::properties?"----- SELECT -----":"----- EDITOR -----";
+        const int title_width=int(std::string(heading).size())*12;
+        text(out,panel.x+(panel.w-title_width)/2,panel.y+38,heading);
+
+        // Independent top-right counter, outside the scene's HDR pipeline.
+        if(frame_time_ms_>0 && width>panel.x+panel.w+170)
         {
-            // Empty editor instances still show that '?' successfully
-            // entered debug mode; scene labels are exclusively host-defined.
-            if(labels_.empty())
-            {
-                const int w=std::min(345,width-12);
-                solid(out,{6,6,w,36},background);
-                border(out,{6,6,w,36},frame);
-                text(out,17,17,"EDITOR  ENTER:INSERT  TAB:CURSOR");
-            }
+            std::ostringstream timing;
+            timing<<std::fixed<<std::setprecision(1)
+                  <<1000.0/frame_time_ms_<<" FPS";
+            std::ostringstream frame;
+            frame<<std::fixed<<std::setprecision(2)
+                 <<frame_time_ms_<<" MS";
+            const auto right=width-24;
+            text(out,right-int(timing.str().size())*12,26,timing.str());
+            text(out,right-int(frame.str().size())*12,54,frame.str());
+        }
+
+        if(menu_==menu::none)return out;
+        const std::vector<property>* selected_properties=nullptr;
+        if(menu_==menu::properties)
+        {
+            const auto it=properties_.find(selected_object_);
+            if(it!=properties_.end())selected_properties=&it->second;
+        }
+        const int rows=menu_==menu::insert?int(catalog_.size()):
+            selected_properties?int(selected_properties->size()):0;
+        const int content_x=panel.x+panel_padding;
+        const int content_width=std::max(12,panel.w-2*panel_padding);
+        const int columns=std::max(1,content_width/12);
+        const int content_y=panel.y+header_height;
+        const int content_bottom=panel.y+panel.h-panel_padding;
+        if(content_bottom<=content_y)return out;
+        if(rows==0)
+        {
+            text(out,content_x,content_y,
+                 menu_==menu::insert?"NO TYPES REGISTERED":"NO PROPERTIES");
             return out;
         }
-        const int left=22,top=22;
-        const int panel_width=std::max(100,std::min(470,width-2*left));
-        const int rows=menu_==menu::insert?int(catalog_.size()):
-            (properties_.count(selected_object_)
-                ?int(properties_.at(selected_object_).size()):0);
-        const int visible_rows=std::min(rows,
-            std::max(0,(height-top-102)/row_height));
-        const int panel_height=std::min(height-top-8,
-            93+std::max(1,visible_rows)*row_height);
-        if(panel_height<=0)return out;
-        solid(out,{left,top,panel_width,panel_height},background);
-        border(out,{left,top,panel_width,panel_height},frame);
-        text(out,left+18,top+20,menu_==menu::insert?
-            "----- INSERT -----":"----- PROPERTIES -----");
-        const int start=visible_rows>0?
-            std::clamp(selected_row_-visible_rows+1,0,
-                std::max(0,rows-visible_rows)):0;
-        for(int row=start;row<start+visible_rows;++row)
+
+        std::vector<std::vector<std::string>> wrapped;
+        std::vector<int> heights;
+        wrapped.reserve(std::size_t(rows));
+        heights.reserve(std::size_t(rows));
+        for(int i=0;i<rows;++i)
         {
-            const int y=top+64+(row-start)*row_height;
-            if(row==selected_row_)
-                solid(out,{left+8,y-4,panel_width-16,row_height},highlight);
-            std::string line=row==selected_row_?"> ":"  ";
+            std::string value;
             if(menu_==menu::insert)
             {
-                const auto& item=catalog_[std::size_t(row)];
-                line+=item.name;
-                if(!item.group.empty())line+=" ["+item.group+"]";
+                const auto& item=catalog_[std::size_t(i)];
+                value=item.name;
+                if(!item.group.empty())value+=" ["+item.group+"]";
             }
             else
             {
-                const auto& value=properties_.at(selected_object_)[std::size_t(row)];
-                line+=value.name+": "+display(value);
+                const auto& item=(*selected_properties)[std::size_t(i)];
+                value=item.name+": "+display(item);
             }
-            const int max_chars=std::max(1,(panel_width-36)/12);
-            if(int(line.size())>max_chars)line.resize(std::size_t(max_chars));
-            text(out,left+16,y,line);
+            wrapped.push_back(wrap(value,columns));
+            heights.push_back(int(wrapped.back().size())*line_height+14);
         }
-        if(rows==0)
-            text(out,left+16,top+64,menu_==menu::insert?
-                "NO TYPES REGISTERED":"NO PROPERTIES");
-        text(out,left+16,top+panel_height-24,
-            menu_==menu::insert?"ARROWS / ENTER / ESC":"ARROWS / LEFT RIGHT / ESC");
+
+        const int selected=std::clamp(selected_row_,0,rows-1);
+        int first=std::clamp(scroll_first_,0,rows-1);
+        if(selected<first)first=selected;
+        const auto last_visible=[&](int origin)
+        {
+            int y=content_y;
+            for(int i=origin;i<rows;++i)
+            {
+                if(y+heights[std::size_t(i)]>content_bottom)return i;
+                y+=heights[std::size_t(i)];
+            }
+            return rows;
+        };
+        while(first<selected && selected>=last_visible(first))++first;
+        scroll_first_=first;
+        int y=content_y;
+        for(int i=first;i<rows && y<content_bottom;++i)
+        {
+            const int block=heights[std::size_t(i)];
+            if(i==selected)
+                solid(out,{content_x-12,y-5,content_width+24,
+                            std::min(block,content_bottom-y+5)},highlight);
+            for(std::size_t j=0;j<wrapped[std::size_t(i)].size();++j)
+            {
+                const int line_y=y+int(j)*line_height;
+                if(line_y+14>content_bottom)break;
+                text(out,content_x,line_y,wrapped[std::size_t(i)][j]);
+            }
+            y+=block;
+        }
         return out;
     }
     bool session::visible() const
