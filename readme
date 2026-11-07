@@ -3,7 +3,7 @@ vulkan-systems
   render/    frame scheduling, image/geometry ownership, graph passes, draws
   bvh/       GPU radix LBVH, TLAS/BLAS instancing, triangle hits and refits
   spatial/   CPU BVH index and frustum queries
-  network/   IPv4/IPv6 UDP, DTLS 1.2 mTLS, reliable session and host
+  network/   IPv4/IPv6 UDP, pinned DTLS 1.2 and reliable session
   jobs/      bounded multithreaded jobs and completion queue
 
 Each module has a standalone build.c with C++17 APIs.
