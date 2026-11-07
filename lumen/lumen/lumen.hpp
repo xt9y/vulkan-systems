@@ -20,7 +20,7 @@ struct settings {
     float tracing_scale=1.0f;
     // Stage 7 screen-space hit tracing; ambiguous rays fall back to the BVH.
     float screen_trace_distance=3.0f;
-    float screen_trace_strength=0.12f;
+    std::uint32_t screen_rays_per_probe=4; // 1..8 directional rays/frame
 };
 
 struct camera {
