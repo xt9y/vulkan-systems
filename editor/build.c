@@ -15,5 +15,14 @@ void build(C_Build* b)
     c_dep_cbuild(engine,"VulkanEngine",C_TARGET_STATIC_LIBRARY);
     c_dep_include(engine,".");
     c_use(editor,engine);
+
+    // Optional font decoder. Glyph PNGs are supplied by the host's assets;
+    // this static build never downloads or owns game content.
+    C_Dependency* stb=c_git(
+        b,"stb","https://github.com/nothings/stb.git",
+        "d14d46f6b44456eb88beac58cba833a4135d4c89");
+    c_dep_header_only(stb);
+    c_dep_include(stb,".");
+    c_use(editor,stb);
     c_default_target(b,editor);
 }
