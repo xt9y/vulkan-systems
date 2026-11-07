@@ -1,5 +1,6 @@
 #pragma once
 #include <vk/vk.hpp>
+#include <vk/util/math/vector.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
