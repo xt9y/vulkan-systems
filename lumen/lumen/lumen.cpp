@@ -188,6 +188,11 @@ std::string with_tracing(const char* source)
     if(offset==std::string::npos)
         throw std::runtime_error("missing shared Lumen ray traversal marker");
     result.replace(offset,marker.size(),shaders::shared_tracing);
+    const std::string irradiance_marker="/* LUMEN_SHARED_IRRADIANCE */";
+    const auto irradiance=result.find(irradiance_marker);
+    if(irradiance!=std::string::npos)
+        result.replace(irradiance,irradiance_marker.size(),
+                       shaders::shared_irradiance);
     return result;
 }
 
@@ -238,18 +243,19 @@ struct system::implementation {
     vk::RenderPass presentation_pass{};
     vk::Format presentation_format=vk::Format::eUndefined;
     vk::Extent2D extent{};
-    vk::Extent2D render_extent{};
+    vk::Extent2D render_extent{},screen_extent{};
+    camera_data current_camera{};
     scene geometry{};
     lighting lights{};
     gbuffer surfaces{};
 
     gpu::buffer vertex_buffer,faces_buffer,trace_nodes,trace_triangles;
     gpu::buffer radiance_probes;
-    gpu::image color,depth,surface_cache;
+    gpu::image color,depth,surface_cache,screen_light,screen_meta;
     render::target target;
     render::pipeline geometry_pipeline,composite_pipeline;
-    gpu::compute cache_pipeline,radiance_pipeline;
-    gpu::descriptors geometry_sets,composite_sets,cache_sets,radiance_sets;
+    gpu::compute cache_pipeline,radiance_pipeline,screen_pipeline;
+    gpu::descriptors geometry_sets,composite_sets,cache_sets,radiance_sets,screen_sets;
     vk::PipelineLayout geometry_layout{},composite_layout{};
     vk::Sampler sampler{};
     render::mesh box_mesh,fullscreen;
@@ -263,8 +269,9 @@ struct system::implementation {
     bool ready=false;
     bool cache_valid=false,cache_dirty=true;
     bool radiance_initialized=false;
+    bool screen_initialized=false;
     std::string geometry_vertex_spv,geometry_fragment_spv;
-    std::string composite_vertex_spv,composite_fragment_spv,cache_spv,radiance_spv;
+    std::string composite_vertex_spv,composite_fragment_spv,cache_spv,radiance_spv,screen_spv;
 
     ~implementation(){release();}
 
@@ -281,6 +288,7 @@ struct system::implementation {
             composite_pipeline.reset();
             cache_pipeline.reset();
             radiance_pipeline.reset();
+            screen_pipeline.reset();
             if(geometry_layout)vk::pipeline_layout::destroy(geometry_layout);
             if(composite_layout)vk::pipeline_layout::destroy(composite_layout);
             geometry_layout=vk::PipelineLayout{};
@@ -289,12 +297,16 @@ struct system::implementation {
             geometry_sets.reset();
             cache_sets.reset();
             radiance_sets.reset();
+            screen_sets.reset();
             if(sampler)vk::device::get()->handle.destroySampler(sampler);
             sampler=vk::Sampler{};
             target.reset(); // framebuffer must be destroyed before image views
             depth.reset();
             color.reset();
             surface_cache.reset();
+            screen_light.reset();
+            screen_meta.reset();
+            screen_initialized=false;
             radiance_probes.reset();
             radiance_initialized=false;
             cache_valid=false;
@@ -307,6 +319,7 @@ struct system::implementation {
             fullscreen={};
             vertex_count=0;
             render_extent=vk::Extent2D{};
+            screen_extent=vk::Extent2D{};
         } catch(...) {}
     }
 
@@ -324,6 +337,9 @@ struct system::implementation {
         render_extent=vk::Extent2D{
             std::max(1u,std::uint32_t(std::lround(extent.width*factor))),
             std::max(1u,std::uint32_t(std::lround(extent.height*factor)))
+        };
+        screen_extent={
+            (render_extent.width+15u)/16u,(render_extent.height+15u)/16u
         };
         const auto physical=vk::physical_device::get()->handle;
         const auto color_format=vk::Format::eR16G16B16A16Sfloat;
@@ -343,9 +359,10 @@ struct system::implementation {
                                    vk::FormatFeatureFlagBits::eSampledImage;
         if((color_features & requested_color)!=requested_color)
             throw std::runtime_error("RGBA16F color attachment sampling unsupported");
-        if((depth_features & vk::FormatFeatureFlagBits::eDepthStencilAttachment)!=
-           vk::FormatFeatureFlagBits::eDepthStencilAttachment)
-            throw std::runtime_error("D32 depth attachment unsupported");
+        const auto depth_required=vk::FormatFeatureFlagBits::eDepthStencilAttachment |
+                                  vk::FormatFeatureFlagBits::eSampledImage;
+        if((depth_features & depth_required)!=depth_required)
+            throw std::runtime_error("sampled D32 depth attachment unsupported");
 
         const auto vertices=cornell_box();
         const auto faces=make_faces(vertices);
@@ -389,8 +406,17 @@ struct system::implementation {
             vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eColor);
         make_image(depth,render_extent,depth_format,
-            vk::ImageUsageFlagBits::eDepthStencilAttachment,
+            vk::ImageUsageFlagBits::eDepthStencilAttachment |
+            vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eDepth);
+        make_image(screen_light,screen_extent,color_format,
+            vk::ImageUsageFlagBits::eStorage |
+            vk::ImageUsageFlagBits::eSampled,
+            vk::ImageAspectFlagBits::eColor);
+        make_image(screen_meta,screen_extent,color_format,
+            vk::ImageUsageFlagBits::eStorage |
+            vk::ImageUsageFlagBits::eSampled,
+            vk::ImageAspectFlagBits::eColor);
         make_image(surface_cache,{256,256},card_format,
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled,
@@ -407,9 +433,9 @@ struct system::implementation {
         depth_attachment.format=depth_format;
         depth_attachment.samples=vk::SampleCountFlagBits::e1;
         depth_attachment.loadOp=vk::AttachmentLoadOp::eClear;
-        depth_attachment.storeOp=vk::AttachmentStoreOp::eDontCare;
+        depth_attachment.storeOp=vk::AttachmentStoreOp::eStore;
         depth_attachment.initialLayout=vk::ImageLayout::eUndefined;
-        depth_attachment.finalLayout=vk::ImageLayout::eDepthStencilAttachmentOptimal;
+        depth_attachment.finalLayout=vk::ImageLayout::eDepthStencilReadOnlyOptimal;
         render::target_description desc{};
         desc.attachments={color_attachment,depth_attachment};
         desc.colors={{0,vk::ImageLayout::eColorAttachmentOptimal}};
