@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -459,6 +460,10 @@ struct system::implementation {
             gpu_stats.supported=true;
         }
         ready=true;
+        std::cout<<"[lumen] Stage 3: "<<accel.triangles.size()
+                 <<" triangles / "<<accel.nodes.size()
+                 <<" BVH nodes | GPU timestamps "
+                 <<(gpu_stats.supported?"supported":"unavailable")<<'\n';
     }
 
     float tick_ms(std::uint64_t start,std::uint64_t stop) const
