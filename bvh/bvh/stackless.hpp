@@ -239,6 +239,21 @@ namespace bvh
         return nodes;
     }
 
+    // Precompute two edges for each triangle after every BVH has been
+    // constructed. The storage remains three vec4 values per triangle:
+    // vertex0, (vertex1-vertex0), (vertex2-vertex0). Every ray test can
+    // reuse the edges instead of subtracting them for each pixel.
+    inline void store_triangle_edges(std::vector<std::array<float,4>>& triangles)
+    {
+        for(std::size_t i=0;i+2<triangles.size();i+=3)
+        {
+            const auto origin=triangles[i];
+            for(int edge=1;edge<3;++edge)
+                for(int component=0;component<3;++component)
+                    triangles[i+edge][component]-=origin[component];
+        }
+    }
+
     // A point-light shadow segment lies within the sphere centered on the
     // light (up to the normal-bias margin at its receiver). A triangle whose
     // AABB misses that expanded sphere cannot occlude that light.
