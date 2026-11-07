@@ -5,6 +5,7 @@
 #include <gpu/buffer.hpp>
 #include <gpu/image.hpp>
 #include <gpu/descriptors.hpp>
+#include <gpu/compute.hpp>
 #include <render/target.hpp>
 #include <render/pipeline.hpp>
 #include <render/renderer.hpp>
@@ -19,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -31,6 +33,7 @@ using point=std::array<float,3>;
 
 struct vertex {
     point position,normal,albedo,emission;
+    std::uint32_t face_index=0;
 };
 
 struct alignas(16) face {
@@ -113,6 +116,8 @@ std::vector<vertex> cornell_box() {
              {0,-1,0},{0,0,0},{17,16,14});
     if(vertices.size()!=16*6)
         throw std::logic_error("invalid Cornell geometry");
+    for(std::size_t i=0;i<vertices.size();i++)
+        vertices[i].face_index=std::uint32_t(i/6);
     return vertices;
 }
 
@@ -209,15 +214,17 @@ struct system::implementation {
     vk::RenderPass presentation_pass{};
     vk::Format presentation_format=vk::Format::eUndefined;
     vk::Extent2D extent{};
+    vk::Extent2D render_extent{};
     scene geometry{};
     lighting lights{};
     gbuffer surfaces{};
 
     gpu::buffer vertex_buffer,faces_buffer,trace_nodes,trace_triangles;
-    gpu::image color,depth;
+    gpu::image color,depth,surface_cache;
     render::target target;
     render::pipeline geometry_pipeline,composite_pipeline;
-    gpu::descriptors geometry_sets,composite_sets;
+    gpu::compute cache_pipeline;
+    gpu::descriptors geometry_sets,composite_sets,cache_sets;
     vk::PipelineLayout geometry_layout{},composite_layout{};
     vk::Sampler sampler{};
     render::mesh box_mesh,fullscreen;
@@ -229,8 +236,9 @@ struct system::implementation {
     performance gpu_stats{};
     bool timestamp_pending=false;
     bool ready=false;
+    bool cache_valid=false,cache_dirty=true;
     std::string geometry_vertex_spv,geometry_fragment_spv;
-    std::string composite_vertex_spv,composite_fragment_spv;
+    std::string composite_vertex_spv,composite_fragment_spv,cache_spv;
 
     ~implementation(){release();}
 
@@ -245,17 +253,22 @@ struct system::implementation {
             screen_material={};
             geometry_pipeline.reset();
             composite_pipeline.reset();
+            cache_pipeline.reset();
             if(geometry_layout)vk::pipeline_layout::destroy(geometry_layout);
             if(composite_layout)vk::pipeline_layout::destroy(composite_layout);
             geometry_layout=vk::PipelineLayout{};
             composite_layout=vk::PipelineLayout{};
             composite_sets.reset();
             geometry_sets.reset();
+            cache_sets.reset();
             if(sampler)vk::device::get()->handle.destroySampler(sampler);
             sampler=vk::Sampler{};
             target.reset(); // framebuffer must be destroyed before image views
             depth.reset();
             color.reset();
+            surface_cache.reset();
+            cache_valid=false;
+            cache_dirty=true;
             vertex_buffer.reset();
             faces_buffer.reset();
             trace_nodes.reset();
@@ -263,6 +276,7 @@ struct system::implementation {
             box_mesh={};
             fullscreen={};
             vertex_count=0;
+            render_extent=vk::Extent2D{};
         } catch(...) {}
     }
 
@@ -272,6 +286,15 @@ struct system::implementation {
         if(!presentation_pass || !extent.width || !extent.height)
             throw std::invalid_argument("invalid Lumen host presentation target");
 
+        // The GLFW window may use a 2x Retina backing store. Never
+        // brute-force per-fragment ray queries at that native resolution.
+        // Composite still covers the full host swapchain extent.
+        const float scale=std::clamp(options.tracing_scale,.25f,1.f);
+        const float factor=std::min(scale,1280.f/float(extent.width));
+        render_extent=vk::Extent2D{
+            std::max(1u,std::uint32_t(std::lround(extent.width*factor))),
+            std::max(1u,std::uint32_t(std::lround(extent.height*factor)))
+        };
         const auto physical=vk::physical_device::get()->handle;
         const auto color_format=vk::Format::eR16G16B16A16Sfloat;
         const auto depth_format=vk::Format::eD32Sfloat;
@@ -320,13 +343,17 @@ struct system::implementation {
         box_mesh.streams={{0,vertex_buffer.handle(),0}};
         fullscreen.vertex_count=3;
 
-        make_image(color,extent,color_format,
+        make_image(color,render_extent,color_format,
             vk::ImageUsageFlagBits::eColorAttachment |
             vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eColor);
-        make_image(depth,extent,depth_format,
+        make_image(depth,render_extent,depth_format,
             vk::ImageUsageFlagBits::eDepthStencilAttachment,
             vk::ImageAspectFlagBits::eDepth);
+        make_image(surface_cache,{256,256},color_format,
+            vk::ImageUsageFlagBits::eStorage |
+            vk::ImageUsageFlagBits::eSampled,
+            vk::ImageAspectFlagBits::eColor);
 
         vk::AttachmentDescription color_attachment{};
         color_attachment.format=color_format;
@@ -348,7 +375,7 @@ struct system::implementation {
         desc.depth=vk::AttachmentReference{
             1,vk::ImageLayout::eDepthStencilAttachmentOptimal};
         desc.views={color.view(),depth.view()};
-        desc.extent=extent;
+        desc.extent=render_extent;
         target.create(desc);
 
         vk::DescriptorSetLayoutBinding scene_binding{};
@@ -360,10 +387,26 @@ struct system::implementation {
         nodes_binding.binding=1;
         auto triangles_binding=scene_binding;
         triangles_binding.binding=2;
-        geometry_sets.create({scene_binding,nodes_binding,triangles_binding});
+        auto cards_binding=scene_binding;
+        cards_binding.binding=3;
+        cards_binding.descriptorType=vk::DescriptorType::eCombinedImageSampler;
+        geometry_sets.create({scene_binding,nodes_binding,triangles_binding,cards_binding});
         geometry_sets.write_buffer(0,0,faces_buffer.descriptor());
         geometry_sets.write_buffer(0,1,trace_nodes.descriptor());
         geometry_sets.write_buffer(0,2,trace_triangles.descriptor());
+
+        auto cache_storage=scene_binding;
+        cache_storage.binding=1;
+        cache_storage.descriptorType=vk::DescriptorType::eStorageImage;
+        cache_storage.stageFlags=vk::ShaderStageFlagBits::eCompute;
+        auto cache_faces=scene_binding;
+        cache_faces.stageFlags=vk::ShaderStageFlagBits::eCompute;
+        cache_sets.create({cache_faces,cache_storage});
+        cache_sets.write_buffer(0,0,faces_buffer.descriptor());
+        vk::DescriptorImageInfo cache_write{};
+        cache_write.imageView=surface_cache.view();
+        cache_write.imageLayout=vk::ImageLayout::eGeneral;
+        cache_sets.write_image(0,1,cache_write);
 
         vk::DescriptorSetLayoutBinding image_binding{};
         image_binding.binding=0;
@@ -384,7 +427,14 @@ struct system::implementation {
         image_info.imageView=color.view();
         image_info.imageLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
         composite_sets.write_image(0,0,image_info);
+        vk::DescriptorImageInfo cards_read{};
+        cards_read.sampler=sampler;
+        cards_read.imageView=surface_cache.view();
+        cards_read.imageLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+        geometry_sets.write_image(0,3,cards_read);
 
+        cache_spv=compile("cards","comp",shaders::cards_comp);
+        cache_pipeline.create(cache_spv,{cache_sets.layout()});
         geometry_vertex_spv=compile("geometry","vert",shaders::geometry_vert);
         geometry_fragment_spv=compile("geometry","frag",shaders::geometry_frag);
         composite_vertex_spv=compile("composite","vert",shaders::composite_vert);
@@ -420,7 +470,10 @@ struct system::implementation {
                 std::uint32_t(offsetof(vertex,albedo))},
             vk::VertexInputAttributeDescription{
                 3,0,vk::Format::eR32G32B32Sfloat,
-                std::uint32_t(offsetof(vertex,emission))}
+                std::uint32_t(offsetof(vertex,emission))},
+            vk::VertexInputAttributeDescription{
+                4,0,vk::Format::eR32Uint,
+                std::uint32_t(offsetof(vertex,face_index))}
         };
         geometry_pipeline.create(scene_state,{
             {vk::ShaderStageFlagBits::eVertex,geometry_vertex_spv},
@@ -460,9 +513,12 @@ struct system::implementation {
             gpu_stats.supported=true;
         }
         ready=true;
-        std::cout<<"[lumen] Stage 3: "<<accel.triangles.size()
+        std::cout<<"[lumen] Stage 4: "<<accel.triangles.size()
                  <<" triangles / "<<accel.nodes.size()
-                 <<" BVH nodes | GPU timestamps "
+                 <<" BVH nodes | cards=16 x 64x64"
+                 <<" | scene render="<<render_extent.width<<"x"<<render_extent.height
+                 <<" (swapchain "<<extent.width<<"x"<<extent.height<<")"
+                 <<" | GPU timestamps "
                  <<(gpu_stats.supported?"supported":"unavailable")<<'\n';
     }
 
@@ -519,18 +575,18 @@ struct system::implementation {
             up[0],up[1],up[2],0
         },{
             std::tan(current.view.vertical_fov*3.14159265f/360.f),
-            float(extent.width)/float(extent.height),.05f,200.f
+            float(render_extent.width)/float(render_extent.height),.05f,200.f
         }};
 
         vk::ClearValue black{},depth_clear{};
         black.color=vk::ClearColorValue(std::array<float,4>{0,0,0,1});
         depth_clear.depthStencil=vk::ClearDepthStencilValue{1.f,0};
         render::renderer recorder(cmd);
-        recorder.begin_pass(target,vk::Rect2D{{0,0},extent},
+        recorder.begin_pass(target,vk::Rect2D{{0,0},render_extent},
                             {black,depth_clear});
         recorder.viewport(vk::Viewport{
-            0,0,float(extent.width),float(extent.height),0.f,1.f},
-            vk::Rect2D{{0,0},extent});
+            0,0,float(render_extent.width),float(render_extent.height),0.f,1.f},
+            vk::Rect2D{{0,0},render_extent});
         box_material.push_data=&camera;
         box_material.push_size=sizeof(camera);
         recorder.draw(box_mesh,box_material);
@@ -569,7 +625,34 @@ struct system::implementation {
     }
 
     // Stage 3+: reusable scene traversal and GI caches are not implemented yet.
-    void update_surface_cache(vk::CommandBuffer,const frame&) {}
+    void update_surface_cache(vk::CommandBuffer cmd,const frame&)
+    {
+        if(!cache_dirty)return;
+        vk::ImageMemoryBarrier barrier{};
+        barrier.oldLayout=cache_valid?
+            vk::ImageLayout::eShaderReadOnlyOptimal:vk::ImageLayout::eUndefined;
+        barrier.newLayout=vk::ImageLayout::eGeneral;
+        barrier.srcAccessMask=cache_valid?vk::AccessFlags(
+            vk::AccessFlagBits::eShaderRead):vk::AccessFlags{};
+        barrier.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
+        barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        barrier.image=surface_cache.handle();
+        barrier.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
+        cmd.pipelineBarrier(cache_valid?
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eFragmentShader):
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eTopOfPipe),
+            vk::PipelineStageFlagBits::eComputeShader,{},{},{},{barrier});
+        cache_pipeline.dispatch(cmd,32,32,1,{cache_sets.set()});
+        barrier.oldLayout=vk::ImageLayout::eGeneral;
+        barrier.newLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+        barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+        barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+            vk::PipelineStageFlagBits::eFragmentShader,{},{},{},{barrier});
+        cache_valid=true;
+        cache_dirty=false;
+    }
     void trace_screen(vk::CommandBuffer,const frame&) {}
     void trace_scene(vk::CommandBuffer,const frame&) {}
     void update_screen_probes(vk::CommandBuffer,const frame&) {}
@@ -619,14 +702,14 @@ void system::set_gbuffer(const gbuffer& value) {
     if(impl_)impl_->surfaces=value;
 }
 void system::invalidate() {
-    // Stage 1 is stateless; future Lumen caches will be invalidated here.
+    if(impl_)impl_->cache_dirty=true;
 }
 void system::record(vk::CommandBuffer cmd,const frame& current) {
     if(!impl_ || !impl_->ready)return;
     impl_->begin_frame(cmd);
+    impl_->update_surface_cache(cmd,current);
     impl_->draw_scene(cmd,current);
     impl_->stamp(cmd,1);
-    impl_->update_surface_cache(cmd,current);
     impl_->trace_screen(cmd,current);
     impl_->trace_scene(cmd,current);
     impl_->update_screen_probes(cmd,current);
