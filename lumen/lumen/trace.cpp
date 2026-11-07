@@ -29,6 +29,10 @@ mesh build(const std::vector<std::array<float,3>>& vertices) {
     mesh result{};
     result.triangles.reserve(vertices.size()/3);
     for(std::size_t i=0;i<vertices.size();i+=3) {
+        for(std::size_t k=i;k<i+3;k++)
+            for(float value:vertices[k])
+                if(!std::isfinite(value))
+                    throw std::invalid_argument("nonfinite BVH triangle");
         bvh::triangle t{};
         t.a={vertices[i][0],vertices[i][1],vertices[i][2],0.f};
         t.b={vertices[i+1][0],vertices[i+1][1],vertices[i+1][2],0.f};
@@ -47,8 +51,9 @@ mesh build(const std::vector<std::array<float,3>>& vertices) {
         bvh::node& node=result.nodes[index];
         node.links={invalid,invalid,parent,invalid};
 
-        float lo[3]={INFINITY,INFINITY,INFINITY};
-        float hi[3]={-INFINITY,-INFINITY,-INFINITY};
+        constexpr float infinity=std::numeric_limits<float>::infinity();
+        float lo[3]={infinity,infinity,infinity};
+        float hi[3]={-infinity,-infinity,-infinity};
         for(std::size_t i=first;i<last;i++) {
             const auto& tri=result.triangles[indices[i]];
             for(int axis=0;axis<3;axis++) {
