@@ -358,9 +358,10 @@ struct system::implementation {
         if((card_features & card_required)!=card_required)
             throw std::runtime_error("RGBA8 material card storage/sampling unsupported");
         const auto requested_color=vk::FormatFeatureFlagBits::eColorAttachment |
-                                   vk::FormatFeatureFlagBits::eSampledImage;
+                                   vk::FormatFeatureFlagBits::eSampledImage |
+                                   vk::FormatFeatureFlagBits::eStorageImage;
         if((color_features & requested_color)!=requested_color)
-            throw std::runtime_error("RGBA16F color attachment sampling unsupported");
+            throw std::runtime_error("RGBA16F color/storage/sampling unsupported");
         const auto depth_required=vk::FormatFeatureFlagBits::eDepthStencilAttachment |
                                   vk::FormatFeatureFlagBits::eSampledImage;
         if((depth_features & depth_required)!=depth_required)
