@@ -203,9 +203,13 @@ vec3 direct_area_light(vec3 position,vec3 normal,vec3 albedo)
     vec3 center=lamp.origin.xyz+.5*lamp.u.xyz+.5*lamp.v.xyz;
     vec3 to_center=center-position;
     float center_distance=length(to_center);
-    if(center_distance>EPSILON &&
-       blocked(position+normal*EPSILON*2.0,
-               to_center/center_distance,center_distance-EPSILON*4.0))
+    if(center_distance<EPSILON)return vec3(0.0);
+    vec3 center_direction=to_center/center_distance;
+    if(dot(normal,center_direction)<=0.0 ||
+       dot(lamp.normal.xyz,-center_direction)<=0.0)
+        return vec3(0.0);
+    if(blocked(position+normal*EPSILON*2.0,
+               center_direction,center_distance-EPSILON*4.0))
         return vec3(0.0);
     // Fixed 2x2 emitter quadrature; no stochastic noise or denoising.
     for(int y=0;y<2;y++)
