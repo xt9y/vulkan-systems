@@ -6,10 +6,16 @@
 
 namespace editor::vulkan
 {
-    // Optional exact legacy bitmap font from xt9y/hellengine-bak:
+    // Mandatory exact legacy bitmap font from xt9y/hellengine-bak:
     // Rogue/Rogue/res/textures/font/char_1.png ... char_90.png.
-    // Set before the first record() call. Missing assets use 5x7 fallback.
+    // Configure before initialize_font(); incomplete assets are fatal.
     void set_font_directory(std::string directory);
+
+    // Decode ALL PNGs, compute opaque horizontal glyph spans and cache them.
+    // The host MUST call this on its initialization thread, before creating
+    // the render thread or recording any editor command buffers.
+    // record() never performs disk access, image decoding or font preparation.
+    void initialize_font();
 
     // Draws opaque unlit pixels directly into an already-open Vulkan color
     // render pass (color attachment index normally zero). A separate overlay
