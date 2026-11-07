@@ -1,62 +1,76 @@
-VulkanLumen — Stage 4: surface material cards and M1 direct-light fast path
+VulkanLumen — Stage 5: world-space directional radiance cache
 
-All GPU rendering remains in vulkan-systems/lumen/. The host test program,
-vulkan-experiment/main.cpp, requires no rendering changes.
+The complete Lumen implementation continues to live in vulkan-systems/lumen/.
+vulkan-experiment remains the same Vulkan window/camera/frame test harness,
+with only its terminal status and per-pass GPU profiling labels updated.
 
-Scene and API
-  - Same original Cornell room, rotated blocks, emissive ceiling panel.
-  - Same public create/record/compose/result/resize/invalidate/reset API.
-  - Same ray-tracing data: 30 triangles / 59 BVH nodes, with shared VulkanBVH
-    node and triangle layouts; CPU-built once, traversed in fragment shaders.
-  - No neural or analytic spatiotemporal denoising.
+Scene:
+  - Original 16-face Cornell room and two rotated blocks
+  - Full-resolution primary raster visibility at capped internal resolution
+  - 30-triangle/59-node static VulkanBVH-compatible ray traversal
+  - One deterministic BVH shadow ray per visible fragment
+  - Stage 4 material cards: 16 x 64x64, packed in one RGBA8 256x256 atlas
 
-Stage 4 material-card cache
-  - One compact RGBA8_UNORM 256x256 atlas with 16 material cards (4x4 grid).
-  - Each 64x64 card owns a stable surface face ID and local UV coordinates.
-  - A tiny compute shader writes material albedo to all cards, once at startup
-    and again when the cache is invalidated. The atlas remains shader-readable
-    across frames; image transitions synchronize compute writes and raster
-    reads in the same command buffer.
-  - Primary raster fragments read material color from the corresponding card,
-    not the interpolated mesh vertex albedo. The face SSBO provides card UVs.
-  - This is the *material capture foundation*. Surface lighting/cached
-    radiance, automatically placed cards for arbitrary meshes, and offscreen
-    material changes are NOT implemented. Those are later Lumen stages.
-  - set_scene() still accepts handles but this demo uses its internal geometry.
+Stage 5 world-space GI:
+  - A fixed 12x8x12 grid (1152 world-space probes), device-local SSBO
+  - Each probe stores directional radiance as four RGB first-order spherical
+    harmonic coefficients: mean radiance and X/Y/Z directional moments
+  - A bounded round-robin selection updates a fraction of probes per frame
+    (settings.probe_updates_per_frame, default 64, valid 1..1152)
+  - Each updated probe traces settings.rays_per_probe (default 4, valid 1..16)
+    stratified directions across the sphere through the same BVH as shadows
+  - Hits fetch albedo from the material cards and evaluate directly reflected
+    ceiling area light with BVH-tested visibility
+  - The resulting radiance is ONE secondary diffuse bounce: it does not
+    redundantly include the primary receiver's direct light
+  - Probe coefficients accumulate over time with a bounded history of 32
+    probe updates. No per-pixel temporal denoising or screen blur
+  - Surface shading trilinearly blends its nearest valid eight probes with
+    a normal-facing bias and integrates the directional field for the
+    receiver normal, multiplying by the receiver albedo
+  - Probes inside either Cornell block are invalidated; no fake GI values
+  - Probe creation, GPU memory synchronization and cache updates are confined
+    to VulkanLumen::record(). The full scene/host API is unchanged
+  - On invalidate(), the material cache is refreshed and probe history is
+    cleared. Resize() rebuilds all owned GPU resources
+  - The material cache is rebuilt only when dirty; the probe field refreshes
+    incrementally every frame even if the camera does not move
 
-Performance changes based on observed M1 measurements (27–45 FPS)
-  - Existing scene GPU cost was 18–28 ms; composite was only about 0.02 ms.
-  - Stage 3 sampled four shadow rays per visible fragment. Stage 4 tests
-    visibility once toward the center of the emitter, then integrates the
-    four unshadowed emitter directions for smooth diffuse falloff. This is
-    a cheaper, harder-edged shadow approximation, not physically exact
-    penumbra sampling. The generic BVH ray-query code is kept for later GI.
-  - Rejects backfacing/unlit pixels before the expensive BVH query.
-  - Internal color+depth raster size is capped at 1280 pixels wide, with the
-    host swapchain still at full display resolution. This matters especially
-    on Retina framebuffers where a 1280x720 window can be 2560x1440 pixels.
-  - settings.tracing_scale (default 1.0) permits a smaller internal render
-    size; scale cannot exceed 1.0 and the 1280-wide cap still applies.
-  - This is spatial resolution reduction + bilinear presentation, NOT a
-    denoiser. Compare clarity and performance at the actual display size.
-  - CPU frame and per-pass GPU timings are still printed by the experiment.
+Profiling:
+  GPU timestamps now separately report material cache, radiance cache
+  compute, scene raster + shadows, composite and total.
+  CPU-side FPS and max/average frame times are unchanged.
+  GI should become visible after one complete probe sweep. With the default
+  64 updates, 1152 probes take 18 frames (~0.3 seconds at 60 FPS) for first
+  coverage; radiance converges progressively for subsequent seconds.
 
-Test
-  cd vulkan-experiment
+Important limitations:
+  - This is a small first-order directional probe cache, NOT yet Epic's full
+    Lumen world-space radiance cache, surface-lighting atlas or DDGI solution.
+  - No directional depth-moment visibility, relocation, global SDF,
+    screen-probe gather or true multibounce transport yet. Normal facing and
+    invalidating interior probes reduce but do not eliminate light leaks.
+  - Only the internal Cornell scene is traced; generic set_scene mesh handles
+    and external G-buffers remain unimplemented.
+  - The public outputs.diffuse image remains null; diffuse GI currently
+    contributes within the Cornell material shader.
+  - No reflection tracing and no denoisers.
+  - The grid bounds and face count are Cornell-demo constants.
+  - The program may display weak GI for the initial 18 frames during
+    initial probe coverage, followed by progressively more stable color bleed.
+  - No performance guarantee on the base M1; compare the new GPU GI/scene
+    times against the 16.67ms frame budget.
+
+Test from vulkan-experiment/
   git pull --ff-only
   rm -f c.lock
   c build run vulkan-experiment
 
 Look for:
-  [lumen] Stage 4: 30 triangles / 59 BVH nodes | cards=16 x 64x64 |
-          scene render=1280x720 (swapchain 2560x1440) | ...
-  [lumen] XX FPS | ... | GPU scene=X ms composite=X ms total=X ms ...
+  build/shaders/lumen_radiance.comp
+  [lumen] Stage 5 ... world probes=1152 updates/frame=64 rays/update=4 ...
+  [lumen] ... GPU cards=... GI=... scene=... composite=... total=...
 
-Exact sizes depend on the actual screen scale. The goal is GPU scene below
-16.67 ms plus sufficient headroom for future GI; no 60 FPS is promised
-without native M1 benchmarking. The GPU scene interval currently also
-includes initial atlas construction when the cache is first built.
-
-Next stage (after testing): surface lighting capture and world-space radiance
-cache for diffuse bounce lighting. This material atlas by itself does not
-create Lumen indirect illumination or color bleeding.
+Expected visual change: red/green light bouncing onto the nearby white
+floor and boxes without a screen-space denoiser. Send a screenshot and
+several post-warmup timing lines before Stage 6 (screen probe gather).
