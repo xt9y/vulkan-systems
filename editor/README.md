@@ -20,18 +20,26 @@ files on the CPU with stb_image and rasterize opaque glyph pixels using
 font-atlas pipeline. The exact glyph outlines are retained, but translucent
 edges are thresholded to opaque pixels by this shader-free adapter.
 
-A host may specify an existing font directory before its first frame:
+A host may specify an existing font directory before initializing the font:
 
 ```cpp
 editor::vulkan::set_font_directory("assets/hellengine/font");
 ```
 
-The `vulkan-game` build script automatically uses Git sparse checkout to
-fetch just the font directory from the pinned original source revision into
-`build/editor-font-repository/Rogue/Rogue/res/textures/font`. That backup
-repository is private; an authenticated local GitHub credential is needed.
-If unavailable or offline, the built-in 5x7 glyphs remain usable. Set
-`VULKAN_EDITOR_FONT_SKIP_DOWNLOAD=1` to disable the optional fetch.
+The `vulkan-game` build script uses a filtered sparse Git checkout
+to fetch only the font directory from the private pinned backup revision into
+`build/editor-font-repository/Rogue/Rogue/res/textures/font`. The local
+GitHub credentials must have access to `xt9y/hellengine-bak`.
+
+The original bitmap font is **mandatory**; there is no built-in font fallback.
+Call `editor::vulkan::initialize_font()` on the initialization thread,
+**before** starting the render thread. It loads and validates all 90 PNG
+files and converts their opaque glyph pixels to cached horizontal spans.
+`record()` only reads those in-memory spans and never touches the filesystem
+or decodes images. Missing or invalid assets cause a clear startup error.
+Set `VULKAN_EDITOR_FONT_SKIP_DOWNLOAD=1` only when the font assets
+already exist or you have configured another directory with
+`editor::vulkan::set_font_directory(...)`.
 
 ## Built-in controls
 
