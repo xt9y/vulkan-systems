@@ -238,4 +238,131 @@ namespace bvh
         triangles=std::move(ordered);
         return nodes;
     }
+
+    // A point-light shadow segment lies within the sphere centered on the
+    // light (up to the normal-bias margin at its receiver). A triangle whose
+    // AABB misses that expanded sphere cannot occlude that light.
+    struct local_light
+    {
+        vk::util::math::vec3 position{};
+        float radius=0.0f;
+    };
+
+    struct light_tree_range
+    {
+        std::uint32_t first=0;
+        std::uint32_t count=0;
+    };
+    static_assert(sizeof(light_tree_range)==8);
+
+    // Append optional per-light subtrees after the original global tree.
+    // Existing users of the global BVH continue to use its original counts.
+    // A range of {0,global_node_count} uses the original tree; {0,0}
+    // represents lights that have no relevant triangles.
+    inline std::vector<light_tree_range> append_light_local_trees(
+        std::vector<std::array<float,4>>& triangles,
+        std::vector<stackless_node>& nodes,
+        const std::vector<local_light>& lights,
+        std::size_t max_extra_triangles=0)
+    {
+        const std::uint32_t global_node_count=
+            static_cast<std::uint32_t>(nodes.size());
+        const std::size_t triangle_count=triangles.size()/3;
+        if(!max_extra_triangles)max_extra_triangles=triangle_count;
+        std::vector<light_tree_range> ranges;
+        ranges.reserve(lights.size());
+        for(const auto& light:lights)
+        {
+            if(!global_node_count || !(light.radius>0.0f))
+            {
+                ranges.push_back({0,0});
+                continue;
+            }
+            const light_tree_range fallback{0,global_node_count};
+            if(!std::isfinite(light.radius) ||
+               !std::isfinite(light.position.x) ||
+               !std::isfinite(light.position.y) ||
+               !std::isfinite(light.position.z) ||
+               triangle_count<64)
+            {
+                ranges.push_back(fallback);
+                continue;
+            }
+            // The raster receiver's normal offset is 0.004 units;
+            // expand by 0.05 to ensure that shadowing remains conservative.
+            const float radius=light.radius+0.05f;
+            const float radius_squared=radius*radius;
+            std::vector<std::array<float,4>> local_triangles;
+            local_triangles.reserve(triangles.size()/2);
+            for(std::size_t t=0;t<triangle_count;++t)
+            {
+                const auto& a=triangles[t*3];
+                const auto& b=triangles[t*3+1];
+                const auto& c=triangles[t*3+2];
+                const float min_x=std::min({a[0],b[0],c[0]});
+                const float min_y=std::min({a[1],b[1],c[1]});
+                const float min_z=std::min({a[2],b[2],c[2]});
+                const float max_x=std::max({a[0],b[0],c[0]});
+                const float max_y=std::max({a[1],b[1],c[1]});
+                const float max_z=std::max({a[2],b[2],c[2]});
+                const float dx=light.position.x-
+                    std::clamp(light.position.x,min_x,max_x);
+                const float dy=light.position.y-
+                    std::clamp(light.position.y,min_y,max_y);
+                const float dz=light.position.z-
+                    std::clamp(light.position.z,min_z,max_z);
+                if(dx*dx+dy*dy+dz*dz<=radius_squared)
+                {
+                    local_triangles.push_back(a);
+                    local_triangles.push_back(b);
+                    local_triangles.push_back(c);
+                }
+            }
+            const std::size_t filtered=local_triangles.size()/3;
+            if(!filtered)
+            {
+                ranges.push_back({0,0});
+                continue;
+            }
+            // Below 20% reduction a separate tree is rarely worth it.
+            // Also cap added triangle storage to one copy of the global tree.
+            if(filtered*5>=triangle_count*4 ||
+               filtered>max_extra_triangles ||
+               filtered>std::size_t(std::numeric_limits<std::uint32_t>::max()>>4)
+                        -triangles.size()/3)
+            {
+                ranges.push_back(fallback);
+                continue;
+            }
+            auto local_nodes=build_stackless(local_triangles);
+            const auto node_base=nodes.size();
+            const auto triangle_base=triangles.size()/3;
+            if(node_base+local_nodes.size()>
+                    std::numeric_limits<std::uint32_t>::max() ||
+               triangle_base+filtered>
+                    (std::numeric_limits<std::uint32_t>::max()>>4))
+            {
+                ranges.push_back(fallback);
+                continue;
+            }
+            for(auto& node:local_nodes)
+            {
+                node.next+=static_cast<std::uint32_t>(node_base);
+                const auto count=node.first_and_count&15u;
+                if(count)
+                    node.first_and_count=
+                        ((static_cast<std::uint32_t>(triangle_base)+
+                          (node.first_and_count>>4u))<<4u)|count;
+            }
+            nodes.insert(nodes.end(),local_nodes.begin(),local_nodes.end());
+            triangles.insert(triangles.end(),local_triangles.begin(),
+                             local_triangles.end());
+            max_extra_triangles-=filtered;
+            ranges.push_back({
+                static_cast<std::uint32_t>(node_base),
+                static_cast<std::uint32_t>(local_nodes.size())
+            });
+        }
+        return ranges;
+    }
 }
