@@ -377,7 +377,7 @@ namespace editor
             {
                 const auto& item=catalog_[std::size_t(i)];
                 value=item.name;
-                if(!item.group.empty())value+=" ["+item.group+"]";
+                if(!item.group.empty())value+=" - "+item.group;
             }
             else
             {
