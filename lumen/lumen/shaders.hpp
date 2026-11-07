@@ -1,19 +1,25 @@
 #pragma once
 
 // These GLSL sources belong to VulkanLumen, not the test application.
-// Stage 1: rasterized Cornell geometry and a fullscreen HDR composite.
+// Stage 2: original Cornell geometry, direct area-light shadows and composite.
 namespace lumen::shaders {
 
 inline constexpr const char* geometry_vert=R"glsl(#version 450
 layout(location=0) in vec3 position;
-layout(location=1) in vec3 color;
-layout(location=0) out vec3 surface_color;
+layout(location=1) in vec3 normal;
+layout(location=2) in vec3 albedo;
+layout(location=3) in vec3 emission;
+
+layout(location=0) out vec3 world_position;
+layout(location=1) out vec3 surface_normal;
+layout(location=2) out vec3 surface_albedo;
+layout(location=3) out vec3 surface_emission;
 
 layout(push_constant) uniform Camera {
     vec4 eye;
     vec4 right;
     vec4 up;
-    vec4 projection;  // tan(fov/2), aspect, near, far
+    vec4 projection; // tan(fov/2), aspect, near, far
 } camera;
 
 void main()
@@ -26,20 +32,95 @@ void main()
     float n=camera.projection.z;
     float f=camera.projection.w;
     float z=view_z*f/(f-n)-n*f/(f-n);
-    // Vulkan viewport maps negative clip Y to the top of the image.
     gl_Position=vec4(view_x/(camera.projection.x*camera.projection.y),
                     -view_y/camera.projection.x,z,view_z);
-    surface_color=color;
+    world_position=position;
+    surface_normal=normal;
+    surface_albedo=albedo;
+    surface_emission=emission;
 }
 )glsl";
 
 inline constexpr const char* geometry_frag=R"glsl(#version 450
-layout(location=0) in vec3 surface_color;
+layout(location=0) in vec3 world_position;
+layout(location=1) in vec3 surface_normal;
+layout(location=2) in vec3 surface_albedo;
+layout(location=3) in vec3 surface_emission;
 layout(location=0) out vec4 hdr_color;
+
+// These are the same sixteen original Cornell faces as path-tracer-bak.
+// Precomputed inverse Gram coefficients make shadow intersections cheap.
+struct Face {
+    vec4 origin,u,v,normal,albedo,emission,metric;
+};
+layout(std430,set=0,binding=0) readonly buffer CornellFaces {
+    Face faces[];
+};
+const float PI=3.14159265358979323846;
+const float EPSILON=0.0015;
+const int FACE_COUNT=16;
+
+bool blocked(vec3 ro,vec3 rd,float limit)
+{
+    // The emitter (face 15) is the destination, not an occluder.
+    for(int i=0;i<FACE_COUNT-1;i++)
+    {
+        Face f=faces[i];
+        float denom=dot(f.normal.xyz,rd);
+        // Two-sided occlusion: all box walls block shadow rays.
+        if(abs(denom)<0.000001)continue;
+        float t=dot(f.origin.xyz-ro,f.normal.xyz)/denom;
+        if(t<=EPSILON || t>=limit)continue;
+        vec3 d=ro+rd*t-f.origin.xyz;
+        vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
+        float x=q.x*f.metric.x+q.y*f.metric.y;
+        float y=q.x*f.metric.y+q.y*f.metric.z;
+        if(x>=0.0 && x<=1.0 && y>=0.0 && y<=1.0)
+            return true;
+    }
+    return false;
+}
+
+vec3 direct_area_light(vec3 position,vec3 normal,vec3 albedo)
+{
+    Face lamp=faces[FACE_COUNT-1];
+    vec3 radiance=vec3(0.0);
+    // Fixed 2x2 stratified area-light integration:
+    // deterministic soft shadows, no temporal denoiser or noise.
+    for(int y=0;y<2;y++)
+    for(int x=0;x<2;x++)
+    {
+        vec2 uv=(vec2(x,y)+vec2(.5))*.5;
+        vec3 target=lamp.origin.xyz+lamp.u.xyz*uv.x+
+                    lamp.v.xyz*uv.y;
+        vec3 delta=target-position;
+        float distance2=dot(delta,delta);
+        if(distance2<0.0001)continue;
+        float distance=sqrt(distance2);
+        vec3 wi=delta/distance;
+        float incoming=max(dot(normal,wi),0.0);
+        float outgoing=max(dot(lamp.normal.xyz,-wi),0.0);
+        if(incoming<=0.0 || outgoing<=0.0)continue;
+        if(blocked(position+normal*EPSILON*2.0,wi,
+                   distance-EPSILON*4.0))
+            continue;
+        radiance+=lamp.emission.rgb*
+                  (incoming*outgoing*lamp.metric.w/distance2);
+    }
+    return albedo*(radiance/(4.0*PI));
+}
+
 void main()
 {
-    // Unlit material preview; actual direct lighting is Stage 2.
-    hdr_color=vec4(surface_color,1.0);
+    if(any(greaterThan(surface_emission,vec3(0.0))))
+    {
+        hdr_color=vec4(surface_emission,1.0);
+        return;
+    }
+    vec3 normal=normalize(surface_normal);
+    vec3 direct=direct_area_light(world_position,normal,
+                                  surface_albedo);
+    hdr_color=vec4(max(direct,vec3(0.0)),1.0);
 }
 )glsl";
 
