@@ -166,9 +166,8 @@ vec3 direct_area_light(vec3 position,vec3 normal,vec3 albedo)
     if(dot(normal,center_direction)<=0.0 ||
        dot(lamp.normal.xyz,-center_direction)<=0.0)
         return vec3(0.0);
-    if(blocked(position+normal*EPSILON*2.0,
-               center_direction,center_distance-EPSILON*4.0))
-        return vec3(0.0);
+    // Primary geometry uses the separately computed direct-light cache.
+    // The cache itself samples four actual visibility rays for penumbrae.
     // Fixed 2x2 emitter quadrature; no stochastic noise or denoising.
     for(int y=0;y<2;y++)
     for(int x=0;x<2;x++)
@@ -184,6 +183,9 @@ vec3 direct_area_light(vec3 position,vec3 normal,vec3 albedo)
         float incoming=max(dot(normal,wi),0.0);
         float outgoing=max(dot(lamp.normal.xyz,-wi),0.0);
         if(incoming<=0.0 || outgoing<=0.0)continue;
+        if(blocked(position+normal*EPSILON*2.0,wi,
+                   distance-EPSILON*4.0))
+            continue;
         radiance+=lamp.emission.rgb*
                   (incoming*outgoing*lamp.metric.w/distance2);
     }
@@ -306,6 +308,31 @@ const float EPSILON=0.0015;
 const int FACE_COUNT=16;
 const int CARD_SIZE=64;
 layout(set=0,binding=3) uniform sampler2D surface_cards;
+layout(set=0,binding=11) uniform sampler2D direct_cards;
+vec3 cached_direct(vec3 position,uint face_id)
+{
+    Face f=faces[face_id];
+    vec3 d=position-f.origin.xyz;
+    vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
+    vec2 uv=clamp(vec2(q.x*f.metric.x+q.y*f.metric.y,
+                       q.x*f.metric.y+q.y*f.metric.z),
+                   vec2(.5/64.0),vec2(1.0-.5/64.0));
+    // Bilinear interpolation confined to this card (no atlas bleeding).
+    vec2 sample_pixel=uv*64.0-.5;
+    ivec2 cell=ivec2(floor(sample_pixel));
+    vec2 fraction=fract(sample_pixel);
+    ivec2 card=ivec2(int(face_id%4u),int(face_id/4u))*64;
+    vec3 value=vec3(0);
+    for(int y=0;y<2;y++)
+    for(int x=0;x<2;x++)
+    {
+        ivec2 local=clamp(cell+ivec2(x,y),ivec2(0),ivec2(63));
+        float w=(x==0?1.0-fraction.x:fraction.x)*
+                (y==0?1.0-fraction.y:fraction.y);
+        value+=texelFetch(direct_cards,card+local,0).rgb*w;
+    }
+    return value;
+}
 
 /* LUMEN_SHARED_TRACING */
 
@@ -320,7 +347,7 @@ void main()
     }
     vec3 normal=normalize(surface_normal);
     vec3 albedo=cached_albedo(world_position,surface_index);
-    vec3 direct=direct_area_light(world_position,normal,albedo);
+    vec3 direct=cached_direct(world_position,surface_index);
     vec3 indirect=albedo*indirect_irradiance(world_position,normal);
     hdr_color=vec4(max(direct+indirect,vec3(0.0)),float(surface_index+1u));
 }
@@ -362,6 +389,7 @@ const int CARD_SIZE=64;
 /* LUMEN_SHARED_TRACING */
 /* LUMEN_SHARED_IRRADIANCE */
 layout(rgba16f,set=0,binding=10) writeonly uniform image2D next_lighting;
+layout(rgba16f,set=0,binding=11) writeonly uniform image2D direct_lighting;
 layout(push_constant) uniform LightUpdate {
     uint card_to_update;
     uint enable_indirect;
@@ -379,13 +407,16 @@ void main()
     vec3 position=face.origin.xyz+uv.x*face.u.xyz+uv.y*face.v.xyz;
     vec3 albedo=cached_albedo(position,face_id);
     vec3 normal=normalize(face.normal.xyz);
-    vec3 radiance=face.emission.rgb;
-    if(all(lessThanEqual(radiance,vec3(0.0))))
+    vec3 direct=face.emission.rgb;
+    vec3 radiance=direct;
+    if(all(lessThanEqual(direct,vec3(0.0))))
     {
-        radiance=direct_area_light(position,normal,albedo);
+        direct=direct_area_light(position,normal,albedo);
+        radiance=direct;
         if(params.enable_indirect!=0u)
             radiance+=albedo*indirect_irradiance(position,normal);
     }
+    imageStore(direct_lighting,pixel,vec4(max(direct,vec3(0.0)),1.0));
     imageStore(next_lighting,pixel,vec4(max(radiance,vec3(0.0)),1.0));
 }
 )glsl";
@@ -509,7 +540,7 @@ void main()
                 incident=cached_lighting(position,face_id);
             }
         }
-        incident=clamp(incident,vec3(0.0),vec3(8.0));
+        incident=clamp(incident,vec3(0.0),vec3(32.0));
         l0+=incident;
         lx+=incident*direction.x;
         ly+=incident*direction.y;
