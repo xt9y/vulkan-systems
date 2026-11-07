@@ -1014,7 +1014,7 @@ struct system::implementation {
         lighting_initialized=true;
     }
 
-    void update_screen_probes(vk::CommandBuffer cmd,const frame&)
+    void update_screen_probes(vk::CommandBuffer cmd,const frame& current)
     {
         std::array<vk::ImageMemoryBarrier,3> barriers{};
         const std::array<vk::Image,3> images{
