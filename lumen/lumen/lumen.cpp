@@ -257,7 +257,7 @@ struct system::implementation {
     gpu::compute cache_pipeline,radiance_pipeline,screen_pipeline;
     gpu::descriptors geometry_sets,composite_sets,cache_sets,radiance_sets,screen_sets;
     vk::PipelineLayout geometry_layout{},composite_layout{};
-    vk::Sampler sampler{};
+    vk::Sampler sampler{},depth_sampler{};
     render::mesh box_mesh,fullscreen;
     render::material box_material,screen_material;
     std::uint32_t vertex_count=0;
@@ -299,7 +299,9 @@ struct system::implementation {
             radiance_sets.reset();
             screen_sets.reset();
             if(sampler)vk::device::get()->handle.destroySampler(sampler);
+            if(depth_sampler)vk::device::get()->handle.destroySampler(depth_sampler);
             sampler=vk::Sampler{};
+            depth_sampler=vk::Sampler{};
             target.reset(); // framebuffer must be destroyed before image views
             depth.reset();
             color.reset();
@@ -501,7 +503,32 @@ struct system::implementation {
         image_binding.descriptorType=vk::DescriptorType::eCombinedImageSampler;
         image_binding.descriptorCount=1;
         image_binding.stageFlags=vk::ShaderStageFlagBits::eFragment;
-        composite_sets.create({image_binding});
+        std::vector<vk::DescriptorSetLayoutBinding> composite_bindings(4);
+        for(std::uint32_t i=0;i<4;i++)
+        {
+            composite_bindings[i]=image_binding;
+            composite_bindings[i].binding=i;
+        }
+        composite_sets.create(composite_bindings);
+
+        std::vector<vk::DescriptorSetLayoutBinding> screen_bindings(9);
+        for(std::uint32_t i=0;i<9;i++)
+        {
+            auto& binding=screen_bindings[i];
+            binding.binding=i;
+            binding.descriptorCount=1;
+            binding.stageFlags=vk::ShaderStageFlagBits::eCompute;
+            binding.descriptorType=(i==3 || i==5 || i==6)?
+                vk::DescriptorType::eCombinedImageSampler:
+                (i>=7?vk::DescriptorType::eStorageImage:
+                 vk::DescriptorType::eStorageBuffer);
+        }
+        screen_sets.create(screen_bindings);
+        screen_sets.write_buffer(0,0,faces_buffer.descriptor());
+        screen_sets.write_buffer(0,1,trace_nodes.descriptor());
+        screen_sets.write_buffer(0,2,trace_triangles.descriptor());
+        screen_sets.write_buffer(0,4,radiance_probes.descriptor());
+
         vk::SamplerCreateInfo sampler_info{};
         sampler_info.magFilter=vk::Filter::eLinear;
         sampler_info.minFilter=vk::Filter::eLinear;
@@ -510,6 +537,9 @@ struct system::implementation {
         sampler_info.addressModeV=vk::SamplerAddressMode::eClampToEdge;
         sampler_info.addressModeW=vk::SamplerAddressMode::eClampToEdge;
         sampler=vk::device::get()->handle.createSampler(sampler_info);
+        sampler_info.minFilter=vk::Filter::eNearest;
+        sampler_info.magFilter=vk::Filter::eNearest;
+        depth_sampler=vk::device::get()->handle.createSampler(sampler_info);
         vk::DescriptorImageInfo image_info{};
         image_info.sampler=sampler;
         image_info.imageView=color.view();
@@ -521,6 +551,38 @@ struct system::implementation {
         cards_read.imageLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
         geometry_sets.write_image(0,3,cards_read);
         radiance_sets.write_image(0,3,cards_read);
+        screen_sets.write_image(0,3,cards_read);
+
+        vk::DescriptorImageInfo depth_read{};
+        depth_read.sampler=depth_sampler;
+        depth_read.imageView=depth.view();
+        depth_read.imageLayout=vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+        composite_sets.write_image(0,1,depth_read);
+        screen_sets.write_image(0,6,depth_read);
+        screen_sets.write_image(0,5,image_info);
+
+        const auto screen_read=[&](const gpu::image& image,
+                                   std::uint32_t binding)
+        {
+            vk::DescriptorImageInfo info{};
+            info.sampler=sampler;
+            info.imageView=image.view();
+            info.imageLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+            composite_sets.write_image(0,binding,info);
+        };
+        screen_read(screen_light,2);
+        screen_read(screen_meta,3);
+
+        const auto screen_write=[&](const gpu::image& image,
+                                    std::uint32_t binding)
+        {
+            vk::DescriptorImageInfo info{};
+            info.imageView=image.view();
+            info.imageLayout=vk::ImageLayout::eGeneral;
+            screen_sets.write_image(0,binding,info);
+        };
+        screen_write(screen_light,7);
+        screen_write(screen_meta,8);
 
         cache_spv=compile("cards","comp",shaders::cards_comp);
         cache_pipeline.create(cache_spv,{cache_sets.layout()});
@@ -528,6 +590,10 @@ struct system::implementation {
         radiance_spv=compile("radiance","comp",radiance_source.c_str());
         radiance_pipeline.create(radiance_spv,{radiance_sets.layout()},
                                 sizeof(radiance_constants));
+        const std::string screen_source=with_tracing(shaders::screen_comp);
+        screen_spv=compile("screen","comp",screen_source.c_str());
+        screen_pipeline.create(screen_spv,{screen_sets.layout()},
+                               sizeof(camera_data));
         geometry_vertex_spv=compile("geometry","vert",shaders::geometry_vert);
         const std::string fragment_source=with_tracing(shaders::geometry_frag);
         geometry_fragment_spv=compile("geometry","frag",fragment_source.c_str());
