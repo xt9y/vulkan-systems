@@ -566,8 +566,8 @@ void main()
                 (dz==0?1.0-fraction.z:fraction.z);
         w*=max(.002,facing*facing);
         if(w<=.0001)continue;
-        // Bound BVH work to four local rays per 16x16 screen tile.
-        if(tests<4 && w>.04 && distance>.05 && facing>.05)
+        // Limit local BVH visibility tests to two per screen probe on M1.
+        if(tests<2 && w>.04 && distance>.05 && facing>.05)
         {
             tests++;
             vec3 direction=delta/distance;
