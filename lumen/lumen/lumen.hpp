@@ -72,6 +72,7 @@ struct performance {
     float material_cache_ms=0.f;
     float radiance_cache_ms=0.f;
     float raster_ms=0.f;
+    float screen_probes_ms=0.f;
     float composite_ms=0.f;
     float total_ms=0.f;
     bool supported=false;
