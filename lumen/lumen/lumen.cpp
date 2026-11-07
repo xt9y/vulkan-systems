@@ -720,14 +720,57 @@ struct system::implementation {
         barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
         barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
         cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
-            vk::PipelineStageFlagBits::eFragmentShader,{},{},{},{barrier});
+            vk::PipelineStageFlagBits::eFragmentShader |
+            vk::PipelineStageFlagBits::eComputeShader,{},{},{},{barrier});
         cache_valid=true;
         cache_dirty=false;
     }
     void trace_screen(vk::CommandBuffer,const frame&) {}
     void trace_scene(vk::CommandBuffer,const frame&) {}
     void update_screen_probes(vk::CommandBuffer,const frame&) {}
-    void update_radiance_cache(vk::CommandBuffer,const frame&) {}
+    void update_radiance_cache(vk::CommandBuffer cmd,const frame& current)
+    {
+        if(!radiance_initialized)
+        {
+            // Clear once: untouched probes are invalid (history count 0).
+            // This avoids CPU roundtrips or uploading large zero-filled data.
+            cmd.fillBuffer(radiance_probes.handle(),0,radiance_cache_bytes,0);
+            vk::BufferMemoryBarrier init{};
+            init.srcAccessMask=vk::AccessFlagBits::eTransferWrite;
+            init.dstAccessMask=vk::AccessFlagBits::eShaderRead |
+                               vk::AccessFlagBits::eShaderWrite;
+            init.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            init.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            init.buffer=radiance_probes.handle();
+            init.offset=0;
+            init.size=radiance_cache_bytes;
+            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                vk::PipelineStageFlagBits::eComputeShader,
+                                {},{},{init},{});
+            radiance_initialized=true;
+        }
+        const radiance_constants push{
+            std::uint32_t(current.index),0u
+        };
+        radiance_pipeline.dispatch(cmd,
+            (radiance_update_count+63u)/64u,1,1,
+            {radiance_sets.set()},&push,sizeof(push));
+
+        // Fragment shading consumes the newly updated coefficients. Every
+        // probe owns a disjoint SSBO range, so the compute shader has no
+        // cross-thread write conflicts or inter-probe dependencies.
+        vk::BufferMemoryBarrier barrier{};
+        barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+        barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+        barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer=radiance_probes.handle();
+        barrier.offset=0;
+        barrier.size=radiance_cache_bytes;
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                            vk::PipelineStageFlagBits::eFragmentShader,
+                            {},{},{barrier},{});
+    }
     void gather_indirect(vk::CommandBuffer,const frame&) {}
     void trace_reflections(vk::CommandBuffer,const frame&) {}
 };
@@ -773,18 +816,23 @@ void system::set_gbuffer(const gbuffer& value) {
     if(impl_)impl_->surfaces=value;
 }
 void system::invalidate() {
-    if(impl_)impl_->cache_dirty=true;
+    if(impl_)
+    {
+        impl_->cache_dirty=true;
+        // Reinitialize all cached irradiance on the next record.
+        impl_->radiance_initialized=false;
+    }
 }
 void system::record(vk::CommandBuffer cmd,const frame& current) {
     if(!impl_ || !impl_->ready)return;
     impl_->begin_frame(cmd);
     impl_->update_surface_cache(cmd,current);
+    impl_->update_radiance_cache(cmd,current);
     impl_->draw_scene(cmd,current);
     impl_->stamp(cmd,1);
     impl_->trace_screen(cmd,current);
     impl_->trace_scene(cmd,current);
     impl_->update_screen_probes(cmd,current);
-    impl_->update_radiance_cache(cmd,current);
     impl_->gather_indirect(cmd,current);
     impl_->trace_reflections(cmd,current);
 }
