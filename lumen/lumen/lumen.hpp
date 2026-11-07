@@ -5,8 +5,8 @@
 
 namespace lumen {
 
-// Stable Lumen-style renderer API. Stage 1 implements the rasterized Cornell
-// demo and presentation; indirect light, caches and reflections remain no-op.
+// Stable Lumen-style renderer API. Stage 2 renders the original Cornell
+// geometry, direct area-light illumination and shadows. GI/reflections are pending.
 enum class demo_scene : std::uint8_t {
     none,
     cornell_box
@@ -85,11 +85,11 @@ public:
     void invalidate(); // Future cache invalidation on scene/light changes.
 
     // record() runs before the host render pass; compose() runs inside it.
-    // Stage 1 records Cornell rasterization and its presentation composite.
+    // Records the Cornell direct-light pass and its presentation composite.
     void record(vk::CommandBuffer command, const frame& current_frame);
     void compose(vk::CommandBuffer command);
     outputs result() const noexcept;
-    bool implemented() const noexcept; // True once the Stage 1 demo can render.
+    bool implemented() const noexcept; // True once the Cornell demo can render.
     void reset() noexcept;
 
 private:
