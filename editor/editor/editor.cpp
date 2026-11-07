@@ -150,7 +150,8 @@ namespace editor
                     const double maximum=p.kind==property_kind::choice ?
                         double(std::max(0,int(p.choices.size())-1)) : p.maximum;
                     p.value=std::clamp(p.value+
-                        (events.right?step:-step),p.minimum,maximum);
+                        (events.right?step:-step),std::min(p.minimum,maximum),
+                        std::max(p.minimum,maximum));
                     if(p.kind==property_kind::integer ||
                        p.kind==property_kind::choice)
                         p.value=std::round(p.value);
@@ -175,7 +176,7 @@ namespace editor
                 if(!it->visible || !it->object)continue;
                 // Labels are screen-space; the host sends actual draw extent
                 // with set_labels and should clip invisible 3D objects.
-                const auto r=label_rect(*it,16384,16384);
+                const auto r=label_rect(*it,events.viewport_width,events.viewport_height);
                 if(events.mouse_x>=r.x && events.mouse_x<r.x+r.w &&
                    events.mouse_y>=r.y && events.mouse_y<r.y+r.h)
                 {
