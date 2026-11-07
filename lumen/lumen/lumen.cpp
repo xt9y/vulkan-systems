@@ -28,47 +28,111 @@ namespace {
 using point=std::array<float,3>;
 
 struct vertex {
-    point position;
-    point color;
+    point position,normal,albedo,emission;
 };
+
+struct alignas(16) face {
+    std::array<float,4> origin,u,v,normal,albedo,emission,metric;
+};
+static_assert(sizeof(face)==112);
 
 point add(point a,point b) {
     return {a[0]+b[0],a[1]+b[1],a[2]+b[2]};
 }
-point shade(point a,float factor) {
-    return {a[0]*factor,a[1]*factor,a[2]*factor};
+point sub(point a,point b) {
+    return {a[0]-b[0],a[1]-b[1],a[2]-b[2]};
 }
-void quad(std::vector<vertex>& out,point p,point u,point v,point c) {
-    const auto pu=add(p,u),pv=add(p,v),puv=add(pu,v);
-    out.insert(out.end(),{{p,c},{pu,c},{puv,c},
-                          {p,c},{puv,c},{pv,c}});
+point mul(point a,float t) {
+    return {a[0]*t,a[1]*t,a[2]*t};
 }
-void box(std::vector<vertex>& out,point low,point high,point color) {
-    const float x=high[0]-low[0],y=high[1]-low[1],z=high[2]-low[2];
-    quad(out,low,{x,0,0},{0,y,0},shade(color,.85f));
-    quad(out,{low[0],low[1],high[2]},{x,0,0},{0,y,0},
-         shade(color,.65f));
-    quad(out,{low[0],high[1],low[2]},{x,0,0},{0,0,z},
-         shade(color,1.05f));
-    quad(out,low,{0,0,z},{0,y,0},shade(color,.75f));
-    quad(out,{high[0],low[1],low[2]},{0,0,z},{0,y,0},
-         shade(color,.72f));
-    quad(out,low,{x,0,0},{0,0,z},shade(color,.6f));
+float dot(point a,point b) {
+    return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
 }
+point cross(point a,point b) {
+    return {a[1]*b[2]-a[2]*b[1],
+            a[2]*b[0]-a[0]*b[2],
+            a[0]*b[1]-a[1]*b[0]};
+}
+point normalized(point v) {
+    const auto length=std::sqrt(dot(v,v));
+    if(length<1e-8f)throw std::logic_error("degenerate Cornell normal");
+    return mul(v,1.f/length);
+}
+
+// Identical room, Cornell blocks, material colors and emission to
+// vulkan-experiment/path-tracer-bak. Quad winding is preserved verbatim.
+void add_face(std::vector<vertex>& vertices,point origin,point u,point v,
+              point normal,point albedo,point emission={}) {
+    const std::array<point,6> points{
+        origin,add(origin,u),add(add(origin,u),v),
+        origin,add(add(origin,u),v),add(origin,v)
+    };
+    for(const auto& p:points)
+        vertices.push_back({p,normal,albedo,emission});
+}
+
+void add_block(std::vector<vertex>& vertices,std::array<point,4> bottom,
+               float height,point albedo) {
+    const point vertical{0,height,0};
+    const point e0=sub(bottom[1],bottom[0]);
+    const point axis=normalized(e0);
+    const point delta=sub(bottom[3],bottom[0]);
+    const point e1=sub(delta,mul(axis,dot(delta,axis)));
+    bottom[1]=add(bottom[0],e0);
+    bottom[3]=add(bottom[0],e1);
+    bottom[2]=add(bottom[1],e1);
+
+    add_face(vertices,add(bottom[0],vertical),e0,e1,{0,1,0},albedo);
+    for(int i=0;i<4;i++) {
+        const point edge=sub(bottom[(i+1)%4],bottom[i]);
+        add_face(vertices,bottom[i],edge,vertical,
+                 normalized(cross(edge,vertical)),albedo);
+    }
+}
+
 std::vector<vertex> cornell_box() {
     std::vector<vertex> vertices;
-    vertices.reserve(144);
-    const point white{.76f,.74f,.70f};
-    quad(vertices,{0,0,5.59f},{5.56f,0,0},{0,5.48f,0},white);
-    quad(vertices,{0,0,0},{5.56f,0,0},{0,0,5.59f},shade(white,.9f));
-    quad(vertices,{0,5.48f,0},{5.56f,0,0},{0,0,5.59f},shade(white,.78f));
-    quad(vertices,{0,0,0},{0,0,5.59f},{0,5.48f,0},{.65f,.07f,.055f});
-    quad(vertices,{5.56f,0,0},{0,0,5.59f},{0,5.48f,0},{.055f,.50f,.09f});
-    box(vertices,{1.13f,0,2.12f},{2.68f,3.05f,4.19f},white);
-    box(vertices,{3.14f,0,1.47f},{4.47f,1.62f,3.06f},white);
-    quad(vertices,{2.15f,5.465f,1.88f},{1.26f,0,0},{0,0,1.06f},
-         {3.0f,3.0f,3.0f});
+    vertices.reserve(16*6);
+    const point white{.725f,.710f,.680f};
+    const point red{.630f,.065f,.050f};
+    const point green{.140f,.450f,.091f};
+    const float width=5.55f,depth=5.592f,height=5.488f;
+
+    add_face(vertices,{0,0,0},{width,0,0},{0,0,depth},{0,1,0},white);
+    add_face(vertices,{0,height,0},{width,0,0},{0,0,depth},{0,-1,0},white);
+    add_face(vertices,{width,0,0},{0,0,depth},{0,height,0},{-1,0,0},red);
+    add_face(vertices,{0,0,0},{0,0,depth},{0,height,0},{1,0,0},green);
+    add_face(vertices,{0,0,depth},{width,0,0},{0,height,0},{0,0,-1},white);
+    add_block(vertices,{{{1.30f,0,.65f},{.82f,0,2.25f},
+                         {2.40f,0,2.72f},{2.90f,0,1.14f}}},1.65f,white);
+    add_block(vertices,{{{4.23f,0,2.47f},{2.65f,0,2.96f},
+                         {3.14f,0,4.56f},{4.72f,0,4.06f}}},3.30f,white);
+    add_face(vertices,{2.13f,5.484f,2.27f},{1.30f,0,0},{0,0,1.05f},
+             {0,-1,0},{0,0,0},{17,16,14});
+    if(vertices.size()!=16*6)
+        throw std::logic_error("invalid Cornell geometry");
     return vertices;
+}
+
+std::array<face,16> make_faces(const std::vector<vertex>& vertices) {
+    std::array<face,16> result{};
+    for(std::size_t i=0;i<result.size();i++) {
+        const auto& a=vertices[i*6];
+        const point u=sub(vertices[i*6+1].position,a.position);
+        const point v=sub(vertices[i*6+5].position,a.position);
+        const float uu=dot(u,u),uv=dot(u,v),vv=dot(v,v);
+        const float det=uu*vv-uv*uv;
+        if(det<1e-8f)throw std::logic_error("degenerate Cornell face");
+        const auto pack=[](point p)->std::array<float,4> {
+            return {p[0],p[1],p[2],0};
+        };
+        result[i]={
+            pack(a.position),pack(u),pack(v),pack(a.normal),
+            pack(a.albedo),pack(a.emission),
+            {vv/det,-uv/det,uu/det,std::sqrt(dot(cross(u,v),cross(u,v)))}
+        };
+    }
+    return result;
 }
 
 // No shader files or shader compilation code are needed in vulkan-experiment.
@@ -147,11 +211,11 @@ struct system::implementation {
     lighting lights{};
     gbuffer surfaces{};
 
-    gpu::buffer vertex_buffer;
+    gpu::buffer vertex_buffer,faces_buffer;
     gpu::image color,depth;
     render::target target;
     render::pipeline geometry_pipeline,composite_pipeline;
-    gpu::descriptors composite_sets;
+    gpu::descriptors geometry_sets,composite_sets;
     vk::PipelineLayout geometry_layout{},composite_layout{};
     vk::Sampler sampler{};
     render::mesh box_mesh,fullscreen;
@@ -175,12 +239,14 @@ struct system::implementation {
             geometry_layout=vk::PipelineLayout{};
             composite_layout=vk::PipelineLayout{};
             composite_sets.reset();
+            geometry_sets.reset();
             if(sampler)vk::device::get()->handle.destroySampler(sampler);
             sampler=vk::Sampler{};
             target.reset(); // framebuffer must be destroyed before image views
             depth.reset();
             color.reset();
             vertex_buffer.reset();
+            faces_buffer.reset();
             box_mesh={};
             fullscreen={};
             vertex_count=0;
@@ -209,12 +275,17 @@ struct system::implementation {
             throw std::runtime_error("D32 depth attachment unsupported");
 
         const auto vertices=cornell_box();
+        const auto faces=make_faces(vertices);
         vertex_count=std::uint32_t(vertices.size());
         vertex_buffer.create(vertices.size()*sizeof(vertex),
             vk::BufferUsageFlagBits::eVertexBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible |
             vk::MemoryPropertyFlagBits::eHostCoherent);
         vertex_buffer.upload(vertices.data(),vertices.size()*sizeof(vertex));
+        faces_buffer.create(sizeof(faces),vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent);
+        faces_buffer.upload(faces.data(),sizeof(faces));
         box_mesh.vertex_count=vertex_count;
         box_mesh.streams={{0,vertex_buffer.handle(),0}};
         fullscreen.vertex_count=3;
@@ -250,6 +321,14 @@ struct system::implementation {
         desc.extent=extent;
         target.create(desc);
 
+        vk::DescriptorSetLayoutBinding scene_binding{};
+        scene_binding.binding=0;
+        scene_binding.descriptorType=vk::DescriptorType::eStorageBuffer;
+        scene_binding.descriptorCount=1;
+        scene_binding.stageFlags=vk::ShaderStageFlagBits::eFragment;
+        geometry_sets.create({scene_binding});
+        geometry_sets.write_buffer(0,0,faces_buffer.descriptor());
+
         vk::DescriptorSetLayoutBinding image_binding{};
         image_binding.binding=0;
         image_binding.descriptorType=vk::DescriptorType::eCombinedImageSampler;
@@ -275,7 +354,8 @@ struct system::implementation {
         composite_vertex_spv=compile("composite","vert",shaders::composite_vert);
         composite_fragment_spv=compile("composite","frag",shaders::composite_frag);
 
-        geometry_layout=make_layout({},vk::ShaderStageFlagBits::eVertex,
+        geometry_layout=make_layout(geometry_sets.layout(),
+                                    vk::ShaderStageFlagBits::eVertex,
                                     sizeof(camera_data));
         composite_layout=make_layout(composite_sets.layout(),
                                       vk::ShaderStageFlagBits::eFragment,
@@ -298,7 +378,13 @@ struct system::implementation {
                 std::uint32_t(offsetof(vertex,position))},
             vk::VertexInputAttributeDescription{
                 1,0,vk::Format::eR32G32B32Sfloat,
-                std::uint32_t(offsetof(vertex,color))}
+                std::uint32_t(offsetof(vertex,normal))},
+            vk::VertexInputAttributeDescription{
+                2,0,vk::Format::eR32G32B32Sfloat,
+                std::uint32_t(offsetof(vertex,albedo))},
+            vk::VertexInputAttributeDescription{
+                3,0,vk::Format::eR32G32B32Sfloat,
+                std::uint32_t(offsetof(vertex,emission))}
         };
         geometry_pipeline.create(scene_state,{
             {vk::ShaderStageFlagBits::eVertex,geometry_vertex_spv},
@@ -306,6 +392,7 @@ struct system::implementation {
         });
         box_material.pipeline=geometry_pipeline.handle();
         box_material.layout=geometry_layout;
+        box_material.sets={geometry_sets.set()};
         box_material.push_stages=vk::ShaderStageFlagBits::eVertex;
 
         render::raster_state screen_state{};
