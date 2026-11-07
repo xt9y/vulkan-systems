@@ -1,6 +1,5 @@
 #pragma once
 #include "endpoint.hpp"
-#include "socket.hpp"
 #include "stream.hpp"
 #include <chrono>
 #include <cstddef>
@@ -39,9 +38,6 @@ public:
     // Accepts any datagram sender (raw UDP or authenticated DTLS).
     using datagram_sender=std::function<bool(const endpoint::resource&,const void*,std::size_t)>;
     void pump(const datagram_sender& transmit,std::size_t byte_budget=256*1024,
-              stream::clock::time_point now=stream::clock::now());
-    // Compatibility adapter for dedicated UDP hosts.
-    void pump(const socket::resource& udp,std::size_t byte_budget=256*1024,
               stream::clock::time_point now=stream::clock::now());
     bool pop(delivery& out);
     std::size_t pending(const endpoint::resource& peer) const;
