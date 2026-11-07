@@ -743,6 +743,7 @@ struct system::implementation {
             std::tan(current.view.vertical_fov*3.14159265f/360.f),
             float(render_extent.width)/float(render_extent.height),.05f,200.f
         }};
+        current_camera=camera;
 
         vk::ClearValue black{},depth_clear{};
         black.color=vk::ClearColorValue(std::array<float,4>{0,0,0,1});
@@ -760,21 +761,36 @@ struct system::implementation {
         box_material.push_size=0;
         recorder.end_pass();
 
-        // Render pass final layout already transitions color for sampling.
-        // Explicit write->read dependency before the host presentation pass.
-        vk::ImageMemoryBarrier barrier{};
-        barrier.srcAccessMask=vk::AccessFlagBits::eColorAttachmentWrite;
-        barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
-        barrier.oldLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
-        barrier.newLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
-        barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
-        barrier.image=color.handle();
-        barrier.subresourceRange={
+        // The render pass performs the final image layout transitions.
+        // Make both color and depth attachment writes visible to the probe
+        // compute shader and the final fullscreen composite.
+        std::array<vk::ImageMemoryBarrier,2> barriers{};
+        barriers[0].srcAccessMask=vk::AccessFlagBits::eColorAttachmentWrite;
+        barriers[0].dstAccessMask=vk::AccessFlagBits::eShaderRead;
+        barriers[0].oldLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+        barriers[0].newLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+        barriers[0].image=color.handle();
+        barriers[0].subresourceRange={
             vk::ImageAspectFlagBits::eColor,0,1,0,1};
-        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                            vk::PipelineStageFlagBits::eFragmentShader,
-                            {},{},{},{barrier});
+        barriers[1].srcAccessMask=vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+        barriers[1].dstAccessMask=vk::AccessFlagBits::eShaderRead;
+        barriers[1].oldLayout=vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+        barriers[1].newLayout=vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+        barriers[1].image=depth.handle();
+        barriers[1].subresourceRange={
+            vk::ImageAspectFlagBits::eDepth,0,1,0,1};
+        for(auto& barrier:barriers)
+        {
+            barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        }
+        cmd.pipelineBarrier(
+            vk::PipelineStageFlagBits::eColorAttachmentOutput |
+            vk::PipelineStageFlagBits::eEarlyFragmentTests |
+            vk::PipelineStageFlagBits::eLateFragmentTests,
+            vk::PipelineStageFlagBits::eComputeShader |
+            vk::PipelineStageFlagBits::eFragmentShader,
+            {},{},{},barriers);
     }
 
     void composite(vk::CommandBuffer cmd) {
@@ -822,7 +838,50 @@ struct system::implementation {
     }
     void trace_screen(vk::CommandBuffer,const frame&) {}
     void trace_scene(vk::CommandBuffer,const frame&) {}
-    void update_screen_probes(vk::CommandBuffer,const frame&) {}
+    void update_screen_probes(vk::CommandBuffer cmd,const frame&)
+    {
+        std::array<vk::ImageMemoryBarrier,2> barriers{};
+        const std::array<vk::Image,2> images{
+            screen_light.handle(),screen_meta.handle()
+        };
+        for(std::size_t i=0;i<barriers.size();i++)
+        {
+            auto& barrier=barriers[i];
+            barrier.srcAccessMask=screen_initialized?
+                vk::AccessFlags(vk::AccessFlagBits::eShaderRead):
+                vk::AccessFlags{};
+            barrier.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
+            barrier.oldLayout=screen_initialized?
+                vk::ImageLayout::eShaderReadOnlyOptimal:vk::ImageLayout::eUndefined;
+            barrier.newLayout=vk::ImageLayout::eGeneral;
+            barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            barrier.image=images[i];
+            barrier.subresourceRange={
+                vk::ImageAspectFlagBits::eColor,0,1,0,1
+            };
+        }
+        cmd.pipelineBarrier(screen_initialized?
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eFragmentShader):
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eTopOfPipe),
+            vk::PipelineStageFlagBits::eComputeShader,
+            {},{},{},barriers);
+        screen_pipeline.dispatch(cmd,(screen_extent.width+7)/8,
+                                 (screen_extent.height+7)/8,1,
+                                 {screen_sets.set()},&current_camera,
+                                 sizeof(current_camera));
+        for(auto& barrier:barriers)
+        {
+            barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+            barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+            barrier.oldLayout=vk::ImageLayout::eGeneral;
+            barrier.newLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+        }
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                            vk::PipelineStageFlagBits::eFragmentShader,
+                            {},{},{},barriers);
+        screen_initialized=true;
+    }
     void update_radiance_cache(vk::CommandBuffer cmd,const frame& current)
     {
         if(radiance_initialized)
@@ -883,6 +942,7 @@ struct system::implementation {
         barrier.offset=0;
         barrier.size=radiance_cache_bytes;
         cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                            vk::PipelineStageFlagBits::eComputeShader |
                             vk::PipelineStageFlagBits::eFragmentShader,
                             {},{},{barrier},{});
     }
