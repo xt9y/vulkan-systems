@@ -1,41 +1,51 @@
-VulkanLumen — reusable Lumen-style lighting interface (SKELETON)
+VulkanLumen — Stage 1: Cornell geometry and presentation
 
-This module deliberately does not render GI yet. record() and compose()
-emit no GPU commands; result() contains null VkImage handles; implemented()
-returns false. It builds as a standalone VulkanLumen library.
+Stage 1 is now implemented. The existing vulkan-experiment/main.cpp continues
+to call the same API and does not contain any scene or shading algorithms.
+Everything needed for the first visible image lives under lumen/.
 
-The host controls the Vulkan device, swapchain, render pass, camera and
-scene lifetime. VulkanLumen owns its future internal scene representation,
-surface cache, screen probes, radiance probes, and reconstruction passes.
+Implemented:
+  create()   Construct a Cornell-box mesh, vertex buffer, HDR color and D32
+             depth attachments, raster pass, descriptor set and pipelines.
+  record()   Rasterize visible Cornell surfaces to an offscreen color/depth
+             pass, then synchronize the HDR target for subsequent reading.
+  compose()  Draw a fullscreen triangle in the host presentation pass,
+             sampling and tonemapping the HDR image.
+  resize()   Recreate image resources and pipelines after host device idle.
+  reset()    Release owned GPU resources before device shutdown.
+  implemented() returns true after successful pipeline creation.
 
-Stable public API (lumen/lumen.hpp)
-  create(pass, format, extent, settings)
-  set_scene(scene) / set_lighting(lighting) / set_gbuffer(gbuffer)
-  record(command, frame)              BEFORE the host presentation render pass
-  compose(command)                    INSIDE the host presentation render pass
-  result()                            future indirect/reflection outputs
-  invalidate() / resize(...) / reset()
-  implemented()
+Not yet implemented:
+  - Physically correct direct lighting or contact shadows (Stage 2)
+  - BVH/SDF scene tracing (Stage 3)
+  - Surface cards and cached material lighting (Stage 4)
+  - World-space radiance cache (Stage 5)
+  - Screen probe gather, screen tracing and scene-ray fallback (Stages 6–7)
+  - Dynamic invalidation and multibounce (Stage 8)
+  - Reflections and performance scaling (Stages 9–10)
+  - External scene and G-buffer interpretation: the public setters accept
+    handles, but Stage 1 draws the internal Cornell demo only.
+  - result().diffuse/reflections remain null until GI passes exist.
 
-Demo: settings.demo = demo_scene::cornell_box requests an internally managed
-Cornell demonstration once the Lumen implementation is written. Applications
-with actual world geometry will supply their own scene and G-buffer instead.
+Shaders: lumen/shaders.hpp embeds the vertex/fragment GLSL sources. The Lumen
+module compiles them once when create() is called, writing temporary files
+under the application's build/shaders/ directory. Install glslangValidator
+and keep it in PATH. vulkan-experiment requires no shader source files.
 
-Implementation milestones, all confined to lumen/:
-  1. Internal raster visibility or optional external G-buffer
-  2. Scene tracing backed by VulkanBVH / SDF tracing as appropriate
-  3. Screen tracing and disocclusion fallback
-  4. Surface representation and cached surface lighting
-  5. Screen probes, radiance cache, visibility-aware probe interpolation
-  6. Budgeted updates and invalidation for moving lights/geometry
-  7. Diffuse indirect and reflection outputs
-  8. Composite into the compatible host render pass
-  9. GPU timestamps and M1 low-end quality settings
+Validation of Stage 1:
+  cd vulkan-experiment
+  git pull --ff-only
+  rm -f c.lock
+  c build run vulkan-experiment
 
-Shaders/resources are intentionally absent until those passes exist. The
-stable API permits vulkan-experiment/main.cpp to remain unchanged when the
-implementation is filled in. The host will remain a black, responsive Vulkan
-window until the first actual rendering pass is implemented.
+Expected: a movable Cornell box with red and green walls, two white blocks
+and a bright ceiling panel. Surfaces are intentionally UNLIT; the face
+brightness differences are static preview colors, not GI. No noise or blur.
+Movement: WASD + mouse. Escape closes the window.
 
-Build independently with c build run VulkanLumen from lumen/, or link it as a
-c_dep_subdir(...,"lumen") / c_dep_cbuild(...,"VulkanLumen",...) dependency.
+Do not begin Stage 2 until the scene, depth occlusion and camera movement
+render correctly and the baseline FPS is measured on the base M1.
+
+Build: standalone VulkanLumen through lumen/build.c. Rendering objects rely
+on VulkanGPU and VulkanRender; the application links Lumen before these
+providers. Never use the removed root vulkan-systems/build.c.
