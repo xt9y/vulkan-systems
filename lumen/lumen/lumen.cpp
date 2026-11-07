@@ -577,7 +577,7 @@ struct system::implementation {
             timestamp_period=physical.getProperties().limits.timestampPeriod;
             vk::QueryPoolCreateInfo info{};
             info.queryType=vk::QueryType::eTimestamp;
-            info.queryCount=4;
+            info.queryCount=6;
             timestamp_pool=vk::query::create(info);
             gpu_stats.supported=true;
         }
@@ -606,19 +606,21 @@ struct system::implementation {
         if(timestamp_pending)
         {
             // Host has a single frame in flight; its fence has completed.
-            std::array<std::uint64_t,4> ticks{};
+            std::array<std::uint64_t,6> ticks{};
             const auto status=vk::device::get()->handle.getQueryPoolResults(
-                timestamp_pool,0,4,sizeof(ticks),ticks.data(),
+                timestamp_pool,0,6,sizeof(ticks),ticks.data(),
                 sizeof(std::uint64_t),vk::QueryResultFlagBits::e64);
             if(status==vk::Result::eSuccess)
             {
-                gpu_stats.raster_ms=tick_ms(ticks[0],ticks[1]);
-                gpu_stats.composite_ms=tick_ms(ticks[2],ticks[3]);
-                gpu_stats.total_ms=tick_ms(ticks[0],ticks[3]);
+                gpu_stats.material_cache_ms=tick_ms(ticks[0],ticks[1]);
+                gpu_stats.radiance_cache_ms=tick_ms(ticks[1],ticks[2]);
+                gpu_stats.raster_ms=tick_ms(ticks[2],ticks[3]);
+                gpu_stats.composite_ms=tick_ms(ticks[4],ticks[5]);
+                gpu_stats.total_ms=tick_ms(ticks[0],ticks[5]);
                 gpu_stats.valid=true;
             }
         }
-        cmd.resetQueryPool(timestamp_pool,0,4);
+        cmd.resetQueryPool(timestamp_pool,0,6);
         cmd.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe,
                            timestamp_pool,0);
         timestamp_pending=true;
@@ -827,9 +829,11 @@ void system::record(vk::CommandBuffer cmd,const frame& current) {
     if(!impl_ || !impl_->ready)return;
     impl_->begin_frame(cmd);
     impl_->update_surface_cache(cmd,current);
-    impl_->update_radiance_cache(cmd,current);
-    impl_->draw_scene(cmd,current);
     impl_->stamp(cmd,1);
+    impl_->update_radiance_cache(cmd,current);
+    impl_->stamp(cmd,2);
+    impl_->draw_scene(cmd,current);
+    impl_->stamp(cmd,3);
     impl_->trace_screen(cmd,current);
     impl_->trace_scene(cmd,current);
     impl_->update_screen_probes(cmd,current);
@@ -838,9 +842,9 @@ void system::record(vk::CommandBuffer cmd,const frame& current) {
 }
 void system::compose(vk::CommandBuffer cmd) {
     if(!impl_ || !impl_->ready)return;
-    impl_->stamp(cmd,2);
+    impl_->stamp(cmd,4);
     impl_->composite(cmd);
-    impl_->stamp(cmd,3);
+    impl_->stamp(cmd,5);
 }
 outputs system::result() const noexcept {return {};}
 performance system::gpu_performance() const noexcept {
@@ -848,6 +852,11 @@ performance system::gpu_performance() const noexcept {
 }
 bool system::implemented() const noexcept {
     return impl_ && impl_->ready;
+}
+const char* system::status() const noexcept {
+    return implemented()?
+        "stage 5: world radiance cache (single-bounce diffuse)":
+        "not initialized";
 }
 void system::reset() noexcept {impl_.reset();}
 
