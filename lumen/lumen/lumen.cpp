@@ -297,11 +297,18 @@ struct system::implementation {
         };
         const auto physical=vk::physical_device::get()->handle;
         const auto color_format=vk::Format::eR16G16B16A16Sfloat;
+        const auto card_format=vk::Format::eR8G8B8A8Unorm;
         const auto depth_format=vk::Format::eD32Sfloat;
         const auto color_features=physical.getFormatProperties(color_format)
                                       .optimalTilingFeatures;
         const auto depth_features=physical.getFormatProperties(depth_format)
                                       .optimalTilingFeatures;
+        const auto card_features=physical.getFormatProperties(card_format)
+                                      .optimalTilingFeatures;
+        const auto card_required=vk::FormatFeatureFlagBits::eStorageImage |
+                                 vk::FormatFeatureFlagBits::eSampledImage;
+        if((card_features & card_required)!=card_required)
+            throw std::runtime_error("RGBA8 material card storage/sampling unsupported");
         const auto requested_color=vk::FormatFeatureFlagBits::eColorAttachment |
                                    vk::FormatFeatureFlagBits::eSampledImage;
         if((color_features & requested_color)!=requested_color)
@@ -350,7 +357,7 @@ struct system::implementation {
         make_image(depth,render_extent,depth_format,
             vk::ImageUsageFlagBits::eDepthStencilAttachment,
             vk::ImageAspectFlagBits::eDepth);
-        make_image(surface_cache,{256,256},color_format,
+        make_image(surface_cache,{256,256},card_format,
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eColor);
