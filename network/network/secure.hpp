@@ -10,8 +10,8 @@
 #include <string>
 
 namespace net::secure {
-// DTLS 1.2 mutually authenticated by X.509 certificates. No plaintext fallback.
-// Credentials belong to the host application, never inside VulkanSystems.
+// DTLS 1.2 with two modes: strict CA-verified mutual TLS or automatic
+// server-key TOFU. Neither mode permits plaintext application packets.
 enum class role { client, server };
 struct settings {
     std::string ca_file;
@@ -19,6 +19,12 @@ struct settings {
     std::string private_key_file;
     // Client: expected server DNS/IP identity used for certificate verification.
     std::string server_name;
+    // Explicit opt-in. A persistent local server key is generated automatically;
+    // clients pin its public key on first connection. First use does not
+    // authenticate against an independent trust anchor.
+    bool automatic_identity = false;
+    std::string storage_directory;
+    std::string trust_identity; // stable configured server host:port (client)
     std::size_t max_peers = 64;
     std::size_t max_delivered_bytes = 4 * 1024 * 1024;
     std::size_t max_pending_bytes_per_peer = 64 * 1024;
