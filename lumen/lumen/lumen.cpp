@@ -905,19 +905,94 @@ struct system::implementation {
     }
     void trace_screen(vk::CommandBuffer,const frame&) {}
     void trace_scene(vk::CommandBuffer,const frame&) {}
+    void update_surface_lighting(vk::CommandBuffer cmd,const frame& current)
+    {
+        vk::ImageMemoryBarrier image_barrier{};
+        image_barrier.image=surface_lighting.handle();
+        image_barrier.subresourceRange={
+            vk::ImageAspectFlagBits::eColor,0,1,0,1};
+        image_barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        image_barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        if(!lighting_initialized)
+        {
+            image_barrier.oldLayout=vk::ImageLayout::eUndefined;
+            image_barrier.newLayout=vk::ImageLayout::eTransferDstOptimal;
+            image_barrier.dstAccessMask=vk::AccessFlagBits::eTransferWrite;
+            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                vk::PipelineStageFlagBits::eTransfer,{},{},{},{image_barrier});
+            const vk::ClearColorValue black(std::array<float,4>{0,0,0,0});
+            cmd.clearColorImage(surface_lighting.handle(),
+                vk::ImageLayout::eTransferDstOptimal,black,
+                {image_barrier.subresourceRange});
+            image_barrier.oldLayout=vk::ImageLayout::eTransferDstOptimal;
+            image_barrier.srcAccessMask=vk::AccessFlagBits::eTransferWrite;
+            image_barrier.newLayout=vk::ImageLayout::eGeneral;
+            image_barrier.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
+            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {},{},{},{image_barrier});
+        }
+        else
+        {
+            image_barrier.oldLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+            image_barrier.newLayout=vk::ImageLayout::eGeneral;
+            image_barrier.srcAccessMask=vk::AccessFlagBits::eShaderRead;
+            image_barrier.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
+            cmd.pipelineBarrier(
+                vk::PipelineStageFlagBits::eFragmentShader |
+                vk::PipelineStageFlagBits::eComputeShader,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {},{},{},{image_barrier});
+        }
+
+        // This lighting update consumes the previous completed world-cache
+        // coefficients. The current frame's world-cache update follows it.
+        if(radiance_initialized)
+        {
+            vk::BufferMemoryBarrier probe_barrier{};
+            probe_barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+            probe_barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+            probe_barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            probe_barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            probe_barrier.buffer=radiance_probes.handle();
+            probe_barrier.offset=0;
+            probe_barrier.size=radiance_cache_bytes;
+            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {},{},{probe_barrier},{});
+        }
+        const light_constants push{
+            std::uint32_t(current.index%16u),
+            radiance_initialized?1u:0u,0u,0u
+        };
+        lighting_pipeline.dispatch(cmd,8,8,1,{lighting_sets.set()},
+                                   &push,sizeof(push));
+        image_barrier.oldLayout=vk::ImageLayout::eGeneral;
+        image_barrier.newLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+        image_barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+        image_barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+            vk::PipelineStageFlagBits::eComputeShader |
+            vk::PipelineStageFlagBits::eFragmentShader,
+            {},{},{},{image_barrier});
+        lighting_initialized=true;
+    }
+
     void update_screen_probes(vk::CommandBuffer cmd,const frame&)
     {
-        std::array<vk::ImageMemoryBarrier,2> barriers{};
-        const std::array<vk::Image,2> images{
-            screen_light.handle(),screen_meta.handle()
+        std::array<vk::ImageMemoryBarrier,3> barriers{};
+        const std::array<vk::Image,3> images{
+            screen_light.handle(),screen_meta.handle(),screen_gather.handle()
         };
         for(std::size_t i=0;i<barriers.size();i++)
         {
             auto& barrier=barriers[i];
             barrier.srcAccessMask=screen_initialized?
-                vk::AccessFlags(vk::AccessFlagBits::eShaderRead):
+                vk::AccessFlags(vk::AccessFlagBits::eShaderRead |
+                                vk::AccessFlagBits::eShaderWrite):
                 vk::AccessFlags{};
-            barrier.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
+            barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead |
+                                  vk::AccessFlagBits::eShaderWrite;
             barrier.oldLayout=screen_initialized?
                 vk::ImageLayout::eShaderReadOnlyOptimal:vk::ImageLayout::eUndefined;
             barrier.newLayout=vk::ImageLayout::eGeneral;
@@ -929,14 +1004,15 @@ struct system::implementation {
             };
         }
         cmd.pipelineBarrier(screen_initialized?
-                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eFragmentShader):
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eFragmentShader |
+                                       vk::PipelineStageFlagBits::eComputeShader):
                 vk::PipelineStageFlags(vk::PipelineStageFlagBits::eTopOfPipe),
             vk::PipelineStageFlagBits::eComputeShader,
             {},{},{},barriers);
         const screen_constants push{
             current_camera,
             {std::clamp(options.screen_trace_distance,.5f,8.f),
-             std::clamp(options.screen_trace_strength,0.f,.25f),0.f,0.f}
+             0.f,screen_initialized?1.f:0.f,float(current.index%4096u)}
         };
         screen_pipeline.dispatch(cmd,(screen_extent.width+7)/8,
                                  (screen_extent.height+7)/8,1,
@@ -1065,6 +1141,8 @@ void system::invalidate() {
     if(impl_)
     {
         impl_->cache_dirty=true;
+        impl_->lighting_initialized=false;
+        impl_->screen_initialized=false;
         // Reinitialize all cached irradiance on the next record.
         impl_->radiance_initialized=false;
     }
@@ -1073,6 +1151,7 @@ void system::record(vk::CommandBuffer cmd,const frame& current) {
     if(!impl_ || !impl_->ready)return;
     impl_->begin_frame(cmd);
     impl_->update_surface_cache(cmd,current);
+    impl_->update_surface_lighting(cmd,current);
     impl_->stamp(cmd,1);
     impl_->update_radiance_cache(cmd,current);
     impl_->stamp(cmd,2);
@@ -1100,7 +1179,7 @@ bool system::implemented() const noexcept {
 }
 const char* system::status() const noexcept {
     return implemented()?
-        "stage 7: screen traces with BVH fallback":
+        "lit surface cards + directional screen radiance cache":
         "not initialized";
 }
 void system::reset() noexcept {impl_.reset();}
