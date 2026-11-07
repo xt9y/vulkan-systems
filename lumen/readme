@@ -1,60 +1,57 @@
-VulkanLumen — Stage 2: original Cornell scene + direct area lighting
+VulkanLumen — Stage 3: GPU scene ray traversal + per-pass profiling
 
-The public system API is unchanged. vulkan-experiment/main.cpp remains the
-permanent test harness; rendering implementation lives in lumen/.
+The public integration API is unchanged. All rendering and ray tracing remain
+inside vulkan-systems/lumen/. vulkan-experiment continues to supply the window,
+camera and Vulkan frame; it has no tracing shaders or geometry data.
 
-Scene: exact geometry and base materials from
-xt9y/vulkan-experiment/path-tracer-bak:
-  - Cornell dimensions: width 5.55, depth 5.592, height 5.488
-  - White reflectance (.725, .710, .680)
-  - Red reflectance (.630, .065, .050) on the right wall (x = 5.55)
-  - Green reflectance (.140, .450, .091) on the left wall (x = 0)
-  - Short block: original rotated base, height 1.65
-  - Tall block: original rotated base, height 3.30
-  - Emissive ceiling rectangle: origin (2.13,5.484,2.27),
-    size 1.30 x 1.05, radiance (17,16,14)
-  - 16 original analytic faces (96 raster vertices), no front wall
+Current rendering
+  - Exact 16-face Cornell room from vulkan-experiment/path-tracer-bak.
+  - Full-resolution raster primary visibility with depth testing.
+  - HDR direct area-light shading using four deterministic samples.
+  - Both rotated white blocks cast direct shadows.
+  - Display composite/tonemap, no temporal reprojection or denoising.
+  - No indirect GI or reflections yet.
 
-Implemented:
-  create()   Allocates Cornell vertex/face SSBO data, HDR color/depth targets,
-             rasterization pipeline, descriptors and composite pipeline.
-  record()   Rasterizes visible geometry; Lambertian direct area-light energy
-             and surface-to-light visibility are computed in the fragment shader
-             using 2x2 deterministic area-light samples.
-  compose()  Displays the HDR target using the existing tone map.
-  reset() / resize()   Release/recreate GPU resources safely.
-  implemented()        True after pipelines have been initialized.
+Stage 3 scene tracing
+  - Each non-emissive Cornell face is triangulated into two triangles:
+    30 shadow-occluding triangles; 59 BVH nodes.
+  - lumen/trace.cpp builds a balanced median-split static triangle BVH once
+    on the CPU and uploads GPU buffers. Shader data uses the exact std430
+    node/triangle layouts defined by VulkanBVH (bvh/bvh.hpp).
+  - In the fragment shader, trace_scene(origin,direction,max_distance,any_hit)
+    traverses the scene BVH with a bounded stack, exact two-sided
+    Moller-Trumbore triangles and world-space ray distances.
+  - The function returns closest-hit primitive, distance and barycentrics, or
+    stops at the first hit for shadow queries. Unexpected stack overflow is
+    marked so visibility does not silently treat it as a miss.
+  - Lambertian lighting now uses this generic ray query for occlusion instead
+    of Cornell-specific box bounds and analytic face intersections.
+  - The shared VulkanBVH GPU builder / instanced TLAS traversal is NOT yet
+    used: this baseline has one static 30-triangle demo. Its reusable data
+    format makes upgrading the builder possible without changing host calls.
+  - External scene handles are accepted by set_scene(), but loading arbitrary
+    game meshes into this demo BVH is not implemented yet.
 
-For speed, shadow rays use conservative bounding boxes for the two interior
-Cornell blocks, followed by intersections against their 10 analytic faces.
-Room boundaries are convex and cannot occlude an interior point's segment
-to the ceiling emitter. No GPU BVH, noise, TAA, SVGF or denoising exists.
+Frame timing
+  - The Lumen API exposes gpu_performance(), with raster_ms, composite_ms,
+    total_ms, supported and valid.
+  - Query timestamps are used only if the selected graphics/compute queue
+    supports them; readings come from the previous, fence-completed frame.
+  - Vulkan-experiment prints every ~2 seconds:
+      FPS; CPU frame avg and max ms; CPU input ms; CPU render/wait/submit ms;
+      GPU scene (raster + inline ray queries) ms; composite ms; GPU total ms.
+  - GPU time excludes CPU work and swapchain presentation. CPU render time
+    includes any wait caused by frame scheduling or FIFO presentation.
+  - No frame time or FPS claims are made until measured on the user's M1.
 
-Stage 2 intentionally has only direct lighting (one light bounce).
-The previous path tracer also computes indirect diffuse light; red/green
-color bleeding onto white surfaces will not yet match that reference.
-
-Later stages:
-  3. General scene ray tracing via VulkanBVH / compute traversal
-  4. Surface cache and card-based material/lighting lookup
-  5. World-space radiance probes and cached GI
-  6. Screen-probe gather
-  7. Screen tracing with scene-ray fallback
-  8. Dynamic invalidation and multi-bounce illumination
-  9. Reflections
-  10. Frame budgets, GPU profiling and M1 performance scaling
-
-Test on macOS/M1:
-  cd vulkan-experiment
+Run from vulkan-experiment/
   git pull --ff-only
   rm -f c.lock
   c build run vulkan-experiment
 
-Expect the original two rotated boxes, corresponding red/green walls,
-bright ceiling emitter, soft-ish shadows and direct diffuse illumination.
-WASD + mouse controls remain unchanged.
+Expected: nearly the same image as Stage 2, with BVH-traced direct shadows,
+rotated Cornell boxes, and periodic detailed timing logs. Camera: WASD/mouse.
+Please send errors, screenshot and FPS/GPU timings before starting Stage 4.
 
-Please report a screenshot, FPS and any compiler/shader output before Stage 3.
-On Retina displays the shadow shader may be GPU-heavy. If it is, the next
-optimization should use shadow-map sampling or a cheaper light-visibility
-representation, not a denoiser.
+Next: surface-card material/light capture and cached hit lighting.
+Do not add a denoiser or full-scene path tracer to this harness.
