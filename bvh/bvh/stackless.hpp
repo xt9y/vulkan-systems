@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
+#include <stdexcept>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -12,16 +14,21 @@
 
 namespace bvh
 {
-    // Stackless, preorder any-hit BVH for shader paths requiring a compact,
-    // directly readable tree. The node layout matches three vec4/uvec4 in
-    // std430; info = (subtree_end, first_triangle, triangle_count, 0).
+    // Two tightly packed 16-byte groups, identical in C++ and GLSL std430:
+    // (vec3 minimum, uint next), (vec3 maximum, uint first_and_count).
+    // The lower four bits store a 0..8 triangle leaf count; the remaining
+    // bits store its first triangle index. Exact bounds remain 32-bit floats.
     struct alignas(16) stackless_node
     {
-        std::array<float,4> minimum{};
-        std::array<float,4> maximum{};
-        std::array<std::uint32_t,4> info{};
+        std::array<float,3> minimum{};
+        std::uint32_t next=0;
+        std::array<float,3> maximum{};
+        std::uint32_t first_and_count=0;
     };
-    static_assert(sizeof(stackless_node)==48);
+    static_assert(sizeof(stackless_node)==32);
+    static_assert(offsetof(stackless_node,next)==12);
+    static_assert(offsetof(stackless_node,maximum)==16);
+    static_assert(offsetof(stackless_node,first_and_count)==28);
 
     // Input/output triangles are three consecutive vec4 vertices per face.
     // Reorders the triangles into leaf order using binned surface-area
@@ -69,8 +76,8 @@ namespace bvh
                 hi={std::max(hi.x,p.hi.x),std::max(hi.y,p.hi.y),std::max(hi.z,p.hi.z)};
             }
             stackless_node node{};
-            node.minimum={lo.x-0.0001f,lo.y-0.0001f,lo.z-0.0001f,0.0f};
-            node.maximum={hi.x+0.0001f,hi.y+0.0001f,hi.z+0.0001f,0.0f};
+            node.minimum={lo.x-0.0001f,lo.y-0.0001f,lo.z-0.0001f};
+            node.maximum={hi.x+0.0001f,hi.y+0.0001f,hi.z+0.0001f};
             const auto node_index=nodes.size();
             nodes.push_back(node);
             constexpr std::size_t minimum_leaf=4;
@@ -210,8 +217,12 @@ namespace bvh
             }
             if(middle<=first || middle>=end)
             {
-                nodes[node_index].info[1]=static_cast<std::uint32_t>(ordered.size()/3);
-                nodes[node_index].info[2]=static_cast<std::uint32_t>(end-first);
+                const auto first_triangle=ordered.size()/3;
+                if(first_triangle>(std::numeric_limits<std::uint32_t>::max()>>4))
+                    throw std::length_error("Shadow BVH exceeds packed triangle range");
+                nodes[node_index].first_and_count=
+                    (static_cast<std::uint32_t>(first_triangle)<<4) |
+                    static_cast<std::uint32_t>(end-first);
                 for(std::size_t i=first;i<end;++i)
                     for(const auto& p:primitives[order[i]].positions)
                         ordered.push_back({p.x,p.y,p.z,0.0f});
@@ -221,7 +232,7 @@ namespace bvh
                 build(first,middle);
                 build(middle,end);
             }
-            nodes[node_index].info[0]=static_cast<std::uint32_t>(nodes.size());
+            nodes[node_index].next=static_cast<std::uint32_t>(nodes.size());
         };
         if(!order.empty())build(0,order.size());
         triangles=std::move(ordered);
