@@ -909,7 +909,8 @@ struct system::implementation {
         barrier.image=surface_cache.handle();
         barrier.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
         cmd.pipelineBarrier(cache_valid?
-                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eFragmentShader):
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eFragmentShader |
+                                       vk::PipelineStageFlagBits::eComputeShader):
                 vk::PipelineStageFlags(vk::PipelineStageFlagBits::eTopOfPipe),
             vk::PipelineStageFlagBits::eComputeShader,{},{},{},{barrier});
         cache_pipeline.dispatch(cmd,32,32,1,{cache_sets.set()});
