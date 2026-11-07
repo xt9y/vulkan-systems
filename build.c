@@ -36,7 +36,7 @@ void build(C_Build* b) {
     c_include(systems,".");
     c_flag(systems,"-std=c++17");
 
-    C_Dependency* engine=c_git(b,"VulkanEngine","https://github.com/xt9y/vulkan-engine.git","2aa9b9c265995c76859952c6f32b8a75873d22f3");
+    C_Dependency* engine=c_git(b,"VulkanEngine","https://github.com/xt9y/vulkan-engine.git","4b792b574727115d7478f414e11e9540e848404e");
     c_dep_cbuild(engine,"VulkanEngine",C_TARGET_STATIC_LIBRARY);
     c_dep_include(engine,".");
     c_use(systems,engine);
