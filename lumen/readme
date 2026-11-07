@@ -1,75 +1,80 @@
-VulkanLumen — Stage 6: screen-probe visibility gather
+VulkanLumen — Stage 7: screen-space tracing + scene-BVH fallback
 
-The VulkanLumen public create/record/compose interface is unchanged.
-vulkan-experiment remains a fixed test harness, with only GPU screen-pass
-timing added to its terminal output.
+The fixed vulkan-experiment harness still calls the same Lumen API.
+All ray algorithms and GI are owned by vulkan-systems/lumen/.
 
-Inherited from Stage 5
-  - Exact rotated Cornell box scene, full-size materials and direct shadows
-  - 30-triangle shared-layout static BVH and one direct-shadow ray per fragment
-  - RGBA8 16-card material atlas, updated when dirty
-  - 12x8x12 world-space directional radiance cache, updated incrementally
-  - Default world-cache update budget: 64 probes x 4 rays per frame
-  - Full-resolution primary rasterization capped at 1280 pixels wide on Retina
+Current implementation
+  - Rasterized original Cornell scene and ceiling area light
+  - Fast one-ray BVH direct shadows
+  - Stage 4 material cards (16 faces, 64x64 RGBA8 each)
+  - Stage 5 world-space directional diffuse radiance probes (12x8x12)
+  - Stage 6 visibility-aware screen-probe gather at 16x16 tile spacing
+  - Stage 7: one deterministic cosine-biased secondary ray per screen probe
+    (no screen temporal accumulation, TAA, or denoising)
 
-Screen probes (Stage 6)
-  - Retains Stage 5 full-resolution lighting as the exact fallback.
-  - Rasterized HDR alpha stores the current Cornell surface ID; D32 depth
-    is now stored and sampled in a read-only layout after the render pass.
-  - One probe per 16x16 internal pixels, e.g. 80x45 at 1280x720.
-  - Each probe reconstructs a visible world-space hit position from depth,
-    takes the face normal, and gathers incoming light from nearby world probes.
-  - At most two extra BVH visibility rays per screen probe reject world-space
-    cache samples blocked by other surfaces. The screen-probe result is a
-    correction against the Stage 5 world-cache estimate, not new path noise.
-  - Two small RGBA16F screen-probe images store lighting correction, surface
-    identity and position/linear depth for geometric validation.
-  - The final presentation composite samples up to four neighboring probes.
-    It accepts contributions only when face IDs and view depths agree; when
-    they do not, it displays the unchanged Stage 5 lighting for that pixel.
-  - Only diffuse indirect lighting is adjusted. Full-resolution direct
-    lighting, shadows, geometry edges and emissive surfaces remain untouched.
-  - No per-pixel denoising, neural inference or temporal image accumulation.
+Stage 7 ray path
+  1. Trace 8 evenly spaced candidate points along the secondary world ray.
+  2. Project each position into the current camera's depth/color textures.
+  3. Accept a screen hit only when the sampled geometry is within a narrow
+     linear-depth thickness, faces the ray and is not the source face.
+     Screen hits reuse the visible surface's lit HDR color.
+  4. On an unresolved/out-of-screen ray, trace the same ray through the
+     already-resident VulkanBVH-compatible triangle buffers.
+  5. A fallback BVH hit evaluates the material card and direct area light
+     at the hit; misses contribute no new screen correction.
+  6. Compare the single secondary sample to the world-cache irradiance.
+     Clamp and blend the delta weakly into the existing screen-probe result.
+     Stage 5 global illumination always remains the base fallback.
 
-Resource and synchronization model
-  1. Optional Surface Cache material capture
-  2. Incremental world radiance cache compute
-  3. Rasterized Cornell HDR color + persistent readable depth
-  4. Screen-probe compute dispatch and image write->read barriers
-  5. Final presentation composite with validated indirect correction
+M1 budget
+  - One new local secondary ray per 16x16 screen probe, not per pixel
+  - Up to 8 screen-depth steps, and a BVH fallback only if unresolved
+  - Max distance and correction strength are set in lumen::settings:
+      screen_trace_distance = 3.0f   (clamped to 0.5..8 meters)
+      screen_trace_strength = 0.12f  (clamped to 0..0.25)
+  - The existing 2 BVH visibility rays/probe remain Stage 6's maximum.
+  - The existing GPU 'screen' timing includes Stage 6+7 together.
+  - Separate GPU cards/GI/scene/screen/composite/total measurements remain.
+  - No claim of 60 FPS until the Stage 7 build is tested on the base M1.
 
-Performance
-  - GPU timing now includes screen=... ms, in addition to cards, GI,
-    scene, composite and total.
-  - M1's last measured Stage 5 total was around 7.6ms at 60 FPS, with
-    FIFO presentation making CPU frame time ~16.67ms.
-  - Stage 6 adds up to two visibility rays per 16x16 tile and four small
-    light/depth checks per composited pixel. It may increase both the new
-    screen pass and the presentation pass. No 60-FPS guarantee until tested.
-  - The screen probe stage is rebuilt every frame to avoid stale history
-    when the camera moves. The world probes keep their existing bounded
-    temporal samples.
+Known limitations
+  - One ray per tile is not an unbiased GI estimator and does not replace
+    Screen Probe Gather's world-space cache. The weak/clamped correction
+    avoids noticeable flickering but may underrepresent contact light.
+  - Screen-depth hits can be missed on thin surfaces, at offscreen geometry,
+    at high ray angles or near depth discontinuities; the BVH fallback
+    handles unresolved rays with the existing Cornell geometry.
+  - The fallback currently lights hits with direct lighting, while screen
+    hits reuse the complete visible HDR radiance; this is only an approximate
+    hit-lighting strategy, not a full card-lighting atlas.
+  - The geometry BVH is static and CPU-built, not full GPU-built BLAS/TLAS.
+  - No generic mesh loader, distance fields, dynamic scene invalidation,
+    multibounce cache, dedicated reflection tracing or full Lumen cards.
+  - Camera-dependent screen traces can cause view-dependent color bleeding.
+  - No actual GPU validation / macOS compile has been performed here.
 
-Limitations
-  - This is a visibility-aware screen-probe gather, not yet Epic Lumen's
-    complete screen tracing, adaptive radiance gather or surface-light cache.
-  - Probe spacing is fixed. View-dependent screen probes can still lose
-    detail at thin surfaces or near sharp silhouettes; the fallback and
-    surface/depth validation prevent cross-face blending.
-  - The Cornell test uses analytic flat face normals and a fixed grid.
-    The external scene/G-buffer handles do not yet implement general meshes.
-  - No dedicated reflections, SDF scene tracing, multibounce cache feedback,
-    or per-probe depth-moment/relocation system yet.
-
-Test from vulkan-experiment/
+Run from vulkan-experiment/
   git pull --ff-only
   rm -f c.lock
   c build run vulkan-experiment
 
-Look for shader build/shaders/lumen_screen.comp and startup:
-  [lumen] Stage 6 ... screen probes=80x45 ...
-  [lumen] ... GPU cards=... GI=... scene=... screen=... composite=... total=...
+Expected: 'Stage 7', a screen-probe grid size, trace=8 steps+3m BVH fallback.
+Send the compile log, screenshot, and GPU scene/screen/total timings for
+the same camera view used in Stage 6.
 
-Please compare the same camera view with Stage 5 for any light leaking,
-screen-tile pattern, excessive darkening or FPS regression. Report screenshot
-and several GPU timing lines before Stage 7 (screen ray fallback).
+Milestones
+  1  Cornell primary visibility and composite              implemented
+  2  Direct area lighting and shadows                      implemented
+  3  Static generic BVH ray queries (Cornell demo)          implemented
+  4  Basic material surface-card atlas                     implemented
+  5  World-space directional single-bounce radiance cache  implemented
+  6  Visibility-aware screen probes                        implemented
+  7  Short screen ray with BVH fallback                    implemented
+  8  Dynamic invalidation and multibounce transport        not implemented
+  9  Dedicated rough/specular reflections                  not implemented
+  10 Profiling, quality scaling and validation             partial
+
+These are milestones for a minimal Lumen-inspired renderer, not a claim that
+Epic's full Lumen system is 70% reconstructed. Full scene support, automatic
+surface-card capture, robust visibility, multiple tracing backends and
+dynamic data remain substantial additional work.
