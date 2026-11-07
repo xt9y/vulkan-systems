@@ -60,53 +60,89 @@ const float PI=3.14159265358979323846;
 const float EPSILON=0.0015;
 const int FACE_COUNT=16;
 
-bool intersects_bounds(vec3 ro,vec3 rd,float limit,
-                       vec3 lower,vec3 upper)
+// Uses the same std430 BVH node and triangle layout as VulkanBVH.
+struct Node {
+    vec4 lo,hi;
+    uvec4 links; // left, right, parent, primitive (0xffffffff = interior)
+};
+struct Triangle {
+    vec4 a,b,c;
+};
+layout(std430,set=0,binding=1) readonly buffer TraceNodes {
+    Node nodes[];
+};
+layout(std430,set=0,binding=2) readonly buffer TraceTriangles {
+    Triangle triangles[];
+};
+const uint INVALID=0xffffffffu;
+
+bool box_hit(vec3 origin,vec3 direction,float limit,
+             vec3 lower,vec3 upper)
 {
-    float lo=0.0,hi=limit;
+    float near_t=EPSILON,far_t=limit;
     for(int axis=0;axis<3;axis++)
     {
-        if(abs(rd[axis])<0.000001)
+        float d=direction[axis],o=origin[axis];
+        if(abs(d)<0.0000001)
         {
-            if(ro[axis]<lower[axis] || ro[axis]>upper[axis])
-                return false;
+            if(o<lower[axis] || o>upper[axis])return false;
         }
         else
         {
-            float a=(lower[axis]-ro[axis])/rd[axis];
-            float b=(upper[axis]-ro[axis])/rd[axis];
-            lo=max(lo,min(a,b));
-            hi=min(hi,max(a,b));
-            if(hi<lo)return false;
+            float inverse=1.0/d;
+            float a=(lower[axis]-o)*inverse;
+            float b=(upper[axis]-o)*inverse;
+            near_t=max(near_t,min(a,b));
+            far_t=min(far_t,max(a,b));
+            if(near_t>far_t)return false;
         }
     }
-    return hi>EPSILON;
+    return far_t>EPSILON;
 }
 
-bool blocked(vec3 ro,vec3 rd,float limit)
+bool triangle_hit(vec3 origin,vec3 direction,float limit,Triangle tri)
 {
-    // The enclosing Cornell room is convex: only the two internal blocks
-    // can occlude an interior point's segment to the ceiling emitter.
-    // Their conservative AABBs reject most rays before face intersections.
-    bool small=intersects_bounds(ro,rd,limit,
-                  vec3(.80,-.01,.63),vec3(2.92,1.67,2.74));
-    bool tall=intersects_bounds(ro,rd,limit,
-                  vec3(2.63,-.01,2.45),vec3(4.74,3.32,4.58));
-    if(!small && !tall)return false;
-    for(int i=5;i<15;i++)
+    vec3 e1=tri.b.xyz-tri.a.xyz;
+    vec3 e2=tri.c.xyz-tri.a.xyz;
+    vec3 p=cross(direction,e2);
+    float det=dot(e1,p);
+    if(abs(det)<0.00000001)return false;
+    float inv=1.0/det;
+    vec3 t=origin-tri.a.xyz;
+    float u=dot(t,p)*inv;
+    if(u<0.0 || u>1.0)return false;
+    vec3 q=cross(t,e1);
+    float v=dot(direction,q)*inv;
+    if(v<0.0 || u+v>1.0)return false;
+    float distance=dot(e2,q)*inv;
+    return distance>EPSILON && distance<limit;
+}
+
+bool blocked(vec3 origin,vec3 direction,float limit)
+{
+    // Any-hit query against arbitrary triangle geometry.
+    // A compact stack avoids scanning every triangle in every pixel.
+    uint stack[64];
+    int count=1;
+    stack[0]=0u;
+    while(count>0)
     {
-        if((i<10 && !small) || (i>=10 && !tall))continue;
-        Face f=faces[i];
-        float denom=dot(f.normal.xyz,rd);
-        if(abs(denom)<0.000001)continue;
-        float t=dot(f.origin.xyz-ro,f.normal.xyz)/denom;
-        if(t<=EPSILON || t>=limit)continue;
-        vec3 d=ro+rd*t-f.origin.xyz;
-        vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
-        float x=q.x*f.metric.x+q.y*f.metric.y;
-        float y=q.x*f.metric.y+q.y*f.metric.z;
-        if(x>=0.0 && x<=1.0 && y>=0.0 && y<=1.0)
-            return true;
+        uint index=stack[--count];
+        Node n=nodes[index];
+        if(!box_hit(origin,direction,limit,n.lo.xyz,n.hi.xyz))
+            continue;
+        if(n.links.w!=INVALID)
+        {
+            if(triangle_hit(origin,direction,limit,
+                            triangles[n.links.w]))return true;
+        }
+        else
+        {
+            // Conservative fallback if a future scene exceeds stack capacity.
+            if(count+2>64)return true;
+            stack[count++]=n.links.x;
+            stack[count++]=n.links.y;
+        }
     }
     return false;
 }
