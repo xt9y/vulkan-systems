@@ -211,7 +211,19 @@ namespace editor
             border(out,r,frame);
             text(out,r.x+10,r.y+8,item.text);
         }
-        if(menu_==menu::none)return out;
+        if(menu_==menu::none)
+        {
+            // Empty editor instances still show that '?' successfully
+            // entered debug mode; scene labels are exclusively host-defined.
+            if(labels_.empty())
+            {
+                const int w=std::min(345,width-12);
+                solid(out,{6,6,w,36},background);
+                border(out,{6,6,w,36},frame);
+                text(out,17,17,"EDITOR  ENTER:INSERT  TAB:CURSOR");
+            }
+            return out;
+        }
         const int left=22,top=22;
         const int panel_width=std::max(100,std::min(470,width-2*left));
         const int rows=menu_==menu::insert?int(catalog_.size()):
