@@ -1,4 +1,5 @@
 #include "graph.hpp"
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
@@ -70,6 +71,22 @@ namespace gpu
                 return;
             }
         states_.push_back({state,true});
+    }
+
+    void graph::forget(vk::Buffer buffer)
+    {
+        if(!buffer)return;
+        states_.erase(std::remove_if(states_.begin(),states_.end(),
+            [buffer](const tracked& state)
+            {return state.last.buffer==buffer;}),states_.end());
+    }
+
+    void graph::forget(vk::Image image)
+    {
+        if(!image)return;
+        states_.erase(std::remove_if(states_.begin(),states_.end(),
+            [image](const tracked& state)
+            {return state.last.image==image;}),states_.end());
     }
 
     void graph::execute(vk::CommandBuffer command)
