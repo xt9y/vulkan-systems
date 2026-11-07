@@ -162,7 +162,12 @@ void local_server(const std::string& root,mbedtls_ctr_drbg_context& random,
 
 bool verify_or_pin(const std::string& root,const std::string& peer_id,
                    const mbedtls_x509_crt& certificate) {
-    if(peer_id.empty()) return false;
+    if(peer_id.empty() ||
+       mbedtls_x509_time_is_future(&certificate.valid_from) ||
+       mbedtls_x509_time_is_past(&certificate.valid_to) ||
+       mbedtls_x509_crt_check_key_usage(
+           &certificate,MBEDTLS_X509_KU_DIGITAL_SIGNATURE)!=0)
+        return false;
     // Pin the SubjectPublicKeyInfo, not a renewed certificate's signature.
     std::array<unsigned char,2048> der{};
     const int n=mbedtls_pk_write_pubkey_der(
