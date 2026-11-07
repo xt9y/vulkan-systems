@@ -7,6 +7,7 @@ void build(C_Build* b)
     c_include(target,".");
     c_include(target,"../gpu");
     c_include(target,"../render");
+    c_include(target,"../bvh"); // Reuse VulkanBVH std430 node and triangle types.
     c_flag(target,"-std=c++17");
 
     C_Dependency* engine=c_git(
