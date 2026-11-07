@@ -566,6 +566,7 @@ bool trace_fallback(vec3 origin,vec3 direction,float limit,
 vec3 screen_trace_correction(ivec2 tile,vec3 position,vec3 normal,
                              uint receiver,vec3 world_irradiance)
 {
+    if(camera.trace_parameters.y<=0.0)return vec3(0.0);
     // One fixed cosine-biased hemisphere direction per 16x16 screen probe.
     // Stable over camera frames: no temporal noise or history buffers.
     vec3 axis=abs(normal.y)<.9?vec3(0.0,1.0,0.0):vec3(1.0,0.0,0.0);
