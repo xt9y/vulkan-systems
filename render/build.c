@@ -5,6 +5,9 @@ void build(C_Build* b)
     C_Target* render=c_static_library(b,"VulkanRender");
     c_sources(render,"render/*.cpp");
     c_include(render,".");
+    // VulkanRender reuses VulkanGPU headers, including gpu/image.hpp and gpu/graph.hpp.
+    // The render subproject is built independently, so expose its sibling include root.
+    c_include(render,"../gpu");
     c_flag(render,"-std=c++17");
 
     C_Dependency* engine=c_git(
