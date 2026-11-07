@@ -20,12 +20,13 @@ namespace editor
         constexpr int side_margin=14;
         constexpr int panel_width_limit=464;
         constexpr int panel_padding=34;
+        constexpr int glyph_advance_max=14; // Conservative width for legacy PNGs
         constexpr int header_height=100;
 
         struct rectangle { int x,y,w,h; };
         rectangle label_rect(const screen_label& label,int width,int height)
         {
-            const int w=std::max(66,int(label.text.size())*12+20);
+            const int w=std::max(66,int(label.text.size())*glyph_advance_max+20);
             const int x=std::clamp(label.x-w/2,0,std::max(0,width-w));
             const int y=std::clamp(label.y-32,0,std::max(0,height-30));
             return {x,y,w,30};
@@ -255,6 +256,12 @@ namespace editor
         }
         if(events.click && cursor_free_)
         {
+            // Opaque editor panel blocks picking labels beneath it.
+            const auto panel=editor_panel(events.viewport_width,
+                                         events.viewport_height);
+            if(events.mouse_x>=panel.x && events.mouse_x<panel.x+panel.w &&
+               events.mouse_y>=panel.y && events.mouse_y<panel.y+panel.h)
+                return;
             // Reverse order gives later (foreground) labels priority.
             for(auto it=labels_.rbegin();it!=labels_.rend();++it)
             {
@@ -315,7 +322,7 @@ namespace editor
                     break;
                 }
         const auto heading=wrap("----- "+header_name+" -----",
-            std::max(1,(panel.w-2*panel_padding)/12));
+            std::max(1,(panel.w-2*panel_padding)/glyph_advance_max));
         for(std::size_t line=0;line<heading.size();++line)
             text(out,panel.x+panel.w/2,panel.y+36+int(line)*line_height,
                  heading[line],foreground,draw_command::alignment::center);
@@ -347,7 +354,7 @@ namespace editor
             selected_properties?int(selected_properties->size()):0;
         const int content_x=panel.x+panel_padding;
         const int content_width=std::max(12,panel.w-2*panel_padding);
-        const int columns=std::max(1,content_width/12);
+        const int columns=std::max(1,content_width/glyph_advance_max);
         const int content_y=panel.y+std::max(header_height,
             52+int(heading.size())*line_height);
         const int content_bottom=panel.y+panel.h-panel_padding;
