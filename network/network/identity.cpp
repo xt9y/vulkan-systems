@@ -6,16 +6,14 @@
 #include <mbedtls/x509_crt.h>
 #include <mbedtls/pk.h>
 
+#include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #ifdef _WIN32
@@ -42,23 +40,39 @@ fs::path directory(const std::string& root) {
 #endif
     return path;
 }
+// Atomic first-writer-wins: never overwrite an existing key or trust pin.
 void save_file(const fs::path& path, const char* contents, std::size_t size) {
-    if(fs::is_symlink(path)) throw std::runtime_error("DTLS credential is a symlink");
-    // Use restrictive permissions before writing secrets on POSIX.
 #ifndef _WIN32
-    const int fd=::open(path.c_str(),O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);
-    if(fd<0) throw std::runtime_error("Cannot open DTLS credential file");
+    const int fd=::open(path.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
+    if(fd<0) throw std::runtime_error("Cannot create exclusive DTLS identity or trust pin");
     std::size_t written=0;
     while(written<size) {
         const auto n=::write(fd,contents+written,size-written);
-        if(n<=0) {::close(fd);throw std::runtime_error("Cannot write DTLS credential file");}
+        if(n<=0) {
+            ::close(fd);
+            throw std::runtime_error("Cannot write DTLS identity or trust pin");
+        }
         written+=static_cast<std::size_t>(n);
     }
-    if(::close(fd)!=0)throw std::runtime_error("Cannot close DTLS credential file");
+    if(::close(fd)!=0)throw std::runtime_error("Cannot close DTLS identity or trust pin");
 #else
-    std::ofstream out(path,std::ios::binary|std::ios::trunc);
-    if(!out || !out.write(contents,static_cast<std::streamsize>(size)) || !out.flush())
-        throw std::runtime_error("Cannot save DTLS credential file");
+    const HANDLE file=CreateFileW(path.c_str(),GENERIC_WRITE,0,nullptr,
+                                  CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE)
+        throw std::runtime_error("Cannot create exclusive DTLS identity or trust pin");
+    std::size_t written=0;
+    while(written<size) {
+        const DWORD count=static_cast<DWORD>(std::min<std::size_t>(
+            size-written,65536));
+        DWORD done=0;
+        if(!WriteFile(file,contents+written,count,&done,nullptr) || done==0) {
+            CloseHandle(file);
+            throw std::runtime_error("Cannot write DTLS identity or trust pin");
+        }
+        written+=done;
+    }
+    if(!CloseHandle(file))
+        throw std::runtime_error("Cannot close DTLS identity or trust pin");
 #endif
 }
 std::string hex(const unsigned char* bytes,std::size_t size) {
@@ -190,9 +204,18 @@ bool verify_or_pin(const std::string& root,const std::string& peer_id,
     // First use cannot authenticate the endpoint independently. On later
     // connections a changed server key is rejected.
     const auto value=expected+"\n";
-    save_file(path,value.data(),value.size());
-    std::cerr<<"DTLS: first-use server key pinned for "<<peer_id
-             <<" (SHA256 SPKI "<<expected<<")\n";
-    return true;
+    try {
+        save_file(path,value.data(),value.size());
+        std::cerr<<"DTLS: first-use server key pinned for "<<peer_id
+                 <<" (SHA256 SPKI "<<expected<<")\n";
+        return true;
+    } catch(...) {
+        // Another process might have pinned this identity simultaneously.
+        // Accept only the same public key, never overwrite a conflicting pin.
+        if(fs::is_symlink(path) || !fs::is_regular_file(path))return false;
+        std::ifstream in(path,std::ios::binary);
+        std::string known;
+        return bool(in && std::getline(in,known) && known==expected);
+    }
 }
 } // namespace net::secure::identity
