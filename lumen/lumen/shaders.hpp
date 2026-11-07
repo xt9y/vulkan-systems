@@ -4,68 +4,7 @@
 // Stage 2: original Cornell geometry, direct area-light shadows and composite.
 namespace lumen::shaders {
 
-inline constexpr const char* geometry_vert=R"glsl(#version 450
-layout(location=0) in vec3 position;
-layout(location=1) in vec3 normal;
-layout(location=2) in vec3 albedo;
-layout(location=3) in vec3 emission;
-layout(location=4) in uint face_index;
-
-layout(location=0) out vec3 world_position;
-layout(location=1) out vec3 surface_normal;
-layout(location=2) out vec3 surface_albedo;
-layout(location=3) out vec3 surface_emission;
-layout(location=4) flat out uint surface_index;
-
-layout(push_constant) uniform Camera {
-    vec4 eye;
-    vec4 right;
-    vec4 up;
-    vec4 projection; // tan(fov/2), aspect, near, far
-} camera;
-
-void main()
-{
-    vec3 relative=position-camera.eye.xyz;
-    vec3 forward=cross(camera.up.xyz,camera.right.xyz);
-    float view_x=dot(relative,camera.right.xyz);
-    float view_y=dot(relative,camera.up.xyz);
-    float view_z=dot(relative,forward);
-    float n=camera.projection.z;
-    float f=camera.projection.w;
-    float z=view_z*f/(f-n)-n*f/(f-n);
-    gl_Position=vec4(view_x/(camera.projection.x*camera.projection.y),
-                    -view_y/camera.projection.x,z,view_z);
-    world_position=position;
-    surface_normal=normal;
-    surface_albedo=albedo;
-    surface_emission=emission;
-    surface_index=face_index;
-}
-)glsl";
-
-inline constexpr const char* geometry_frag=R"glsl(#version 450
-layout(location=0) in vec3 world_position;
-layout(location=1) in vec3 surface_normal;
-layout(location=2) in vec3 surface_albedo;
-layout(location=3) in vec3 surface_emission;
-layout(location=4) flat in uint surface_index;
-layout(location=0) out vec4 hdr_color;
-
-// These are the same sixteen original Cornell faces as path-tracer-bak.
-// Precomputed inverse Gram coefficients make shadow intersections cheap.
-struct Face {
-    vec4 origin,u,v,normal,albedo,emission,metric;
-};
-layout(std430,set=0,binding=0) readonly buffer CornellFaces {
-    Face faces[];
-};
-const float PI=3.14159265358979323846;
-const float EPSILON=0.0015;
-const int FACE_COUNT=16;
-const int CARD_SIZE=64;
-layout(set=0,binding=3) uniform sampler2D surface_cards;
-
+inline constexpr const char* shared_tracing=R"glsl(
 vec3 cached_albedo(vec3 position,uint face_id)
 {
     Face f=faces[face_id];
@@ -232,6 +171,122 @@ vec3 direct_area_light(vec3 position,vec3 normal,vec3 albedo)
     return albedo*(radiance/(4.0*PI));
 }
 
+)glsl";
+
+inline constexpr const char* geometry_vert=R"glsl(#version 450
+layout(location=0) in vec3 position;
+layout(location=1) in vec3 normal;
+layout(location=2) in vec3 albedo;
+layout(location=3) in vec3 emission;
+layout(location=4) in uint face_index;
+
+layout(location=0) out vec3 world_position;
+layout(location=1) out vec3 surface_normal;
+layout(location=2) out vec3 surface_albedo;
+layout(location=3) out vec3 surface_emission;
+layout(location=4) flat out uint surface_index;
+
+layout(push_constant) uniform Camera {
+    vec4 eye;
+    vec4 right;
+    vec4 up;
+    vec4 projection; // tan(fov/2), aspect, near, far
+} camera;
+
+void main()
+{
+    vec3 relative=position-camera.eye.xyz;
+    vec3 forward=cross(camera.up.xyz,camera.right.xyz);
+    float view_x=dot(relative,camera.right.xyz);
+    float view_y=dot(relative,camera.up.xyz);
+    float view_z=dot(relative,forward);
+    float n=camera.projection.z;
+    float f=camera.projection.w;
+    float z=view_z*f/(f-n)-n*f/(f-n);
+    gl_Position=vec4(view_x/(camera.projection.x*camera.projection.y),
+                    -view_y/camera.projection.x,z,view_z);
+    world_position=position;
+    surface_normal=normal;
+    surface_albedo=albedo;
+    surface_emission=emission;
+    surface_index=face_index;
+}
+)glsl";
+
+inline constexpr const char* geometry_frag=R"glsl(#version 450
+layout(location=0) in vec3 world_position;
+layout(location=1) in vec3 surface_normal;
+layout(location=2) in vec3 surface_albedo;
+layout(location=3) in vec3 surface_emission;
+layout(location=4) flat in uint surface_index;
+layout(location=0) out vec4 hdr_color;
+
+// These are the same sixteen original Cornell faces as path-tracer-bak.
+// Precomputed inverse Gram coefficients make shadow intersections cheap.
+struct Face {
+    vec4 origin,u,v,normal,albedo,emission,metric;
+};
+layout(std430,set=0,binding=0) readonly buffer CornellFaces {
+    Face faces[];
+};
+const float PI=3.14159265358979323846;
+const float EPSILON=0.0015;
+const int FACE_COUNT=16;
+const int CARD_SIZE=64;
+layout(set=0,binding=3) uniform sampler2D surface_cards;
+
+/* LUMEN_SHARED_TRACING */
+
+struct Probe {
+    vec4 l0,lx,ly,lz;
+};
+layout(std430,set=0,binding=4) readonly buffer RadianceProbes {
+    Probe probes[];
+};
+const ivec3 PROBE_GRID=ivec3(12,8,12);
+const vec3 GRID_MIN=vec3(.25,.24,.25);
+const vec3 GRID_MAX=vec3(5.30,5.22,5.34);
+
+vec3 indirect_irradiance(vec3 position,vec3 normal)
+{
+    vec3 biased=position+normal*.075;
+    vec3 coordinate=clamp(
+        (biased-GRID_MIN)/(GRID_MAX-GRID_MIN)*vec3(PROBE_GRID-1),
+        vec3(0.0),vec3(PROBE_GRID-1)-vec3(.001));
+    ivec3 base=ivec3(floor(coordinate));
+    vec3 fraction=fract(coordinate);
+    vec3 sum=vec3(0.0);
+    float weights=0.0;
+    for(int z=0;z<2;z++)
+    for(int y=0;y<2;y++)
+    for(int x=0;x<2;x++)
+    {
+        ivec3 cell=base+ivec3(x,y,z);
+        uint id=uint(cell.x+cell.y*12+cell.z*96);
+        Probe probe=probes[id];
+        if(probe.l0.w<.5)continue;
+        vec3 probe_pos=mix(GRID_MIN,GRID_MAX,
+                           vec3(cell)/vec3(PROBE_GRID-1));
+        vec3 toward=probe_pos-position;
+        float distance=length(toward);
+        // Normal-biased interpolation avoids sampling deeply behind walls
+        // and rejects cache probes underneath the receiver surface.
+        float facing=clamp((dot(normal,toward)/max(distance,.01)+.15)*2.0,
+                            0.0,1.0);
+        float weight=(x==0?1.0-fraction.x:fraction.x)*
+                     (y==0?1.0-fraction.y:fraction.y)*
+                     (z==0?1.0-fraction.z:fraction.z);
+        weight*=max(.002,facing*facing);
+        vec3 irradiance=probe.l0.rgb+
+            (2.0/3.0)*(probe.lx.rgb*normal.x+
+                        probe.ly.rgb*normal.y+
+                        probe.lz.rgb*normal.z);
+        sum+=max(irradiance,vec3(0.0))*weight;
+        weights+=weight;
+    }
+    return weights>.0001?sum/weights:vec3(0.0);
+}
+
 void main()
 {
     if(any(greaterThan(surface_emission,vec3(0.0))))
@@ -240,9 +295,10 @@ void main()
         return;
     }
     vec3 normal=normalize(surface_normal);
-    vec3 direct=direct_area_light(world_position,normal,
-                                  cached_albedo(world_position,surface_index));
-    hdr_color=vec4(max(direct,vec3(0.0)),1.0);
+    vec3 albedo=cached_albedo(world_position,surface_index);
+    vec3 direct=direct_area_light(world_position,normal,albedo);
+    vec3 indirect=albedo*indirect_irradiance(world_position,normal);
+    hdr_color=vec4(max(direct+indirect,vec3(0.0)),1.0);
 }
 )glsl";
 
@@ -266,6 +322,146 @@ void main()
     // Stage 4 material cards: colors/emission stay in world-independent UV
     // space. Future stages will add lighting caches and card recapture.
     imageStore(cards,pixel,vec4(f.albedo.rgb,1.0));
+}
+)glsl";
+
+
+inline constexpr const char* radiance_comp=R"glsl(#version 450
+layout(local_size_x=64,local_size_y=1,local_size_z=1) in;
+struct Face {
+    vec4 origin,u,v,normal,albedo,emission,metric;
+};
+layout(std430,set=0,binding=0) readonly buffer CornellFaces {
+    Face faces[];
+};
+layout(set=0,binding=3) uniform sampler2D surface_cards;
+const float PI=3.14159265358979323846;
+const float EPSILON=0.0015;
+const int FACE_COUNT=16;
+const int CARD_SIZE=64;
+
+/* LUMEN_SHARED_TRACING */
+
+struct Probe {
+    vec4 l0,lx,ly,lz;
+};
+layout(std430,set=0,binding=4) buffer RadianceProbes {
+    Probe probes[];
+};
+layout(push_constant) uniform Update {
+    uint frame_number;
+    uint revision;
+} params;
+
+const ivec3 PROBE_GRID=ivec3(12,8,12);
+const uint PROBE_COUNT=1152u;
+const uint UPDATE_COUNT=96u;
+const int RAYS_PER_PROBE=8;
+const vec3 GRID_MIN=vec3(.25,.24,.25);
+const vec3 GRID_MAX=vec3(5.30,5.22,5.34);
+
+uint random_bits(inout uint state)
+{
+    state ^= state<<13;
+    state ^= state>>17;
+    state ^= state<<5;
+    return state;
+}
+float random01(inout uint state)
+{
+    return float(random_bits(state)>>8)*(1.0/16777216.0);
+}
+vec3 probe_position(ivec3 cell)
+{
+    return mix(GRID_MIN,GRID_MAX,
+               vec3(cell)/vec3(PROBE_GRID-1));
+}
+float cross2(vec2 a,vec2 b)
+{
+    return a.x*b.y-a.y*b.x;
+}
+bool inside_box(vec3 p,vec2 a,vec2 b,vec2 c,vec2 d,float top)
+{
+    if(p.y<0.0 || p.y>top)return false;
+    vec2 v=p.xz;
+    float s0=cross2(b-a,v-a);
+    float s1=cross2(c-b,v-b);
+    float s2=cross2(d-c,v-c);
+    float s3=cross2(a-d,v-d);
+    return (s0<=0.0 && s1<=0.0 && s2<=0.0 && s3<=0.0) ||
+           (s0>=0.0 && s1>=0.0 && s2>=0.0 && s3>=0.0);
+}
+bool occupied(vec3 p)
+{
+    return inside_box(p,vec2(1.30,.65),vec2(.82,2.25),
+                      vec2(2.40,2.72),vec2(2.90,1.14),1.65) ||
+           inside_box(p,vec2(4.23,2.47),vec2(2.65,2.96),
+                      vec2(3.14,4.56),vec2(4.72,4.06),3.30);
+}
+void main()
+{
+    uint thread=gl_GlobalInvocationID.x;
+    if(thread>=UPDATE_COUNT)return;
+    uint id=(params.frame_number*UPDATE_COUNT+thread)%PROBE_COUNT;
+    ivec3 cell=ivec3(int(id%12u),int((id/12u)%8u),int(id/96u));
+    vec3 origin=probe_position(cell);
+    if(occupied(origin))
+    {
+        probes[id].l0=vec4(0.0);
+        probes[id].lx=vec4(0.0);
+        probes[id].ly=vec4(0.0);
+        probes[id].lz=vec4(0.0);
+        return;
+    }
+
+    uint seed=(id+1u)*747796405u ^ (params.frame_number+1u)*2891336453u;
+    random_bits(seed);
+    vec3 l0=vec3(0.0),lx=vec3(0.0),ly=vec3(0.0),lz=vec3(0.0);
+    float spin=2.0*PI*random01(seed);
+    for(int ray=0;ray<RAYS_PER_PROBE;ray++)
+    {
+        // Uniform-sphere stratification with per-update rotation.
+        float z=1.0-2.0*(float(ray)+random01(seed))/float(RAYS_PER_PROBE);
+        float a=spin+2.3999632*float(ray)+6.2831853*random01(seed);
+        float radial=sqrt(max(0.0,1.0-z*z));
+        vec3 direction=vec3(cos(a)*radial,sin(a)*radial,z);
+        RayHit hit=trace_scene(origin,direction,20.0,false);
+        vec3 incident=vec3(0.0);
+        if(hit.primitive!=INVALID)
+        {
+            uint face_id=hit.primitive/2u;
+            Face hit_face=faces[face_id];
+            vec3 normal=hit_face.normal.xyz;
+            // Discard backfaces. The room surfaces face inward; box faces
+            // point outward, so backface hits indicate unsuitable probes.
+            if(dot(normal,-direction)>0.0)
+            {
+                vec3 position=origin+direction*hit.distance;
+                vec3 reflectance=cached_albedo(position,face_id);
+                // Exactly one secondary Lambertian bounce. Direct lighting
+                // at the secondary hit comes from the visible ceiling emitter.
+                incident=direct_area_light(position,normal,reflectance);
+            }
+        }
+        incident=clamp(incident,vec3(0.0),vec3(8.0));
+        l0+=incident;
+        lx+=incident*direction.x;
+        ly+=incident*direction.y;
+        lz+=incident*direction.z;
+    }
+
+    float inv=1.0/float(RAYS_PER_PROBE);
+    l0*=inv;
+    lx*=3.0*inv;
+    ly*=3.0*inv;
+    lz*=3.0*inv;
+    Probe previous=probes[id];
+    float count=min(previous.l0.w+1.0,32.0);
+    float blend=1.0/count;
+    probes[id].l0=vec4(mix(previous.l0.rgb,l0,blend),count);
+    probes[id].lx=vec4(mix(previous.lx.rgb,lx,blend),0.0);
+    probes[id].ly=vec4(mix(previous.ly.rgb,ly,blend),0.0);
+    probes[id].lz=vec4(mix(previous.lz.rgb,lz,blend),0.0);
 }
 )glsl";
 
