@@ -5,8 +5,8 @@
 
 namespace lumen {
 
-// Lumen-style Cornell demo: BVH direct shadows, material cards, world
-// radiance cache, screen probes and screen-ray tracing with BVH fallback.
+// Cornell Lumen prototype: separately lit surface cards, world radiance
+// probes and directional screen-radiance final gather with scene fallback.
 enum class demo_scene : std::uint8_t {
     none,
     cornell_box
@@ -18,7 +18,7 @@ struct settings {
     std::uint32_t rays_per_probe=4;
     // Internal raster resolution scale, capped at 1280 pixels wide by Lumen.
     float tracing_scale=1.0f;
-    // Stage 7 screen-space hit tracing; ambiguous rays fall back to the BVH.
+    // Depth-screen ray tracing, with a geometry-BVH fallback on misses.
     float screen_trace_distance=3.0f;
     std::uint32_t screen_rays_per_probe=4; // 1..8 directional rays/frame
 };
@@ -63,7 +63,8 @@ struct gbuffer {
     vk::Extent2D extent{};
 };
 
-// Indirect/reflection outputs stay null until the corresponding stages exist.
+// Standalone outputs remain null. Demo GI is composed internally until a
+// reusable full-resolution lighting-output contract is implemented.
 struct outputs {
     vk::Image diffuse{};
     vk::Image reflections{};
@@ -99,10 +100,10 @@ public:
     void set_scene(const scene& geometry);
     void set_lighting(const lighting& lights);
     void set_gbuffer(const gbuffer& surfaces);
-    void invalidate(); // Future cache invalidation on scene/light changes.
+    void invalidate(); // Rebuild Cornell material, direct/indirect and probe caches.
 
     // record() runs before the host render pass; compose() runs inside it.
-    // Records the Cornell direct-light pass and its presentation composite.
+    // Records the internal demo, all caches and screen radiance integration.
     void record(vk::CommandBuffer command, const frame& current_frame);
     void compose(vk::CommandBuffer command);
     outputs result() const noexcept;
