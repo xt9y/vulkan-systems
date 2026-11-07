@@ -17,6 +17,25 @@ vec3 cached_albedo(vec3 position,uint face_id)
     return texelFetch(surface_cards,texel,0).rgb;
 }
 
+
+#ifdef LUMEN_LIT_TEXTURE
+layout(set=0,binding=9) uniform sampler2D lit_cards;
+vec3 cached_lighting(vec3 position,uint face_id)
+{
+    Face face=faces[face_id];
+    if(any(greaterThan(face.emission.rgb,vec3(0.0))))
+        return face.emission.rgb;
+    vec3 d=position-face.origin.xyz;
+    vec2 q=vec2(dot(d,face.u.xyz),dot(d,face.v.xyz));
+    vec2 uv=vec2(q.x*face.metric.x+q.y*face.metric.y,
+                  q.x*face.metric.y+q.y*face.metric.z);
+    ivec2 card=ivec2(int(face_id%4u),int(face_id/4u));
+    ivec2 pixel=card*CARD_SIZE+
+        ivec2(clamp(uv,vec2(0.0),vec2(.9999))*float(CARD_SIZE));
+    return max(texelFetch(lit_cards,pixel,0).rgb,vec3(0.0));
+}
+#endif
+
 // Uses the same std430 BVH node and triangle layout as VulkanBVH.
 struct Node {
     vec4 lo,hi;
@@ -331,6 +350,52 @@ void main()
 )glsl";
 
 
+inline constexpr const char* lighting_comp=R"glsl(#version 450
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+struct Face { vec4 origin,u,v,normal,albedo,emission,metric; };
+layout(std430,set=0,binding=0) readonly buffer CornellFaces { Face faces[]; };
+layout(set=0,binding=3) uniform sampler2D surface_cards;
+const float PI=3.14159265358979323846;
+const float EPSILON=.0015;
+const int FACE_COUNT=16;
+const int CARD_SIZE=64;
+/* LUMEN_SHARED_TRACING */
+/* LUMEN_SHARED_IRRADIANCE */
+layout(set=0,binding=9) uniform sampler2D previous_lighting;
+layout(rgba16f,set=0,binding=10) writeonly uniform image2D next_lighting;
+layout(push_constant) uniform LightUpdate {
+    uint card_to_update;
+    uint first_frame;
+    uint reset_history;
+    uint reserved;
+} params;
+void main()
+{
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(pixel,ivec2(256))))return;
+    uint face_id=uint(pixel.x/64+(pixel.y/64)*4);
+    vec3 current=vec3(0);
+    if(params.first_frame==0u && params.reset_history==0u)
+        current=texelFetch(previous_lighting,pixel,0).rgb;
+    if(face_id==params.card_to_update || params.first_frame!=0u ||
+       params.reset_history!=0u)
+    {
+        Face face=faces[face_id];
+        vec2 uv=(vec2(pixel%64)+.5)/64.0;
+        vec3 position=face.origin.xyz+uv.x*face.u.xyz+uv.y*face.v.xyz;
+        vec3 normal=normalize(face.normal.xyz);
+        vec3 albedo=cached_albedo(position,face_id);
+        if(any(greaterThan(face.emission.rgb,vec3(0.0))))
+            current=face.emission.rgb;
+        else
+            current=direct_area_light(position,normal,albedo)+
+                (params.first_frame!=0u?vec3(0.0):
+                    albedo*indirect_irradiance(position,normal));
+    }
+    imageStore(next_lighting,pixel,vec4(max(current,vec3(0.0)),1.0));
+}
+)glsl";
+
 inline constexpr const char* radiance_comp=R"glsl(#version 450
 layout(local_size_x=64,local_size_y=1,local_size_z=1) in;
 struct Face {
@@ -345,6 +410,7 @@ const float EPSILON=0.0015;
 const int FACE_COUNT=16;
 const int CARD_SIZE=64;
 
+#define LUMEN_LIT_TEXTURE
 /* LUMEN_SHARED_TRACING */
 
 struct Probe {
@@ -444,10 +510,9 @@ void main()
             if(dot(normal,-direction)>0.0)
             {
                 vec3 position=origin+direction*hit.distance;
-                vec3 reflectance=cached_albedo(position,face_id);
-                // Exactly one secondary Lambertian bounce. Direct lighting
-                // at the secondary hit comes from the visible ceiling emitter.
-                incident=direct_area_light(position,normal,reflectance);
+                // Hit-lighting includes emissive energy and cached
+                // reflected direct/indirect radiance from the surface card.
+                incident=cached_lighting(position,face_id);
             }
         }
         incident=clamp(incident,vec3(0.0),vec3(8.0));
@@ -475,206 +540,173 @@ void main()
 
 inline constexpr const char* screen_comp=R"glsl(#version 450
 layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
-struct Face {
-    vec4 origin,u,v,normal,albedo,emission,metric;
-};
-layout(std430,set=0,binding=0) readonly buffer CornellFaces {
-    Face faces[];
-};
+struct Face {vec4 origin,u,v,normal,albedo,emission,metric;};
+layout(std430,set=0,binding=0) readonly buffer CornellFaces { Face faces[]; };
 layout(set=0,binding=3) uniform sampler2D surface_cards;
+#define LUMEN_LIT_TEXTURE
 const float PI=3.14159265358979323846;
-const float EPSILON=0.0015;
+const float EPSILON=.0015;
 const int FACE_COUNT=16;
 const int CARD_SIZE=64;
 /* LUMEN_SHARED_TRACING */
 /* LUMEN_SHARED_IRRADIANCE */
-
 layout(set=0,binding=5) uniform sampler2D scene_color;
 layout(set=0,binding=6) uniform sampler2D scene_depth;
-layout(rgba16f,set=0,binding=7) writeonly uniform image2D screen_light;
-layout(rgba16f,set=0,binding=8) writeonly uniform image2D screen_meta;
-
+// 8x8 octahedral directional atlas for each 16x16 screen probe.
+layout(rgba16f,set=0,binding=7) uniform image2D screen_directions;
+layout(rgba16f,set=0,binding=8) uniform image2D screen_meta;
+layout(rgba16f,set=0,binding=10) uniform image2D screen_gather;
 layout(push_constant) uniform Camera {
     vec4 eye,right,up,projection;
-    vec4 trace_parameters; // max ray distance, screen correction strength
+    vec4 trace_parameters; // range, reserved, history valid, frame index
 } camera;
-
 float linear_depth(float z)
 {
     float n=camera.projection.z,f=camera.projection.w;
     return n*f/max(f-z*(f-n),.00001);
 }
-// Reproject a world ray through the current depth/color buffer. Screen hits
-// provide actual visible-surface lighting; ambiguous or offscreen rays fall
-// back to the geometry BVH rather than inventing a screen-space miss.
-bool trace_screen(vec3 origin,vec3 direction,float limit,uint receiver,
-                  out vec3 radiance)
+vec3 oct_decode(vec2 e)
+{
+    vec3 v=vec3(e,1.0-abs(e.x)-abs(e.y));
+    if(v.z<0.0)
+        v.xy=(1.0-abs(v.yx))*sign(v.xy);
+    return normalize(v);
+}
+vec3 distant_radiance(vec3 position,vec3 direction)
+{
+    vec3 coordinate=clamp(
+        (position-GRID_MIN)/(GRID_MAX-GRID_MIN)*vec3(PROBE_GRID-1),
+        vec3(0),vec3(PROBE_GRID-1));
+    ivec3 cell=ivec3(round(coordinate));
+    Probe p=probes[cell.x+12*cell.y+96*cell.z];
+    if(p.l0.w<.5)return vec3(0);
+    return max(p.l0.rgb+p.lx.rgb*direction.x+
+               p.ly.rgb*direction.y+p.lz.rgb*direction.z,vec3(0));
+}
+bool screen_hit(vec3 origin,vec3 direction,float limit,
+                uint receiver,out vec3 radiance)
 {
     vec3 forward=cross(camera.up.xyz,camera.right.xyz);
     ivec2 size=textureSize(scene_depth,0);
-    radiance=vec3(0.0);
     for(int i=0;i<8;i++)
     {
-        // Quadratic spacing improves near-contact ray coverage at the same
-        // fixed eight depth fetches (important on low-end GPUs).
-        float step=(float(i)+1.0)/8.0;
-        float t=limit*step*step;
-        vec3 relative=origin+direction*t-camera.eye.xyz;
-        float view_z=dot(relative,forward);
-        if(view_z<camera.projection.z || view_z>=camera.projection.w)
-            return false;
+        float q=float(i+1)/8.0;
+        vec3 relative=origin+direction*(limit*q*q)-camera.eye.xyz;
+        float vz=dot(relative,forward);
+        if(vz<camera.projection.z || vz>camera.projection.w)return false;
         vec2 ndc=vec2(
             dot(relative,camera.right.xyz)/
-                (view_z*camera.projection.x*camera.projection.y),
-           -dot(relative,camera.up.xyz)/
-                (view_z*camera.projection.x));
+                (vz*camera.projection.x*camera.projection.y),
+           -dot(relative,camera.up.xyz)/(vz*camera.projection.x));
         if(any(greaterThan(abs(ndc),vec2(.98))))return false;
         ivec2 pixel=clamp(ivec2((ndc*.5+.5)*vec2(size)),
                           ivec2(0),size-1);
         float z=texelFetch(scene_depth,pixel,0).r;
         if(z>=.99999)continue;
         float depth=linear_depth(z);
-        float gap=view_z-depth;
-        // Thickness avoids accepting an arbitrary foreground silhouette.
-        if(gap<0.0 || gap>max(.10,.04*t))continue;
-        vec4 sample_color=texelFetch(scene_color,pixel,0);
-        uint face_id=uint(sample_color.a+.5);
+        if(vz<depth || vz-depth>max(.08,.025*limit))continue;
+        uint face_id=uint(texelFetch(scene_color,pixel,0).a+.5);
         if(face_id<1u || face_id>16u || face_id==receiver)continue;
-        if(dot(faces[face_id-1u].normal.xyz,-direction)<.05)continue;
-        radiance=max(sample_color.rgb,vec3(0.0));
+        if(dot(faces[face_id-1u].normal.xyz,-direction)<=.01)continue;
+        vec2 ndc_center=(vec2(pixel)+.5)/vec2(size)*2.0-1.0;
+        vec3 hit=camera.eye.xyz+
+            (forward+camera.right.xyz*ndc_center.x*
+                camera.projection.x*camera.projection.y-
+                camera.up.xyz*ndc_center.y*camera.projection.x)*depth;
+        radiance=cached_lighting(hit,face_id-1u);
         return true;
     }
     return false;
 }
-
-bool trace_fallback(vec3 origin,vec3 direction,float limit,
-                    out vec3 radiance)
+vec3 scene_radiance(vec3 origin,vec3 direction,float max_distance)
 {
-    radiance=vec3(0.0);
-    RayHit hit=trace_scene(origin,direction,limit,false);
-    if(hit.primitive==INVALID || hit.overflow)return false;
+    RayHit hit=trace_scene(origin,direction,max_distance,false);
+    if(hit.primitive==INVALID || hit.overflow)
+        return distant_radiance(origin,direction);
     uint face_id=hit.primitive/2u;
-    if(face_id>=uint(FACE_COUNT-1))return false;
-    Face surface=faces[face_id];
-    if(dot(surface.normal.xyz,-direction)<.05)return false;
-    vec3 hit_position=origin+direction*hit.distance;
-    vec3 reflectance=cached_albedo(hit_position,face_id);
-    radiance=direct_area_light(hit_position,surface.normal.xyz,reflectance);
-    return true;
+    Face face=faces[face_id];
+    if(dot(face.normal.xyz,-direction)<=0.0)return vec3(0);
+    return cached_lighting(origin+direction*hit.distance,face_id);
 }
-
-vec3 screen_trace_correction(ivec2 tile,vec3 position,vec3 normal,
-                             uint receiver,vec3 world_irradiance)
+vec3 directional_radiance(vec3 origin,vec3 direction,
+                          float max_distance,uint face_id)
 {
-    if(camera.trace_parameters.y<=0.0)return vec3(0.0);
-    // One fixed cosine-biased hemisphere direction per 16x16 screen probe.
-    // Stable over camera frames: no temporal noise or history buffers.
-    vec3 axis=abs(normal.y)<.9?vec3(0.0,1.0,0.0):vec3(1.0,0.0,0.0);
-    vec3 tangent=normalize(cross(axis,normal));
-    vec3 bitangent=cross(normal,tangent);
-    float seed=fract(sin(dot(vec2(tile),vec2(127.1,311.7)))*43758.5453);
-    float angle=6.2831853*seed;
-    vec3 direction=normalize(normal*.72+
-        (cos(angle)*tangent+sin(angle)*bitangent)*.694);
-    vec3 origin=position+normal*.018;
-    vec3 radiance;
-    float limit=camera.trace_parameters.x;
-    bool hit=trace_screen(origin,direction,limit,receiver,radiance);
-    if(!hit)
-        hit=trace_fallback(origin,direction,limit,radiance);
-    if(!hit)return vec3(0.0);
-
-    // Screen-radiance reuse is a detail correction, not another complete
-    // diffuse lighting estimator. Limit it so one ray per tile cannot
-    // overpower the stable world radiance cache or introduce bright pixels.
-    vec3 delta=clamp(radiance-world_irradiance,vec3(-.35),vec3(.35));
-    return delta*camera.trace_parameters.y;
+    vec3 result=vec3(0);
+    if(screen_hit(origin,direction,max_distance,face_id,result))
+        return result;
+    return scene_radiance(origin,direction,max_distance);
 }
-
 void main()
 {
     ivec2 tile=ivec2(gl_GlobalInvocationID.xy);
-    ivec2 tiles=imageSize(screen_light);
-    if(any(greaterThanEqual(tile,tiles)))return;
+    ivec2 grid=imageSize(screen_gather);
+    if(any(greaterThanEqual(tile,grid)))return;
     ivec2 size=textureSize(scene_color,0);
     ivec2 pixel=min(tile*16+ivec2(8),size-1);
     vec4 sample_color=texelFetch(scene_color,pixel,0);
     float z=texelFetch(scene_depth,pixel,0).r;
     uint id=uint(sample_color.a+.5);
-    if(id<1u || id>16u || z>=.99999)
+    bool valid=id>=1u && id<=16u && z<.99999 &&
+        all(lessThanEqual(faces[id-1u].emission.rgb,vec3(0)));
+    if(!valid)
     {
-        imageStore(screen_light,tile,vec4(0.0));
-        imageStore(screen_meta,tile,vec4(0.0));
+        imageStore(screen_meta,tile,vec4(0));
+        imageStore(screen_gather,tile,vec4(0));
         return;
     }
-    Face surface=faces[id-1u];
-    if(any(greaterThan(surface.emission.rgb,vec3(0.0))))
-    {
-        imageStore(screen_light,tile,vec4(0.0));
-        imageStore(screen_meta,tile,vec4(0.0));
-        return;
-    }
-
     float view_z=linear_depth(z);
     vec2 ndc=(vec2(pixel)+.5)/vec2(size)*2.0-1.0;
     vec3 forward=cross(camera.up.xyz,camera.right.xyz);
     vec3 position=camera.eye.xyz+
-        (forward+camera.right.xyz*ndc.x*camera.projection.x*camera.projection.y-
-         camera.up.xyz*ndc.y*camera.projection.x)*view_z;
-    vec3 normal=normalize(surface.normal.xyz);
-
-    // Screen probes reuse world-space incident light, but replace its
-    // interpolation with visibility-tested local gathering at the receiver.
-    vec3 unoccluded=indirect_irradiance(position,normal);
-    vec3 biased=position+normal*.075;
-    vec3 coordinate=clamp(
-        (biased-GRID_MIN)/(GRID_MAX-GRID_MIN)*vec3(PROBE_GRID-1),
-        vec3(0.0),vec3(PROBE_GRID-1)-vec3(.001));
-    ivec3 base=ivec3(floor(coordinate));
-    vec3 fraction=fract(coordinate);
-    vec3 gathered=vec3(0.0);
-    float weights=0.0;
-    int tests=0;
-    for(int dz=0;dz<2;dz++)
-    for(int dy=0;dy<2;dy++)
-    for(int dx=0;dx<2;dx++)
+        (forward+camera.right.xyz*ndc.x*camera.projection.x*
+         camera.projection.y-camera.up.xyz*ndc.y*camera.projection.x)*view_z;
+    vec3 normal=normalize(faces[id-1u].normal.xyz);
+    bool reuse=false;
+    if(camera.trace_parameters.z>.5)
     {
-        ivec3 cell=base+ivec3(dx,dy,dz);
-        uint probe_id=uint(cell.x+cell.y*12+cell.z*96);
-        Probe probe=probes[probe_id];
-        if(probe.l0.w<.5)continue;
-        vec3 probe_pos=mix(GRID_MIN,GRID_MAX,
-                           vec3(cell)/vec3(PROBE_GRID-1));
-        vec3 delta=probe_pos-position;
-        float distance=length(delta);
-        float facing=clamp((dot(normal,delta)/max(distance,.01)+.15)*2.0,
-                            0.0,1.0);
-        float w=(dx==0?1.0-fraction.x:fraction.x)*
-                (dy==0?1.0-fraction.y:fraction.y)*
-                (dz==0?1.0-fraction.z:fraction.z);
-        w*=max(.002,facing*facing);
-        if(w<=.0001)continue;
-        // Limit local BVH visibility tests to two per screen probe on M1.
-        if(tests<2 && w>.04 && distance>.05 && facing>.05)
-        {
-            tests++;
-            vec3 direction=delta/distance;
-            if(blocked(position+normal*.012,direction,max(.01,distance-.03)))
-                w*=.02;
-        }
-        vec3 irradiance=probe.l0.rgb+
-            (2.0/3.0)*(probe.lx.rgb*normal.x+
-                        probe.ly.rgb*normal.y+
-                        probe.lz.rgb*normal.z);
-        gathered+=max(irradiance,vec3(0.0))*w;
-        weights+=w;
+        vec4 old_meta=imageLoad(screen_meta,tile);
+        vec4 old_gather=imageLoad(screen_gather,tile);
+        reuse=abs(old_gather.a-float(id))<.1 &&
+              distance(old_meta.xyz,position)<.10;
     }
-    vec3 local=weights>.0001?gathered/weights:unoccluded;
-    vec3 correction=clamp(local-unoccluded,-unoccluded*.8,vec3(.4));
-    correction+=screen_trace_correction(tile,position,normal,id,unoccluded);
-    correction*=cached_albedo(position,id-1u);
-    imageStore(screen_light,tile,vec4(correction,float(id)));
+    uint frame=uint(camera.trace_parameters.w);
+    int phase=int(frame%16u);
+    vec3 integrated=vec3(0);
+    float total_weight=0.0;
+    for(int i=0;i<64;i++)
+    {
+        ivec2 octant=ivec2(i%8,i/8);
+        ivec2 atlas_pixel=tile*8+octant;
+        vec2 uv=(vec2(octant)+.5)/8.0*2.0-1.0;
+        vec3 direction=oct_decode(uv);
+        float cosine=max(dot(normal,direction),0.0);
+        if(cosine<=0.0)continue;
+        vec4 old=vec4(0);
+        if(reuse)old=imageLoad(screen_directions,atlas_pixel);
+        vec3 Li=old.a>.5?old.rgb:distant_radiance(position,direction);
+        float count=old.a;
+        if((i%16)==phase)
+        {
+            vec3 fresh=directional_radiance(position+normal*.012,
+                         direction,clamp(camera.trace_parameters.x,.5,8.0),id);
+            count=min(count+1.0,24.0);
+            Li=mix(Li,fresh,1.0/count);
+        }
+        imageStore(screen_directions,atlas_pixel,vec4(Li,count));
+        // Octahedral solid-angle Jacobian and cosine Lambertian weighting.
+        float area=pow(abs(direction.x)+abs(direction.y)+abs(direction.z),3.0);
+        float weight=cosine*area;
+        integrated+=Li*weight;
+        total_weight+=weight;
+    }
+    vec3 incoming=total_weight>0.0?integrated/total_weight:vec3(0);
+    vec3 base=indirect_irradiance(position,normal);
+    vec3 albedo=cached_albedo(position,id-1u);
+    // Both terms are hemispherically integrated incoming radiance (E/pi),
+    // unlike the former arbitrary one-ray radiance minus irradiance.
+    vec3 delta=(incoming-base)*albedo;
     imageStore(screen_meta,tile,vec4(position,view_z));
+    imageStore(screen_gather,tile,vec4(delta,float(id)));
 }
 )glsl";
 
@@ -693,7 +725,7 @@ void main()
 inline constexpr const char* composite_frag=R"glsl(#version 450
 layout(set=0,binding=0) uniform sampler2D color_image;
 layout(set=0,binding=1) uniform sampler2D depth_image;
-layout(set=0,binding=2) uniform sampler2D screen_light;
+layout(set=0,binding=2) uniform sampler2D screen_gather;
 layout(set=0,binding=3) uniform sampler2D screen_meta;
 layout(push_constant) uniform Display {
     uint manual_gamma;
@@ -719,7 +751,7 @@ void main()
         vec2 coord=(vec2(pixel)-vec2(8.0))/16.0;
         ivec2 origin=ivec2(floor(coord));
         vec2 fraction=fract(coord);
-        ivec2 probe_size=textureSize(screen_light,0);
+        ivec2 probe_size=textureSize(screen_gather,0);
         vec3 correction=vec3(0.0);
         float sum=0.0;
         for(int y=0;y<2;y++)
@@ -728,7 +760,7 @@ void main()
             ivec2 tile=origin+ivec2(x,y);
             if(any(lessThan(tile,ivec2(0)))||
                any(greaterThanEqual(tile,probe_size)))continue;
-            vec4 light=texelFetch(screen_light,tile,0);
+            vec4 light=texelFetch(screen_gather,tile,0);
             if(abs(light.a-id)>.1)continue;
             vec4 meta=texelFetch(screen_meta,tile,0);
             float difference=abs(meta.a-distance);
@@ -741,7 +773,7 @@ void main()
             sum+=weight;
         }
         if(sum>.001)
-            hdr+=(correction/sum)*min(.75,sum*1.25);
+            hdr+=correction/sum;
     }
     hdr=max(hdr,vec3(0.0));
     vec3 mapped=hdr/(vec3(1.0)+hdr);
