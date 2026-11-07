@@ -5,8 +5,8 @@
 
 namespace lumen {
 
-// Stable Lumen-style renderer API. Stage 2 renders the original Cornell
-// geometry, direct area-light illumination and shadows. GI/reflections are pending.
+// Lumen-style rendering API: Cornell demo with material cards, BVH direct
+// lighting and budgeted world-space diffuse radiance probes. Reflections pending.
 enum class demo_scene : std::uint8_t {
     none,
     cornell_box
@@ -69,6 +69,8 @@ struct outputs {
 // Measured previous-frame GPU time; unavailable on queues without timestamps.
 // Excludes swapchain present and CPU submission/wait time.
 struct performance {
+    float material_cache_ms=0.f;
+    float radiance_cache_ms=0.f;
     float raster_ms=0.f;
     float composite_ms=0.f;
     float total_ms=0.f;
@@ -102,6 +104,7 @@ public:
     outputs result() const noexcept;
     performance gpu_performance() const noexcept;
     bool implemented() const noexcept; // True once the Cornell demo can render.
+    const char* status() const noexcept; // Rendering milestone for terminal logs.
     void reset() noexcept;
 
 private:
