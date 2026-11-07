@@ -1,76 +1,75 @@
-VulkanLumen — Stage 5: world-space directional radiance cache
+VulkanLumen — Stage 6: screen-probe visibility gather
 
-The complete Lumen implementation continues to live in vulkan-systems/lumen/.
-vulkan-experiment remains the same Vulkan window/camera/frame test harness,
-with only its terminal status and per-pass GPU profiling labels updated.
+The VulkanLumen public create/record/compose interface is unchanged.
+vulkan-experiment remains a fixed test harness, with only GPU screen-pass
+timing added to its terminal output.
 
-Scene:
-  - Original 16-face Cornell room and two rotated blocks
-  - Full-resolution primary raster visibility at capped internal resolution
-  - 30-triangle/59-node static VulkanBVH-compatible ray traversal
-  - One deterministic BVH shadow ray per visible fragment
-  - Stage 4 material cards: 16 x 64x64, packed in one RGBA8 256x256 atlas
+Inherited from Stage 5
+  - Exact rotated Cornell box scene, full-size materials and direct shadows
+  - 30-triangle shared-layout static BVH and one direct-shadow ray per fragment
+  - RGBA8 16-card material atlas, updated when dirty
+  - 12x8x12 world-space directional radiance cache, updated incrementally
+  - Default world-cache update budget: 64 probes x 4 rays per frame
+  - Full-resolution primary rasterization capped at 1280 pixels wide on Retina
 
-Stage 5 world-space GI:
-  - A fixed 12x8x12 grid (1152 world-space probes), device-local SSBO
-  - Each probe stores directional radiance as four RGB first-order spherical
-    harmonic coefficients: mean radiance and X/Y/Z directional moments
-  - A bounded round-robin selection updates a fraction of probes per frame
-    (settings.probe_updates_per_frame, default 64, valid 1..1152)
-  - Each updated probe traces settings.rays_per_probe (default 4, valid 1..16)
-    stratified directions across the sphere through the same BVH as shadows
-  - Hits fetch albedo from the material cards and evaluate directly reflected
-    ceiling area light with BVH-tested visibility
-  - The resulting radiance is ONE secondary diffuse bounce: it does not
-    redundantly include the primary receiver's direct light
-  - Probe coefficients accumulate over time with a bounded history of 32
-    probe updates. No per-pixel temporal denoising or screen blur
-  - Surface shading trilinearly blends its nearest valid eight probes with
-    a normal-facing bias and integrates the directional field for the
-    receiver normal, multiplying by the receiver albedo
-  - Probes inside either Cornell block are invalidated; no fake GI values
-  - Probe creation, GPU memory synchronization and cache updates are confined
-    to VulkanLumen::record(). The full scene/host API is unchanged
-  - On invalidate(), the material cache is refreshed and probe history is
-    cleared. Resize() rebuilds all owned GPU resources
-  - The material cache is rebuilt only when dirty; the probe field refreshes
-    incrementally every frame even if the camera does not move
+Screen probes (Stage 6)
+  - Retains Stage 5 full-resolution lighting as the exact fallback.
+  - Rasterized HDR alpha stores the current Cornell surface ID; D32 depth
+    is now stored and sampled in a read-only layout after the render pass.
+  - One probe per 16x16 internal pixels, e.g. 80x45 at 1280x720.
+  - Each probe reconstructs a visible world-space hit position from depth,
+    takes the face normal, and gathers incoming light from nearby world probes.
+  - At most two extra BVH visibility rays per screen probe reject world-space
+    cache samples blocked by other surfaces. The screen-probe result is a
+    correction against the Stage 5 world-cache estimate, not new path noise.
+  - Two small RGBA16F screen-probe images store lighting correction, surface
+    identity and position/linear depth for geometric validation.
+  - The final presentation composite samples up to four neighboring probes.
+    It accepts contributions only when face IDs and view depths agree; when
+    they do not, it displays the unchanged Stage 5 lighting for that pixel.
+  - Only diffuse indirect lighting is adjusted. Full-resolution direct
+    lighting, shadows, geometry edges and emissive surfaces remain untouched.
+  - No per-pixel denoising, neural inference or temporal image accumulation.
 
-Profiling:
-  GPU timestamps now separately report material cache, radiance cache
-  compute, scene raster + shadows, composite and total.
-  CPU-side FPS and max/average frame times are unchanged.
-  GI should become visible after one complete probe sweep. With the default
-  64 updates, 1152 probes take 18 frames (~0.3 seconds at 60 FPS) for first
-  coverage; radiance converges progressively for subsequent seconds.
+Resource and synchronization model
+  1. Optional Surface Cache material capture
+  2. Incremental world radiance cache compute
+  3. Rasterized Cornell HDR color + persistent readable depth
+  4. Screen-probe compute dispatch and image write->read barriers
+  5. Final presentation composite with validated indirect correction
 
-Important limitations:
-  - This is a small first-order directional probe cache, NOT yet Epic's full
-    Lumen world-space radiance cache, surface-lighting atlas or DDGI solution.
-  - No directional depth-moment visibility, relocation, global SDF,
-    screen-probe gather or true multibounce transport yet. Normal facing and
-    invalidating interior probes reduce but do not eliminate light leaks.
-  - Only the internal Cornell scene is traced; generic set_scene mesh handles
-    and external G-buffers remain unimplemented.
-  - The public outputs.diffuse image remains null; diffuse GI currently
-    contributes within the Cornell material shader.
-  - No reflection tracing and no denoisers.
-  - The grid bounds and face count are Cornell-demo constants.
-  - The program may display weak GI for the initial 18 frames during
-    initial probe coverage, followed by progressively more stable color bleed.
-  - No performance guarantee on the base M1; compare the new GPU GI/scene
-    times against the 16.67ms frame budget.
+Performance
+  - GPU timing now includes screen=... ms, in addition to cards, GI,
+    scene, composite and total.
+  - M1's last measured Stage 5 total was around 7.6ms at 60 FPS, with
+    FIFO presentation making CPU frame time ~16.67ms.
+  - Stage 6 adds up to two visibility rays per 16x16 tile and four small
+    light/depth checks per composited pixel. It may increase both the new
+    screen pass and the presentation pass. No 60-FPS guarantee until tested.
+  - The screen probe stage is rebuilt every frame to avoid stale history
+    when the camera moves. The world probes keep their existing bounded
+    temporal samples.
+
+Limitations
+  - This is a visibility-aware screen-probe gather, not yet Epic Lumen's
+    complete screen tracing, adaptive radiance gather or surface-light cache.
+  - Probe spacing is fixed. View-dependent screen probes can still lose
+    detail at thin surfaces or near sharp silhouettes; the fallback and
+    surface/depth validation prevent cross-face blending.
+  - The Cornell test uses analytic flat face normals and a fixed grid.
+    The external scene/G-buffer handles do not yet implement general meshes.
+  - No dedicated reflections, SDF scene tracing, multibounce cache feedback,
+    or per-probe depth-moment/relocation system yet.
 
 Test from vulkan-experiment/
   git pull --ff-only
   rm -f c.lock
   c build run vulkan-experiment
 
-Look for:
-  build/shaders/lumen_radiance.comp
-  [lumen] Stage 5 ... world probes=1152 updates/frame=64 rays/update=4 ...
-  [lumen] ... GPU cards=... GI=... scene=... composite=... total=...
+Look for shader build/shaders/lumen_screen.comp and startup:
+  [lumen] Stage 6 ... screen probes=80x45 ...
+  [lumen] ... GPU cards=... GI=... scene=... screen=... composite=... total=...
 
-Expected visual change: red/green light bouncing onto the nearby white
-floor and boxes without a screen-space denoiser. Send a screenshot and
-several post-warmup timing lines before Stage 6 (screen probe gather).
+Please compare the same camera view with Stage 5 for any light leaking,
+screen-tile pattern, excessive darkening or FPS regression. Report screenshot
+and several GPU timing lines before Stage 7 (screen ray fallback).
