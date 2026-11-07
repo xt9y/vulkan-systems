@@ -9,11 +9,13 @@ layout(location=0) in vec3 position;
 layout(location=1) in vec3 normal;
 layout(location=2) in vec3 albedo;
 layout(location=3) in vec3 emission;
+layout(location=4) in uint face_index;
 
 layout(location=0) out vec3 world_position;
 layout(location=1) out vec3 surface_normal;
 layout(location=2) out vec3 surface_albedo;
 layout(location=3) out vec3 surface_emission;
+layout(location=4) flat out uint surface_index;
 
 layout(push_constant) uniform Camera {
     vec4 eye;
@@ -38,6 +40,7 @@ void main()
     surface_normal=normal;
     surface_albedo=albedo;
     surface_emission=emission;
+    surface_index=face_index;
 }
 )glsl";
 
@@ -46,6 +49,7 @@ layout(location=0) in vec3 world_position;
 layout(location=1) in vec3 surface_normal;
 layout(location=2) in vec3 surface_albedo;
 layout(location=3) in vec3 surface_emission;
+layout(location=4) flat in uint surface_index;
 layout(location=0) out vec4 hdr_color;
 
 // These are the same sixteen original Cornell faces as path-tracer-bak.
@@ -59,6 +63,20 @@ layout(std430,set=0,binding=0) readonly buffer CornellFaces {
 const float PI=3.14159265358979323846;
 const float EPSILON=0.0015;
 const int FACE_COUNT=16;
+const int CARD_SIZE=64;
+layout(set=0,binding=3) uniform sampler2D surface_cards;
+
+vec3 cached_albedo(vec3 position,uint face_id)
+{
+    Face f=faces[face_id];
+    vec3 d=position-f.origin.xyz;
+    vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
+    vec2 uv=vec2(q.x*f.metric.x+q.y*f.metric.y,
+                  q.x*f.metric.y+q.y*f.metric.z);
+    ivec2 card=ivec2(int(face_id%4u),int(face_id/4u));
+    ivec2 texel=card*CARD_SIZE+ivec2(clamp(uv,vec2(0.0),vec2(.9999))*float(CARD_SIZE));
+    return texelFetch(surface_cards,texel,0).rgb;
+}
 
 // Uses the same std430 BVH node and triangle layout as VulkanBVH.
 struct Node {
@@ -179,8 +197,17 @@ vec3 direct_area_light(vec3 position,vec3 normal,vec3 albedo)
 {
     Face lamp=faces[FACE_COUNT-1];
     vec3 radiance=vec3(0.0);
-    // Fixed 2x2 stratified area-light integration:
-    // deterministic soft shadows, no temporal denoiser or noise.
+    // M1 fast path: one BVH visibility query for this surface. Four geometry
+    // samples still integrate the emitter's smooth angular falloff.
+    // The shadow silhouette is intentionally harder than four distinct rays.
+    vec3 center=lamp.origin.xyz+.5*lamp.u.xyz+.5*lamp.v.xyz;
+    vec3 to_center=center-position;
+    float center_distance=length(to_center);
+    if(center_distance>EPSILON &&
+       blocked(position+normal*EPSILON*2.0,
+               to_center/center_distance,center_distance-EPSILON*4.0))
+        return vec3(0.0);
+    // Fixed 2x2 emitter quadrature; no stochastic noise or denoising.
     for(int y=0;y<2;y++)
     for(int x=0;x<2;x++)
     {
@@ -195,9 +222,6 @@ vec3 direct_area_light(vec3 position,vec3 normal,vec3 albedo)
         float incoming=max(dot(normal,wi),0.0);
         float outgoing=max(dot(lamp.normal.xyz,-wi),0.0);
         if(incoming<=0.0 || outgoing<=0.0)continue;
-        if(blocked(position+normal*EPSILON*2.0,wi,
-                   distance-EPSILON*4.0))
-            continue;
         radiance+=lamp.emission.rgb*
                   (incoming*outgoing*lamp.metric.w/distance2);
     }
@@ -213,8 +237,31 @@ void main()
     }
     vec3 normal=normalize(surface_normal);
     vec3 direct=direct_area_light(world_position,normal,
-                                  surface_albedo);
+                                  cached_albedo(world_position,surface_index));
     hdr_color=vec4(max(direct,vec3(0.0)),1.0);
+}
+)glsl";
+
+
+inline constexpr const char* cards_comp=R"glsl(#version 450
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+struct Face {
+    vec4 origin,u,v,normal,albedo,emission,metric;
+};
+layout(std430,set=0,binding=0) readonly buffer CornellFaces {
+    Face faces[];
+};
+layout(rgba16f,set=0,binding=1) writeonly uniform image2D cards;
+
+void main()
+{
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(pixel,ivec2(256))))return;
+    int face_index=(pixel.y/64)*4+(pixel.x/64);
+    Face f=faces[face_index];
+    // Stage 4 material cards: colors/emission stay in world-independent UV
+    // space. Future stages will add lighting caches and card recapture.
+    imageStore(cards,pixel,vec4(f.albedo.rgb,1.0));
 }
 )glsl";
 
