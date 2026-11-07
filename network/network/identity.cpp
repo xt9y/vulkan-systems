@@ -19,6 +19,9 @@
 #include <stdexcept>
 #include <string>
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <sys/stat.h>
@@ -113,6 +116,12 @@ void local_server(const std::string& root,mbedtls_ctr_drbg_context& random,
     if(fs::exists(path)) {
         if(!fs::is_regular_file(path) || fs::is_symlink(path))
             throw std::runtime_error("Unsafe DTLS server key path");
+#ifndef _WIN32
+        const auto permissions=fs::status(path).permissions();
+        const auto shared=fs::perms::group_all|fs::perms::others_all;
+        if((permissions&shared)!=fs::perms::none)
+            throw std::runtime_error("DTLS server private key has unsafe permissions");
+#endif
         std::ifstream input(path,std::ios::binary);
         if(!input)throw std::runtime_error("Cannot read existing DTLS server identity");
         std::vector<unsigned char> encoded(
