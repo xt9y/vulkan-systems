@@ -5,8 +5,8 @@
 
 namespace lumen {
 
-// Lumen-style Cornell demo: BVH direct shadows, material cards, bounded
-// world radiance cache and screen-probe gathering. Reflections are pending.
+// Lumen-style Cornell demo: BVH direct shadows, material cards, world
+// radiance cache, screen probes and screen-ray tracing with BVH fallback.
 enum class demo_scene : std::uint8_t {
     none,
     cornell_box
@@ -18,6 +18,9 @@ struct settings {
     std::uint32_t rays_per_probe=4;
     // Internal raster resolution scale, capped at 1280 pixels wide by Lumen.
     float tracing_scale=1.0f;
+    // Stage 7 screen-space hit tracing; ambiguous rays fall back to the BVH.
+    float screen_trace_distance=3.0f;
+    float screen_trace_strength=0.12f;
 };
 
 struct camera {
