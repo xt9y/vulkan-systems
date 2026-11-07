@@ -477,7 +477,7 @@ struct system::implementation {
         screen_material.push_size=0;
     }
 
-    // Next stages, intentionally no-op for Stage 1.
+    // Stage 3+: reusable scene traversal and GI caches are not implemented yet.
     void update_surface_cache(vk::CommandBuffer,const frame&) {}
     void trace_screen(vk::CommandBuffer,const frame&) {}
     void trace_scene(vk::CommandBuffer,const frame&) {}
