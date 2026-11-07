@@ -255,7 +255,7 @@ struct Face {
 layout(std430,set=0,binding=0) readonly buffer CornellFaces {
     Face faces[];
 };
-layout(rgba16f,set=0,binding=1) writeonly uniform image2D cards;
+layout(rgba8,set=0,binding=1) writeonly uniform image2D cards;
 
 void main()
 {
