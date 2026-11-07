@@ -29,8 +29,10 @@ void build(C_Build* b) {
     C_Target* systems=c_static_library(b,"VulkanSystems");
     c_sources(systems,"gpu/gpu/*.cpp");
     c_sources(systems,"render/render/*.cpp");
+    c_sources(systems,"bvh/bvh/*.cpp");
     c_include(systems,"gpu");
     c_include(systems,"render");
+    c_include(systems,"bvh");
     c_include(systems,".");
     c_flag(systems,"-std=c++17");
 

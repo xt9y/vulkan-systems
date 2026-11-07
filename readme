@@ -1,16 +1,22 @@
 vulkan-systems
   gpu/       VulkanEngine resource ownership, staging, shaders, compute, culling
-  render/    frame scheduling, targets, HDR/LDR buffers, pipelines, draws
-  bvh/       GPU LBVH acceleration
+  render/    frame scheduling, image/geometry ownership, graph passes, draws
+  bvh/       GPU radix LBVH, TLAS/BLAS instancing, triangle hits and refits
   spatial/   CPU BVH index and frustum queries
   network/   IPv4/IPv6 UDP, DTLS 1.2 mTLS, reliable session and host
   jobs/      bounded multithreaded jobs and completion queue
 
 Each module has a standalone build.c with C++17 APIs.
-Root build.c exports VulkanSystems (gpu/render), VulkanSpatial, VulkanNetwork,
+Root build.c exports VulkanSystems (gpu/render/bvh), VulkanSpatial, VulkanNetwork,
 and VulkanJobs as independent static library targets. GPU and render depend
 on VulkanEngine. Network and jobs do not depend on Vulkan.
 
 Host initializes and shuts down the Vulkan device and swapchain.
 No game-specific scene serialization, weapon logic, or authority rules live here.
 
+
+VulkanSystems includes the bvh/ implementation; include <bvh/bvh.hpp> using
+its bvh include directory. The standalone bvh/build.c target is for builds
+that use only BVH; do not link both target libraries into the same executable.
+The application compiles its BVH shader variants as it compiles render shaders.
+No tools directory, GI implementation, fixed BRDF, or game-specific shading policy.

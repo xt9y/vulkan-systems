@@ -5,6 +5,9 @@ VulkanRender - reusable C++17 VulkanEngine rendering.
   render/pipeline.*         graphics pipeline creation from SPIR-V
   render/target.*           arbitrary color/depth render pass and framebuffer
   render/mesh.hpp           non-owning vertex and index views
+  render/geometry.hpp       GPU vertex/index buffer ownership and batch uploads
+  render/attachments.hpp    generic sampled render-target image/view ownership
+  render/sequence.hpp       ordered render/compute passes on gpu::graph
   render/material.hpp       non-owning descriptor and push-constant bindings
   render/renderer.*         pass, indexed/indirect draw helpers
   render/camera.hpp         optional camera payload
@@ -20,6 +23,8 @@ postprocess_targets creates sampled/storage HDR and LDR GPU images and views
 per swapchain image. presentation_targets constructs the swapchain-compatible
 pass and framebuffers; the caller supplies shaders, descriptor sets, and effects.
 
+Geometry buffers, attachment images and cross-pass barriers belong here.
 No fixed vertex layout, tonemapper, lighting implementation, or game semantics.
 GPU work referencing a render target must complete before its owner resets.
+
 

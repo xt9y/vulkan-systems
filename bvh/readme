@@ -1,25 +1,54 @@
-VulkanBVH
-  bvh/bvh.hpp         generic VulkanGPU BVH API; std430 AABB/node layout
-  bvh/bvh.cpp         persistent GPU buffers, sorting, tree construction
-  bvh/shaders/*.comp  GPU Morton codes, sorting, radix topology, refit,
-                      AABB overlap and ray-AABB queries
+VulkanBVH: reusable Vulkan compute acceleration structures.
 
-Algorithms
-  LBVH with 30-bit Morton keys and original-ID tie-breaker.
-  Parallel bitonic compare/exchange (simple portable baseline, not radix sort).
-  Karras (2012) longest-common-prefix radix tree.
-  Parallel bottom-up atomic-arrival bounding-box refit.
-  Fixed-stack GPU overlap and ray traversal with overflow flags.
+Core:
+  bvh/bvh.hpp             GPU LBVH with multiple independently owned trees
+  bvh/hierarchy.hpp       Sharded TLAS + per-mesh BLAS, world instances
+  bvh/shaders/bvh.comp    Morton, GPU radix sort, topology, refit, ray/AABB
+  bvh/shaders/hierarchy.comp  Exact TLAS->BLAS ray/triangle traversal
 
-Reference
-  T. Karras, Maximizing Parallelism in the Construction of BVHs,
-  Octrees, and k-d Trees, HPG 2012, DOI:10.2312/EGGH/HPG12/033-037.
+Construction:
+  30-bit Morton keys with stable, portable 4-bit LSD radix sorting.
+  Eight passes of histogram, prefix and scatter (24 dispatches total).
+  Karras longest-common-prefix topology with parallel AABB refit.
+  update_bounds()+record_refit() skips resort and topology creation.
+  Shared Vulkan pipeline layouts and shader pipelines minimize BLAS setup.
+  Individual bvh::tree objects replace the old single-tree restriction;
+  the free functions remain compatible wrappers around a default tree.
 
-Limits
-  Static or rebuildable arbitrary AABBs; 1..65536 primitives.
-  Balanced radix trees are usually shallow, but query stacks can overflow:
-  query flags explicitly report overflow; no silent truncated results.
-  Sorting is O(log^2 N) GPU dispatches and intended to improve later.
-  Not a universal spatial accelerator: grid hashing remains faster for
-  near-uniform fixed-radius SPH particle neighborhoods.
-  GPU runtime performance and numerical validation require hardware.
+Two-level hierarchy:
+  bvh::hierarchy stores one BLAS per unique mesh and multiple TLAS chunks
+  of up to 65,536 instances. Nodes and triangles are packed on the GPU.
+  A single compute shader traverses TLAS, transforms rays with user-supplied
+  world-to-local matrices, and performs exact BLAS triangle intersections.
+  Result includes mesh-local primitive ID, global instance ID and distance.
+  Both closest-hit and any-hit traversal are supported.
+  Instance count and bounds may change only by rebuilding or refitting
+  with an unchanged count, respectively. Geometry may be GPU-updated
+  through mesh_tree(i).triangles_descriptor()/primitives_descriptor()
+  before record_refit() copies newly refitted BLAS data into the hierarchy.
+  Caller owns GPU submission fences and cross-pass barriers.
+
+Shader compilation belongs to the application build, as with render/.
+  Compile bvh.comp to ten SPIR-V variants in this exact shader_paths order:
+    BVH_KEYS
+    BVH_CLEAR
+    BVH_TOPOLOGY
+    BVH_LEAVES
+    BVH_REFIT
+    BVH_OVERLAP
+    BVH_RAY
+    BVH_RADIX_HISTOGRAM
+    BVH_RADIX_PREFIX
+    BVH_RADIX_SCATTER
+  Compile hierarchy.comp once with glslangValidator -V -S comp.
+  There is no tools directory and no runtime shader compiler.
+
+Limits:
+  One BLAS <= 65,536 triangles; TLAS chunks <= 65,536 instances.
+  BVH traversal stacks are fixed (64 for hierarchy, 96 for base BVH).
+  An overflow flags the answer as inconclusive.
+  Build/refit performance and GPU numerical correctness have not yet been
+  benchmarked or hardware-tested. Moving triangles require a matching
+  updated AABB per leaf, not only new vertex positions. A hierarchy is
+  useful for GPU ray queries; it should not be built in an application
+  that only performs ordinary rasterization without ray queries.
