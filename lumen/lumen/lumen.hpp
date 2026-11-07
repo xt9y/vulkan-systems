@@ -16,7 +16,8 @@ struct settings {
     demo_scene demo=demo_scene::cornell_box;
     std::uint32_t probe_updates_per_frame=64;
     std::uint32_t rays_per_probe=4;
-    float tracing_scale=0.5f;
+    // Internal raster resolution scale, capped at 1280 pixels wide by Lumen.
+    float tracing_scale=1.0f;
 };
 
 struct camera {
