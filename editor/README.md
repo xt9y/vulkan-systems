@@ -3,6 +3,36 @@
 A reusable, optional level-editor shell. No CSG, no scene ownership, no
 GLFW/SDL dependency, no shaders, no ImGui, no game-specific object types.
 
+## Visual layout and original HellEngine font
+
+The editor uses one hardcoded dark full-height 464px-wide panel, with a
+centered heading and generous padding. Idle, Insert, and selected-object
+inspector panels share identical geometry. Content wraps to new lines and
+the current selection scrolls into view on Up/Down. Key legends are not
+drawn. The upper-right corner shows FPS and frame time while editor mode is
+visible; the host calls `session::set_frame_time(milliseconds)`.
+
+The original font in `xt9y/hellengine-bak` consists of 90 separate PNG
+textures under `Rogue/Rogue/res/textures/font/char_*.png`, mapped using
+`Rogue/Rogue/src/Core/TextBlitting.cpp`. The Vulkan overlay can decode those
+files on the CPU with stb_image and rasterize opaque glyph pixels using
+`vkCmdClearAttachments` without shaders, textures, descriptors, or a
+font-atlas pipeline. The exact glyph outlines are retained, but translucent
+edges are thresholded to opaque pixels by this shader-free adapter.
+
+A host may specify an existing font directory before its first frame:
+
+```cpp
+editor::vulkan::set_font_directory("assets/hellengine/font");
+```
+
+The `vulkan-game` build script automatically uses Git sparse checkout to
+fetch just the font directory from the pinned original source revision into
+`build/editor-font-repository/Rogue/Rogue/res/textures/font`. That backup
+repository is private; an authenticated local GitHub credential is needed.
+If unavailable or offline, the built-in 5x7 glyphs remain usable. Set
+`VULKAN_EDITOR_FONT_SKIP_DOWNLOAD=1` to disable the optional fetch.
+
 ## Built-in controls
 
 - **?**: toggle editor/debug mode (host must send the typed question mark,
