@@ -204,7 +204,8 @@ struct system::implementation {
                                    vk::FormatFeatureFlagBits::eSampledImage;
         if((color_features & requested_color)!=requested_color)
             throw std::runtime_error("RGBA16F color attachment sampling unsupported");
-        if(!(depth_features & vk::FormatFeatureFlagBits::eDepthStencilAttachment))
+        if((depth_features & vk::FormatFeatureFlagBits::eDepthStencilAttachment)!=
+           vk::FormatFeatureFlagBits::eDepthStencilAttachment)
             throw std::runtime_error("D32 depth attachment unsupported");
 
         const auto vertices=cornell_box();
