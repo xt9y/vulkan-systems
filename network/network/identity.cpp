@@ -14,6 +14,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
+#include <vector>
 #include <stdexcept>
 #include <string>
 #ifdef _WIN32
@@ -111,9 +113,17 @@ void local_server(const std::string& root,mbedtls_ctr_drbg_context& random,
     if(fs::exists(path)) {
         if(!fs::is_regular_file(path) || fs::is_symlink(path))
             throw std::runtime_error("Unsafe DTLS server key path");
-        require(mbedtls_pk_parse_keyfile(&key,path.string().c_str(),nullptr,
-                                         mbedtls_ctr_drbg_random,&random),
-                "Cannot read existing DTLS server identity; refusing to rotate key");
+        std::ifstream input(path,std::ios::binary);
+        if(!input)throw std::runtime_error("Cannot read existing DTLS server identity");
+        std::vector<unsigned char> encoded(
+            (std::istreambuf_iterator<char>(input)),
+             std::istreambuf_iterator<char>());
+        if(encoded.empty() || encoded.size()>16384)
+            throw std::runtime_error("Existing DTLS server identity is invalid");
+        encoded.push_back(0);
+        require(mbedtls_pk_parse_key(&key,encoded.data(),encoded.size(),
+                                     nullptr,0,mbedtls_ctr_drbg_random,&random),
+                "Cannot parse existing DTLS server identity; refusing to rotate key");
         if(mbedtls_pk_get_type(&key)!=MBEDTLS_PK_ECKEY)
             throw std::runtime_error("Unsupported automatic DTLS server key");
     } else {
@@ -172,6 +182,15 @@ void local_server(const std::string& root,mbedtls_ctr_drbg_context& random,
         throw;
     }
     mbedtls_x509write_crt_free(&builder);
+    // Display a fingerprint so it can be compared independently when desired.
+    std::array<unsigned char,2048> der{};
+    const int len=mbedtls_pk_write_pubkey_der(
+        &key,der.data(),der.size());
+    if(len<=0 || static_cast<std::size_t>(len)>der.size())
+        throw std::runtime_error("Cannot derive DTLS server fingerprint");
+    const auto digest=hash(der.data()+der.size()-len,static_cast<std::size_t>(len));
+    std::cerr<<"DTLS: server identity SHA256 SPKI "
+             <<hex(digest.data(),digest.size())<<"\n";
 }
 
 bool verify_or_pin(const std::string& root,const std::string& peer_id,
