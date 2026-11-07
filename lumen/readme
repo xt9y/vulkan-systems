@@ -1,51 +1,60 @@
-VulkanLumen — Stage 1: Cornell geometry and presentation
+VulkanLumen — Stage 2: original Cornell scene + direct area lighting
 
-Stage 1 is now implemented. The existing vulkan-experiment/main.cpp continues
-to call the same API and does not contain any scene or shading algorithms.
-Everything needed for the first visible image lives under lumen/.
+The public system API is unchanged. vulkan-experiment/main.cpp remains the
+permanent test harness; rendering implementation lives in lumen/.
+
+Scene: exact geometry and base materials from
+xt9y/vulkan-experiment/path-tracer-bak:
+  - Cornell dimensions: width 5.55, depth 5.592, height 5.488
+  - White reflectance (.725, .710, .680)
+  - Red reflectance (.630, .065, .050) on the right wall (x = 5.55)
+  - Green reflectance (.140, .450, .091) on the left wall (x = 0)
+  - Short block: original rotated base, height 1.65
+  - Tall block: original rotated base, height 3.30
+  - Emissive ceiling rectangle: origin (2.13,5.484,2.27),
+    size 1.30 x 1.05, radiance (17,16,14)
+  - 16 original analytic faces (96 raster vertices), no front wall
 
 Implemented:
-  create()   Construct a Cornell-box mesh, vertex buffer, HDR color and D32
-             depth attachments, raster pass, descriptor set and pipelines.
-  record()   Rasterize visible Cornell surfaces to an offscreen color/depth
-             pass, then synchronize the HDR target for subsequent reading.
-  compose()  Draw a fullscreen triangle in the host presentation pass,
-             sampling and tonemapping the HDR image.
-  resize()   Recreate image resources and pipelines after host device idle.
-  reset()    Release owned GPU resources before device shutdown.
-  implemented() returns true after successful pipeline creation.
+  create()   Allocates Cornell vertex/face SSBO data, HDR color/depth targets,
+             rasterization pipeline, descriptors and composite pipeline.
+  record()   Rasterizes visible geometry; Lambertian direct area-light energy
+             and surface-to-light visibility are computed in the fragment shader
+             using 2x2 deterministic area-light samples.
+  compose()  Displays the HDR target using the existing tone map.
+  reset() / resize()   Release/recreate GPU resources safely.
+  implemented()        True after pipelines have been initialized.
 
-Not yet implemented:
-  - Physically correct direct lighting or contact shadows (Stage 2)
-  - BVH/SDF scene tracing (Stage 3)
-  - Surface cards and cached material lighting (Stage 4)
-  - World-space radiance cache (Stage 5)
-  - Screen probe gather, screen tracing and scene-ray fallback (Stages 6–7)
-  - Dynamic invalidation and multibounce (Stage 8)
-  - Reflections and performance scaling (Stages 9–10)
-  - External scene and G-buffer interpretation: the public setters accept
-    handles, but Stage 1 draws the internal Cornell demo only.
-  - result().diffuse/reflections remain null until GI passes exist.
+For speed, shadow rays use conservative bounding boxes for the two interior
+Cornell blocks, followed by intersections against their 10 analytic faces.
+Room boundaries are convex and cannot occlude an interior point's segment
+to the ceiling emitter. No GPU BVH, noise, TAA, SVGF or denoising exists.
 
-Shaders: lumen/shaders.hpp embeds the vertex/fragment GLSL sources. The Lumen
-module compiles them once when create() is called, writing temporary files
-under the application's build/shaders/ directory. Install glslangValidator
-and keep it in PATH. vulkan-experiment requires no shader source files.
+Stage 2 intentionally has only direct lighting (one light bounce).
+The previous path tracer also computes indirect diffuse light; red/green
+color bleeding onto white surfaces will not yet match that reference.
 
-Validation of Stage 1:
+Later stages:
+  3. General scene ray tracing via VulkanBVH / compute traversal
+  4. Surface cache and card-based material/lighting lookup
+  5. World-space radiance probes and cached GI
+  6. Screen-probe gather
+  7. Screen tracing with scene-ray fallback
+  8. Dynamic invalidation and multi-bounce illumination
+  9. Reflections
+  10. Frame budgets, GPU profiling and M1 performance scaling
+
+Test on macOS/M1:
   cd vulkan-experiment
   git pull --ff-only
   rm -f c.lock
   c build run vulkan-experiment
 
-Expected: a movable Cornell box with red and green walls, two white blocks
-and a bright ceiling panel. Surfaces are intentionally UNLIT; the face
-brightness differences are static preview colors, not GI. No noise or blur.
-Movement: WASD + mouse. Escape closes the window.
+Expect the original two rotated boxes, corresponding red/green walls,
+bright ceiling emitter, soft-ish shadows and direct diffuse illumination.
+WASD + mouse controls remain unchanged.
 
-Do not begin Stage 2 until the scene, depth occlusion and camera movement
-render correctly and the baseline FPS is measured on the base M1.
-
-Build: standalone VulkanLumen through lumen/build.c. Rendering objects rely
-on VulkanGPU and VulkanRender; the application links Lumen before these
-providers. Never use the removed root vulkan-systems/build.c.
+Please report a screenshot, FPS and any compiler/shader output before Stage 3.
+On Retina displays the shadow shader may be GPU-heavy. If it is, the next
+optimization should use shadow-map sampling or a cheaper light-visibility
+representation, not a denoiser.
