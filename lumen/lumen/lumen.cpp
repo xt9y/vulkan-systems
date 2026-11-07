@@ -171,13 +171,12 @@ static_assert(sizeof(camera_data)==64);
 // Keep these fixed bounds consistent with lumen/shaders.hpp.
 // Only a bounded fraction of the 12x8x12 radiance field is refreshed each frame.
 constexpr std::uint32_t radiance_probe_count=12*8*12;
-constexpr std::uint32_t radiance_update_count=96;
 constexpr vk::DeviceSize radiance_cache_bytes=
     vk::DeviceSize(radiance_probe_count)*4u*4u*sizeof(float);
 struct radiance_constants {
-    std::uint32_t frame=0,revision=0;
+    std::uint32_t frame=0,revision=0,updates_per_frame=0,rays_per_probe=0;
 };
-static_assert(sizeof(radiance_constants)==8);
+static_assert(sizeof(radiance_constants)==16);
 
 // Shared BVH traversal implementation is inserted into both shader entrypoints.
 // It is kept in one GLSL definition, not duplicated across compute/fragment.
@@ -586,7 +585,9 @@ struct system::implementation {
                  <<" triangles / "<<accel.nodes.size()
                  <<" BVH nodes | cards=16 x 64x64"
                  <<" | world probes="<<radiance_probe_count
-                 <<" updates/frame="<<radiance_update_count
+                 <<" updates/frame="<<std::clamp(options.probe_updates_per_frame,
+                                                    1u,radiance_probe_count)
+                 <<" rays/update="<<std::clamp(options.rays_per_probe,1u,16u)
                  <<" | scene render="<<render_extent.width<<"x"<<render_extent.height
                  <<" (swapchain "<<extent.width<<"x"<<extent.height<<")"
                  <<" | GPU timestamps "
@@ -751,12 +752,14 @@ struct system::implementation {
                                 {},{},{init},{});
             radiance_initialized=true;
         }
+        const std::uint32_t updates=std::clamp(
+            options.probe_updates_per_frame,1u,radiance_probe_count);
         const radiance_constants push{
-            std::uint32_t(current.index),0u
+            std::uint32_t(current.index),0u,updates,
+            std::clamp(options.rays_per_probe,1u,16u)
         };
-        radiance_pipeline.dispatch(cmd,
-            (radiance_update_count+63u)/64u,1,1,
-            {radiance_sets.set()},&push,sizeof(push));
+        radiance_pipeline.dispatch(cmd,(updates+63u)/64u,1,1,
+                                   {radiance_sets.set()},&push,sizeof(push));
 
         // Fragment shading consumes the newly updated coefficients. Every
         // probe owns a disjoint SSBO range, so the compute shader has no
