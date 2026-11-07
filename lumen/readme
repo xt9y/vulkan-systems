@@ -1,0 +1,41 @@
+VulkanLumen — reusable Lumen-style lighting interface (SKELETON)
+
+This module deliberately does not render GI yet. record() and compose()
+emit no GPU commands; result() contains null VkImage handles; implemented()
+returns false. It builds as a standalone VulkanLumen library.
+
+The host controls the Vulkan device, swapchain, render pass, camera and
+scene lifetime. VulkanLumen owns its future internal scene representation,
+surface cache, screen probes, radiance probes, and reconstruction passes.
+
+Stable public API (lumen/lumen.hpp)
+  create(pass, format, extent, settings)
+  set_scene(scene) / set_lighting(lighting) / set_gbuffer(gbuffer)
+  record(command, frame)              BEFORE the host presentation render pass
+  compose(command)                    INSIDE the host presentation render pass
+  result()                            future indirect/reflection outputs
+  invalidate() / resize(...) / reset()
+  implemented()
+
+Demo: settings.demo = demo_scene::cornell_box requests an internally managed
+Cornell demonstration once the Lumen implementation is written. Applications
+with actual world geometry will supply their own scene and G-buffer instead.
+
+Implementation milestones, all confined to lumen/:
+  1. Internal raster visibility or optional external G-buffer
+  2. Scene tracing backed by VulkanBVH / SDF tracing as appropriate
+  3. Screen tracing and disocclusion fallback
+  4. Surface representation and cached surface lighting
+  5. Screen probes, radiance cache, visibility-aware probe interpolation
+  6. Budgeted updates and invalidation for moving lights/geometry
+  7. Diffuse indirect and reflection outputs
+  8. Composite into the compatible host render pass
+  9. GPU timestamps and M1 low-end quality settings
+
+Shaders/resources are intentionally absent until those passes exist. The
+stable API permits vulkan-experiment/main.cpp to remain unchanged when the
+implementation is filled in. The host will remain a black, responsive Vulkan
+window until the first actual rendering pass is implemented.
+
+Build independently with c build run VulkanLumen from lumen/, or link it as a
+c_dep_subdir(...,"lumen") / c_dep_cbuild(...,"VulkanLumen",...) dependency.
