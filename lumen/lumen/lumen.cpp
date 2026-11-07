@@ -340,7 +340,7 @@ struct system::implementation {
             std::max(1u,std::uint32_t(std::lround(extent.width*factor))),
             std::max(1u,std::uint32_t(std::lround(extent.height*factor)))
         };
-        screen_extent={
+        screen_extent=vk::Extent2D{
             (render_extent.width+15u)/16u,(render_extent.height+15u)/16u
         };
         const auto physical=vk::physical_device::get()->handle;
