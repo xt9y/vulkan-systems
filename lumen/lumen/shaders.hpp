@@ -695,7 +695,6 @@ void main()
               distance(old_meta.xyz,position)<.10;
     }
     uint frame=uint(camera.trace_parameters.w);
-    int phase=int(frame%16u);
     vec3 integrated=vec3(0);
     float total_weight=0.0;
     for(int i=0;i<64;i++)
@@ -710,7 +709,9 @@ void main()
         if(reuse)old=imageLoad(screen_directions,atlas_pixel);
         vec3 Li=old.a>.5?old.rgb:distant_radiance(position,direction);
         float count=old.a;
-        if((i%16)==phase)
+        int rays=int(clamp(camera.trace_parameters.y,1.0,8.0));
+        int start=(int(frame)*rays)%64;
+        if(((i-start+64)%64)<rays)
         {
             vec3 fresh=directional_radiance(position+normal*.012,
                          direction,clamp(camera.trace_parameters.x,.5,8.0),id);
