@@ -167,6 +167,10 @@ struct alignas(16) camera_data {
     std::array<float,4> eye,right,up,projection;
 };
 static_assert(sizeof(camera_data)==64);
+struct light_constants {
+    std::uint32_t card,enable_indirect,reserved0,reserved1;
+};
+static_assert(sizeof(light_constants)==16);
 
 struct screen_constants {
     camera_data camera;
@@ -257,11 +261,13 @@ struct system::implementation {
 
     gpu::buffer vertex_buffer,faces_buffer,trace_nodes,trace_triangles;
     gpu::buffer radiance_probes;
-    gpu::image color,depth,surface_cache,screen_light,screen_meta;
+    gpu::image color,depth,surface_cache,surface_lighting;
+    gpu::image screen_light,screen_meta,screen_gather;
     render::target target;
     render::pipeline geometry_pipeline,composite_pipeline;
-    gpu::compute cache_pipeline,radiance_pipeline,screen_pipeline;
-    gpu::descriptors geometry_sets,composite_sets,cache_sets,radiance_sets,screen_sets;
+    gpu::compute cache_pipeline,lighting_pipeline,radiance_pipeline,screen_pipeline;
+    gpu::descriptors geometry_sets,composite_sets,cache_sets,lighting_sets;
+    gpu::descriptors radiance_sets,screen_sets;
     vk::PipelineLayout geometry_layout{},composite_layout{};
     vk::Sampler sampler{},depth_sampler{};
     render::mesh box_mesh,fullscreen;
@@ -274,10 +280,12 @@ struct system::implementation {
     bool timestamp_pending=false;
     bool ready=false;
     bool cache_valid=false,cache_dirty=true;
+    bool lighting_initialized=false;
     bool radiance_initialized=false;
     bool screen_initialized=false;
     std::string geometry_vertex_spv,geometry_fragment_spv;
-    std::string composite_vertex_spv,composite_fragment_spv,cache_spv,radiance_spv,screen_spv;
+    std::string composite_vertex_spv,composite_fragment_spv,cache_spv;
+    std::string lighting_spv,radiance_spv,screen_spv;
 
     ~implementation(){release();}
 
@@ -293,6 +301,7 @@ struct system::implementation {
             geometry_pipeline.reset();
             composite_pipeline.reset();
             cache_pipeline.reset();
+            lighting_pipeline.reset();
             radiance_pipeline.reset();
             screen_pipeline.reset();
             if(geometry_layout)vk::pipeline_layout::destroy(geometry_layout);
@@ -302,6 +311,7 @@ struct system::implementation {
             composite_sets.reset();
             geometry_sets.reset();
             cache_sets.reset();
+            lighting_sets.reset();
             radiance_sets.reset();
             screen_sets.reset();
             if(sampler)vk::device::get()->handle.destroySampler(sampler);
@@ -312,8 +322,11 @@ struct system::implementation {
             depth.reset();
             color.reset();
             surface_cache.reset();
+            surface_lighting.reset();
+            lighting_initialized=false;
             screen_light.reset();
             screen_meta.reset();
+            screen_gather.reset();
             screen_initialized=false;
             radiance_probes.reset();
             radiance_initialized=false;
@@ -375,12 +388,13 @@ struct system::implementation {
 
         const auto vertices=cornell_box();
         const auto faces=make_faces(vertices);
-        std::vector<point> shadow_vertices;
-        shadow_vertices.reserve(vertices.size()-6);
-        // Exclude the ceiling emitter from shadow occluders.
-        for(std::size_t i=0;i<vertices.size()-6;i++)
-            shadow_vertices.push_back(vertices[i].position);
-        const auto accel=trace::build(shadow_vertices);
+        std::vector<point> scene_vertices;
+        scene_vertices.reserve(vertices.size());
+        // Include the emissive panel in radiance rays. Shadow rays use a
+        // shortened maximum distance, so the destination is not occluded.
+        for(const auto& v:vertices)
+            scene_vertices.push_back(v.position);
+        const auto accel=trace::build(scene_vertices);
         vertex_count=std::uint32_t(vertices.size());
         vertex_buffer.create(vertices.size()*sizeof(vertex),
             vk::BufferUsageFlagBits::eVertexBuffer,
@@ -418,13 +432,24 @@ struct system::implementation {
             vk::ImageUsageFlagBits::eDepthStencilAttachment |
             vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eDepth);
-        make_image(screen_light,screen_extent,color_format,
+        make_image(screen_light,
+            vk::Extent2D{screen_extent.width*8u,screen_extent.height*8u},
+            color_format,
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eColor);
         make_image(screen_meta,screen_extent,color_format,
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled,
+            vk::ImageAspectFlagBits::eColor);
+        make_image(screen_gather,screen_extent,color_format,
+            vk::ImageUsageFlagBits::eStorage |
+            vk::ImageUsageFlagBits::eSampled,
+            vk::ImageAspectFlagBits::eColor);
+        make_image(surface_lighting,vk::Extent2D{256,256},color_format,
+            vk::ImageUsageFlagBits::eStorage |
+            vk::ImageUsageFlagBits::eSampled |
+            vk::ImageUsageFlagBits::eTransferDst,
             vk::ImageAspectFlagBits::eColor);
         make_image(surface_cache,{256,256},card_format,
             vk::ImageUsageFlagBits::eStorage |
