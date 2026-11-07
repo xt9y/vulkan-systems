@@ -222,6 +222,11 @@ struct system::implementation {
     render::mesh box_mesh,fullscreen;
     render::material box_material,screen_material;
     std::uint32_t vertex_count=0;
+    vk::QueryPool timestamp_pool{};
+    std::uint32_t timestamp_bits=0;
+    float timestamp_period=0.f;
+    performance gpu_stats{};
+    bool timestamp_pending=false;
     bool ready=false;
     std::string geometry_vertex_spv,geometry_fragment_spv;
     std::string composite_vertex_spv,composite_fragment_spv;
@@ -231,6 +236,10 @@ struct system::implementation {
     void release() noexcept {
         ready=false;
         try {
+            if(timestamp_pool)vk::query::destroy(timestamp_pool);
+            timestamp_pool=vk::QueryPool{};
+            gpu_stats={};
+            timestamp_pending=false;
             box_material={};
             screen_material={};
             geometry_pipeline.reset();
@@ -435,7 +444,58 @@ struct system::implementation {
         screen_material.layout=composite_layout;
         screen_material.sets={composite_sets.set()};
         screen_material.push_stages=vk::ShaderStageFlagBits::eFragment;
+        // Optional GPU timestamps; independent of actual GI rendering.
+        const auto family=vk::physical_device::find_queue(
+            vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute);
+        const auto families=physical.getQueueFamilyProperties();
+        if(family<families.size() && families[family].timestampValidBits>0)
+        {
+            timestamp_bits=families[family].timestampValidBits;
+            timestamp_period=physical.getProperties().limits.timestampPeriod;
+            vk::QueryPoolCreateInfo info{};
+            info.queryType=vk::QueryType::eTimestamp;
+            info.queryCount=4;
+            timestamp_pool=vk::query::create(info);
+            gpu_stats.supported=true;
+        }
         ready=true;
+    }
+
+    float tick_ms(std::uint64_t start,std::uint64_t stop) const
+    {
+        const std::uint64_t mask=timestamp_bits>=64?~std::uint64_t(0):
+            ((std::uint64_t(1)<<timestamp_bits)-1);
+        return float((stop-start)&mask)*timestamp_period*1.0e-6f;
+    }
+
+    void begin_frame(vk::CommandBuffer cmd)
+    {
+        if(!timestamp_pool)return;
+        if(timestamp_pending)
+        {
+            // Host has a single frame in flight; its fence has completed.
+            std::array<std::uint64_t,4> ticks{};
+            const auto status=vk::device::get()->handle.getQueryPoolResults(
+                timestamp_pool,0,4,sizeof(ticks),ticks.data(),
+                sizeof(std::uint64_t),vk::QueryResultFlagBits::e64);
+            if(status==vk::Result::eSuccess)
+            {
+                gpu_stats.raster_ms=tick_ms(ticks[0],ticks[1]);
+                gpu_stats.composite_ms=tick_ms(ticks[2],ticks[3]);
+                gpu_stats.total_ms=tick_ms(ticks[0],ticks[3]);
+                gpu_stats.valid=true;
+            }
+        }
+        cmd.resetQueryPool(timestamp_pool,0,4);
+        cmd.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe,
+                           timestamp_pool,0);
+        timestamp_pending=true;
+    }
+    void stamp(vk::CommandBuffer cmd,std::uint32_t index) const
+    {
+        if(timestamp_pool)
+            cmd.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe,
+                               timestamp_pool,index);
     }
 
     void draw_scene(vk::CommandBuffer cmd,const frame& current) {
@@ -558,7 +618,9 @@ void system::invalidate() {
 }
 void system::record(vk::CommandBuffer cmd,const frame& current) {
     if(!impl_ || !impl_->ready)return;
+    impl_->begin_frame(cmd);
     impl_->draw_scene(cmd,current);
+    impl_->stamp(cmd,1);
     impl_->update_surface_cache(cmd,current);
     impl_->trace_screen(cmd,current);
     impl_->trace_scene(cmd,current);
@@ -568,9 +630,15 @@ void system::record(vk::CommandBuffer cmd,const frame& current) {
     impl_->trace_reflections(cmd,current);
 }
 void system::compose(vk::CommandBuffer cmd) {
-    if(impl_ && impl_->ready)impl_->composite(cmd);
+    if(!impl_ || !impl_->ready)return;
+    impl_->stamp(cmd,2);
+    impl_->composite(cmd);
+    impl_->stamp(cmd,3);
 }
 outputs system::result() const noexcept {return {};}
+performance system::gpu_performance() const noexcept {
+    return impl_?impl_->gpu_stats:performance{};
+}
 bool system::implemented() const noexcept {
     return impl_ && impl_->ready;
 }
