@@ -496,6 +496,7 @@ layout(rgba16f,set=0,binding=8) writeonly uniform image2D screen_meta;
 
 layout(push_constant) uniform Camera {
     vec4 eye,right,up,projection;
+    vec4 trace_parameters; // max ray distance, screen correction strength
 } camera;
 
 float linear_depth(float z)
@@ -503,6 +504,89 @@ float linear_depth(float z)
     float n=camera.projection.z,f=camera.projection.w;
     return n*f/max(f-z*(f-n),.00001);
 }
+// Reproject a world ray through the current depth/color buffer. Screen hits
+// provide actual visible-surface lighting; ambiguous or offscreen rays fall
+// back to the geometry BVH rather than inventing a screen-space miss.
+bool trace_screen(vec3 origin,vec3 direction,float limit,uint receiver,
+                  out vec3 radiance)
+{
+    vec3 forward=cross(camera.up.xyz,camera.right.xyz);
+    ivec2 size=textureSize(scene_depth,0);
+    radiance=vec3(0.0);
+    for(int i=0;i<8;i++)
+    {
+        float t=limit*(float(i)+1.0)/8.0;
+        vec3 relative=origin+direction*t-camera.eye.xyz;
+        float view_z=dot(relative,forward);
+        if(view_z<camera.projection.z || view_z>=camera.projection.w)
+            return false;
+        vec2 ndc=vec2(
+            dot(relative,camera.right.xyz)/
+                (view_z*camera.projection.x*camera.projection.y),
+           -dot(relative,camera.up.xyz)/
+                (view_z*camera.projection.x));
+        if(any(greaterThan(abs(ndc),vec2(.98))))return false;
+        ivec2 pixel=clamp(ivec2((ndc*.5+.5)*vec2(size)),
+                          ivec2(0),size-1);
+        float z=texelFetch(scene_depth,pixel,0).r;
+        if(z>=.99999)continue;
+        float depth=linear_depth(z);
+        float gap=view_z-depth;
+        // Thickness avoids accepting an arbitrary foreground silhouette.
+        if(gap<0.0 || gap>max(.10,.04*t))continue;
+        vec4 sample_color=texelFetch(scene_color,pixel,0);
+        uint face_id=uint(sample_color.a+.5);
+        if(face_id<1u || face_id>16u || face_id==receiver)continue;
+        if(dot(faces[face_id-1u].normal.xyz,-direction)<.05)continue;
+        radiance=max(sample_color.rgb,vec3(0.0));
+        return true;
+    }
+    return false;
+}
+
+bool trace_fallback(vec3 origin,vec3 direction,float limit,
+                    out vec3 radiance)
+{
+    radiance=vec3(0.0);
+    RayHit hit=trace_scene(origin,direction,limit,false);
+    if(hit.primitive==INVALID || hit.overflow)return false;
+    uint face_id=hit.primitive/2u;
+    if(face_id>=uint(FACE_COUNT-1))return false;
+    Face surface=faces[face_id];
+    if(dot(surface.normal.xyz,-direction)<.05)return false;
+    vec3 hit_position=origin+direction*hit.distance;
+    vec3 reflectance=cached_albedo(hit_position,face_id);
+    radiance=direct_area_light(hit_position,surface.normal.xyz,reflectance);
+    return true;
+}
+
+vec3 screen_trace_correction(ivec2 tile,vec3 position,vec3 normal,
+                             uint receiver,vec3 world_irradiance)
+{
+    // One fixed cosine-biased hemisphere direction per 16x16 screen probe.
+    // Stable over camera frames: no temporal noise or history buffers.
+    vec3 axis=abs(normal.y)<.9?vec3(0.0,1.0,0.0):vec3(1.0,0.0,0.0);
+    vec3 tangent=normalize(cross(axis,normal));
+    vec3 bitangent=cross(normal,tangent);
+    float seed=fract(sin(dot(vec2(tile),vec2(127.1,311.7)))*43758.5453);
+    float angle=6.2831853*seed;
+    vec3 direction=normalize(normal*.72+
+        (cos(angle)*tangent+sin(angle)*bitangent)*.694);
+    vec3 origin=position+normal*.018;
+    vec3 radiance;
+    float limit=camera.trace_parameters.x;
+    bool hit=trace_screen(origin,direction,limit,receiver,radiance);
+    if(!hit)
+        hit=trace_fallback(origin,direction,limit,radiance);
+    if(!hit)return vec3(0.0);
+
+    // Screen-radiance reuse is a detail correction, not another complete
+    // diffuse lighting estimator. Limit it so one ray per tile cannot
+    // overpower the stable world radiance cache or introduce bright pixels.
+    vec3 delta=clamp(radiance-world_irradiance,vec3(-.35),vec3(.35));
+    return delta*camera.trace_parameters.y;
+}
+
 void main()
 {
     ivec2 tile=ivec2(gl_GlobalInvocationID.xy);
@@ -583,6 +667,7 @@ void main()
     }
     vec3 local=weights>.0001?gathered/weights:unoccluded;
     vec3 correction=clamp(local-unoccluded,-unoccluded*.8,vec3(.4));
+    correction+=screen_trace_correction(tile,position,normal,id,unoccluded);
     correction*=cached_albedo(position,id-1u);
     imageStore(screen_light,tile,vec4(correction,float(id)));
     imageStore(screen_meta,tile,vec4(position,view_z));
