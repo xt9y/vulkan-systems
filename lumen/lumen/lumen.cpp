@@ -927,46 +927,58 @@ struct system::implementation {
     void trace_scene(vk::CommandBuffer,const frame&) {}
     void update_surface_lighting(vk::CommandBuffer cmd,const frame& current)
     {
-        vk::ImageMemoryBarrier image_barrier{};
-        image_barrier.image=surface_lighting.handle();
-        image_barrier.subresourceRange={
-            vk::ImageAspectFlagBits::eColor,0,1,0,1};
-        image_barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
-        image_barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        std::array<vk::ImageMemoryBarrier,2> images{};
+        const std::array<vk::Image,2> targets{
+            surface_lighting.handle(),direct_lighting.handle()
+        };
+        for(std::size_t i=0;i<images.size();i++)
+        {
+            auto& barrier=images[i];
+            barrier.image=targets[i];
+            barrier.subresourceRange={
+                vk::ImageAspectFlagBits::eColor,0,1,0,1
+            };
+            barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            barrier.oldLayout=lighting_initialized?
+                vk::ImageLayout::eShaderReadOnlyOptimal:
+                vk::ImageLayout::eUndefined;
+            barrier.newLayout=lighting_initialized?
+                vk::ImageLayout::eGeneral:
+                vk::ImageLayout::eTransferDstOptimal;
+            barrier.srcAccessMask=lighting_initialized?
+                vk::AccessFlags(vk::AccessFlagBits::eShaderRead):
+                vk::AccessFlags{};
+            barrier.dstAccessMask=lighting_initialized?
+                vk::AccessFlags(vk::AccessFlagBits::eShaderWrite):
+                vk::AccessFlags(vk::AccessFlagBits::eTransferWrite);
+        }
+        cmd.pipelineBarrier(lighting_initialized?
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eComputeShader |
+                                       vk::PipelineStageFlagBits::eFragmentShader):
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eTopOfPipe),
+            lighting_initialized?
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eComputeShader):
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eTransfer),
+            {},{},{},images);
         if(!lighting_initialized)
         {
-            image_barrier.oldLayout=vk::ImageLayout::eUndefined;
-            image_barrier.newLayout=vk::ImageLayout::eTransferDstOptimal;
-            image_barrier.dstAccessMask=vk::AccessFlagBits::eTransferWrite;
-            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
-                vk::PipelineStageFlagBits::eTransfer,{},{},{},{image_barrier});
             const vk::ClearColorValue black(std::array<float,4>{0,0,0,0});
-            cmd.clearColorImage(surface_lighting.handle(),
-                vk::ImageLayout::eTransferDstOptimal,black,
-                {image_barrier.subresourceRange});
-            image_barrier.oldLayout=vk::ImageLayout::eTransferDstOptimal;
-            image_barrier.srcAccessMask=vk::AccessFlagBits::eTransferWrite;
-            image_barrier.newLayout=vk::ImageLayout::eGeneral;
-            image_barrier.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
+            for(const auto& barrier:images)
+                cmd.clearColorImage(barrier.image,
+                    vk::ImageLayout::eTransferDstOptimal,
+                    black,{barrier.subresourceRange});
+            for(auto& barrier:images)
+            {
+                barrier.oldLayout=vk::ImageLayout::eTransferDstOptimal;
+                barrier.newLayout=vk::ImageLayout::eGeneral;
+                barrier.srcAccessMask=vk::AccessFlagBits::eTransferWrite;
+                barrier.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
+            }
             cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
                 vk::PipelineStageFlagBits::eComputeShader,
-                {},{},{},{image_barrier});
+                {},{},{},images);
         }
-        else
-        {
-            image_barrier.oldLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
-            image_barrier.newLayout=vk::ImageLayout::eGeneral;
-            image_barrier.srcAccessMask=vk::AccessFlagBits::eShaderRead;
-            image_barrier.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
-            cmd.pipelineBarrier(
-                vk::PipelineStageFlagBits::eFragmentShader |
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::PipelineStageFlagBits::eComputeShader,
-                {},{},{},{image_barrier});
-        }
-
-        // This lighting update consumes the previous completed world-cache
-        // coefficients. The current frame's world-cache update follows it.
         if(radiance_initialized)
         {
             vk::BufferMemoryBarrier probe_barrier{};
@@ -981,20 +993,25 @@ struct system::implementation {
                 vk::PipelineStageFlagBits::eComputeShader,
                 {},{},{probe_barrier},{});
         }
+        // One 64x64 card per frame amortizes four-sample soft shadowing and
+        // indirect radiosity. Both atlases remain resident between frames.
         const light_constants push{
             std::uint32_t(current.index%16u),
             radiance_initialized?1u:0u,0u,0u
         };
         lighting_pipeline.dispatch(cmd,8,8,1,{lighting_sets.set()},
                                    &push,sizeof(push));
-        image_barrier.oldLayout=vk::ImageLayout::eGeneral;
-        image_barrier.newLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
-        image_barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
-        image_barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+        for(auto& barrier:images)
+        {
+            barrier.oldLayout=vk::ImageLayout::eGeneral;
+            barrier.newLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+            barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+            barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+        }
         cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
             vk::PipelineStageFlagBits::eComputeShader |
             vk::PipelineStageFlagBits::eFragmentShader,
-            {},{},{},{image_barrier});
+            {},{},{},images);
         lighting_initialized=true;
     }
 
