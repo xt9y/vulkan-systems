@@ -77,12 +77,6 @@ void session::pump(const datagram_sender& transmit,std::size_t byte_budget,
         if(!byte_budget)break;
     }
 }
-void session::pump(const socket::resource& udp,std::size_t budget,
-                   stream::clock::time_point now) {
-    pump([&](const endpoint::resource& peer,const void* bytes,std::size_t size) {
-        return socket::send(udp,peer,bytes,size);
-    },budget,now);
-}
 bool session::pop(delivery& out) {
     if(received_.empty())return false;
     received_bytes_-=received_.front().payload.size();
