@@ -305,10 +305,20 @@ namespace editor
         if(panel.w<80 || panel.h<100)return out;
         solid(out,panel,background);
         border(out,panel,frame);
-        const char* heading=menu_==menu::insert?"----- INSERT -----":
-            menu_==menu::properties?"----- SELECT -----":"----- EDITOR -----";
-        text(out,panel.x+panel.w/2,panel.y+38,heading,foreground,
-             draw_command::alignment::center);
+        std::string header_name=menu_==menu::insert?"INSERT":
+            menu_==menu::properties?"SELECT":"EDITOR";
+        if(menu_==menu::properties)
+            for(const auto& label:labels_)
+                if(label.object==selected_object_ && !label.text.empty())
+                {
+                    header_name=label.text;
+                    break;
+                }
+        const auto heading=wrap("----- "+header_name+" -----",
+            std::max(1,(panel.w-2*panel_padding)/12));
+        for(std::size_t line=0;line<heading.size();++line)
+            text(out,panel.x+panel.w/2,panel.y+36+int(line)*line_height,
+                 heading[line],foreground,draw_command::alignment::center);
 
         // Independent top-right counter, outside the scene's HDR pipeline.
         if(frame_time_ms_>0 && width>panel.x+panel.w+170)
@@ -338,7 +348,8 @@ namespace editor
         const int content_x=panel.x+panel_padding;
         const int content_width=std::max(12,panel.w-2*panel_padding);
         const int columns=std::max(1,content_width/12);
-        const int content_y=panel.y+header_height;
+        const int content_y=panel.y+std::max(header_height,
+            52+int(heading.size())*line_height);
         const int content_bottom=panel.y+panel.h-panel_padding;
         if(content_bottom<=content_y)return out;
         if(rows==0)
