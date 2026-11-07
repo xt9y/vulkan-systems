@@ -27,6 +27,20 @@ namespace render
         }
 
         void reset() noexcept {graphs_.clear();}
+        // Invalidate only after in-flight submissions using these resources
+        // have completed. The next record will establish fresh write states.
+        void invalidate() noexcept
+        {
+            for(auto& graph:graphs_)graph.clear_states();
+        }
+        void forget(vk::Image image)
+        {
+            for(auto& graph:graphs_)graph.forget(image);
+        }
+        void forget(vk::Buffer buffer)
+        {
+            for(auto& graph:graphs_)graph.forget(buffer);
+        }
 
         // The caller must declare image/buffer accesses that require barriers.
         // Existing render-pass external dependencies may handle attachments.
