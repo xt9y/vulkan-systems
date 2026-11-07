@@ -12,7 +12,9 @@ namespace {
 constexpr std::uint32_t invalid=UINT32_MAX;
 
 float component(const bvh::vec4& v,int i) {
-    return (&v.x)[i];
+    if(i==0)return v.x;
+    if(i==1)return v.y;
+    return v.z;
 }
 
 float center(const bvh::triangle& t,int axis) {
