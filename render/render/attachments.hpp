@@ -57,9 +57,9 @@ namespace render
             info.tiling=vk::ImageTiling::eOptimal;
             info.usage=depth?
                 vk::ImageUsageFlags(vk::ImageUsageFlagBits::eDepthStencilAttachment |
-                                    vk::ImageUsageFlagBits::eSampledImage):
+                                    vk::ImageUsageFlagBits::eSampled):
                 vk::ImageUsageFlags(vk::ImageUsageFlagBits::eColorAttachment |
-                                    vk::ImageUsageFlagBits::eSampledImage);
+                                    vk::ImageUsageFlagBits::eSampled);
             result->image=gpu::create_image(info,vk::MemoryPropertyFlagBits::eDeviceLocal);
             vk::ImageViewCreateInfo view{};
             view.image=result->image.handle;
