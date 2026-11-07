@@ -87,7 +87,8 @@ namespace editor::vulkan
     void record(vk::CommandBuffer command,const draw_list& commands,
                 vk::Extent2D extent,std::uint32_t color_attachment)
     {
-        if(!command || !extent.width || !extent.height)return;
+        // Hidden editor: zero Vulkan commands and zero GPU/CPU allocations.
+        if(commands.empty() || !command || !extent.width || !extent.height)return;
         std::vector<vk::ClearRect> batch;
         batch.reserve(1024);
         color current{};
