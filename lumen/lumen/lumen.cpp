@@ -261,7 +261,7 @@ struct system::implementation {
 
     gpu::buffer vertex_buffer,faces_buffer,trace_nodes,trace_triangles;
     gpu::buffer radiance_probes;
-    gpu::image color,depth,surface_cache,surface_lighting;
+    gpu::image color,depth,surface_cache,surface_lighting,direct_lighting;
     gpu::image screen_light,screen_meta,screen_gather;
     render::target target;
     render::pipeline geometry_pipeline,composite_pipeline;
@@ -323,6 +323,7 @@ struct system::implementation {
             color.reset();
             surface_cache.reset();
             surface_lighting.reset();
+            direct_lighting.reset();
             lighting_initialized=false;
             screen_light.reset();
             screen_meta.reset();
@@ -451,6 +452,11 @@ struct system::implementation {
             vk::ImageUsageFlagBits::eSampled |
             vk::ImageUsageFlagBits::eTransferDst,
             vk::ImageAspectFlagBits::eColor);
+        make_image(direct_lighting,vk::Extent2D{256,256},color_format,
+            vk::ImageUsageFlagBits::eStorage |
+            vk::ImageUsageFlagBits::eSampled |
+            vk::ImageUsageFlagBits::eTransferDst,
+            vk::ImageAspectFlagBits::eColor);
         make_image(surface_cache,{256,256},card_format,
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled,
@@ -493,8 +499,10 @@ struct system::implementation {
         cards_binding.descriptorType=vk::DescriptorType::eCombinedImageSampler;
         auto probes_binding=scene_binding;
         probes_binding.binding=4;
+        auto direct_texture=cards_binding;
+        direct_texture.binding=11;
         geometry_sets.create({scene_binding,nodes_binding,triangles_binding,
-                              cards_binding,probes_binding});
+                              cards_binding,probes_binding,direct_texture});
         geometry_sets.write_buffer(0,0,faces_buffer.descriptor());
         geometry_sets.write_buffer(0,1,trace_nodes.descriptor());
         geometry_sets.write_buffer(0,2,trace_triangles.descriptor());
@@ -531,8 +539,11 @@ struct system::implementation {
         auto lighting_output=radiance_cards;
         lighting_output.binding=10;
         lighting_output.descriptorType=vk::DescriptorType::eStorageImage;
+        auto direct_output=lighting_output;
+        direct_output.binding=11;
         lighting_sets.create({radiance_faces,radiance_nodes,radiance_triangles,
-                              radiance_cards,radiance_buffer,lighting_output});
+                              radiance_cards,radiance_buffer,lighting_output,
+                              direct_output});
         lighting_sets.write_buffer(0,0,faces_buffer.descriptor());
         lighting_sets.write_buffer(0,1,trace_nodes.descriptor());
         lighting_sets.write_buffer(0,2,trace_triangles.descriptor());
@@ -609,6 +620,15 @@ struct system::implementation {
         lit_write.imageView=surface_lighting.view();
         lit_write.imageLayout=vk::ImageLayout::eGeneral;
         lighting_sets.write_image(0,10,lit_write);
+        vk::DescriptorImageInfo direct_read{};
+        direct_read.sampler=sampler;
+        direct_read.imageView=direct_lighting.view();
+        direct_read.imageLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+        geometry_sets.write_image(0,11,direct_read);
+        vk::DescriptorImageInfo direct_write{};
+        direct_write.imageView=direct_lighting.view();
+        direct_write.imageLayout=vk::ImageLayout::eGeneral;
+        lighting_sets.write_image(0,11,direct_write);
 
         vk::DescriptorImageInfo depth_read{};
         depth_read.sampler=depth_sampler;
