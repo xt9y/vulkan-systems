@@ -7,7 +7,9 @@
 #include <iostream>
 #include <utility>
 #include <stdexcept>
-#define STBI_IMAGE_STATIC
+// stb_image uses STB_IMAGE_STATIC (without the extra I) to make
+// all implementation symbols TU-local. VulkanGame has its own stb_image.
+#define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
