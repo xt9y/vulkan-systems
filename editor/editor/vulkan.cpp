@@ -4,6 +4,12 @@
 #include <cctype>
 #include <cstdint>
 #include <vector>
+#include <string>
+#include <mutex>
+#include <utility>
+#define STBI_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
 
 namespace editor::vulkan
 {
@@ -78,10 +84,81 @@ namespace editor::vulkan
             }
         }
 
+        struct bitmap
+        {
+            int width=0,height=0;
+            std::vector<std::uint8_t> pixels;
+            bool valid() const{return width>0 && height>0 &&
+                pixels.size()==std::size_t(width)*std::size_t(height);}
+        };
+
+        struct font_data
+        {
+            std::once_flag once;
+            std::string directory="build/editor-font-repository/"
+                "Rogue/Rogue/res/textures/font";
+            std::array<bitmap,128> glyphs;
+            bool available=false;
+        };
+
+        font_data& font()
+        {
+            static font_data instance;
+            return instance;
+        }
+
+        // Exact index mapping from Rogue/Rogue/src/Core/TextBlitting.cpp.
+        // Its UTF-8 placeholder bullets occupy three bytes each, so use
+        // byte offsets (std::string::find) as the old text blitter did.
+        void load_font(font_data& out)
+        {
+            const std::string sheet=
+                "•!\\\"#$%&'••*+,-./0123456789:;<=>?_"
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ\\\\^_`abcdefghijklmnopqrstuvwxyz";
+            for(int character=33;character<127;++character)
+            {
+                const auto index=sheet.find(char(character));
+                if(index==std::string::npos || index>=90)continue;
+                const std::string filename=out.directory+"/char_"+
+                    std::to_string(index+1)+".png";
+                int w=0,h=0,channels=0;
+                stbi_uc* pixels=stbi_load(filename.c_str(),&w,&h,
+                                          &channels,4);
+                if(!pixels || w<=0 || h<=0 || w>128 || h>128)
+                {
+                    stbi_image_free(pixels);
+                    continue;
+                }
+                bitmap glyph;
+                glyph.width=w;
+                glyph.height=h;
+                glyph.pixels.resize(std::size_t(w)*std::size_t(h));
+                for(int i=0;i<w*h;++i)
+                {
+                    const int r=pixels[i*4+0],g=pixels[i*4+1];
+                    const int b=pixels[i*4+2],a=pixels[i*4+3];
+                    // The source contains individual white, translucent
+                    // glyph PNGs. Use alpha and brightness as coverage.
+                    glyph.pixels[std::size_t(i)]=std::uint8_t(
+                        std::max({r,g,b})*a/255);
+                }
+                stbi_image_free(pixels);
+                out.glyphs[std::size_t(character)]=std::move(glyph);
+                out.available=true;
+            }
+        }
+
         bool same(color a,color b)
         {
             return a.r==b.r && a.g==b.g && a.b==b.b;
         }
+    }
+
+    void set_font_directory(std::string directory)
+    {
+        // This is an initialization-time configuration API. The underlying
+        // font cache is populated once on the first rendering call.
+        font().directory=std::move(directory);
     }
 
     void record(vk::CommandBuffer command,const draw_list& commands,
@@ -89,6 +166,8 @@ namespace editor::vulkan
     {
         // Hidden editor: zero Vulkan commands and zero GPU/CPU allocations.
         if(commands.empty() || !command || !extent.width || !extent.height)return;
+        auto& atlas=font();
+        std::call_once(atlas.once,[&]{load_font(atlas);});
         std::vector<vk::ClearRect> batch;
         batch.reserve(1024);
         color current{};
@@ -148,9 +227,43 @@ namespace editor::vulkan
                 if(letter=='\n')
                 {
                     pen_x=item.x;
-                    pen_y+=8*scale;
+                    pen_y+=atlas.available?24:8*scale;
                     continue;
                 }
+                if(letter==' ')
+                {
+                    pen_x+=atlas.available?6:6*scale;
+                    continue;
+                }
+                const auto& bitmap_font=letter<atlas.glyphs.size()?
+                    atlas.glyphs[letter]:atlas.glyphs[0];
+                if(bitmap_font.valid())
+                {
+                    for(int row=0;row<bitmap_font.height;++row)
+                    {
+                        for(int column=0;column<bitmap_font.width;)
+                        {
+                            const auto inside=[&](int col)
+                            {
+                                return bitmap_font.pixels[
+                                    std::size_t(row*bitmap_font.width+col)]>72;
+                            };
+                            if(!inside(column))
+                            {
+                                ++column;
+                                continue;
+                            }
+                            const int start=column;
+                            do{++column;}while(column<bitmap_font.width &&
+                                              inside(column));
+                            rectangle(pen_x+start,pen_y+row,
+                                column-start,1,item.tint);
+                        }
+                    }
+                    pen_x+=bitmap_font.width;
+                    continue;
+                }
+                // Remain usable when the legacy PNGs have not been fetched.
                 const auto bitmap=glyph(letter);
                 for(int row=0;row<7;++row)
                 {
