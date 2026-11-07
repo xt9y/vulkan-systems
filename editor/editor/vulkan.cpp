@@ -151,7 +151,7 @@ namespace editor::vulkan
             }
             if(glyph_count)
                 std::clog<<"editor: original HellEngine bitmap font: "
-                         <<glyph_count<<" glyphs loaded\\n";
+                         <<glyph_count<<" glyphs loaded\n";
         }
 
         bool same(color a,color b)
