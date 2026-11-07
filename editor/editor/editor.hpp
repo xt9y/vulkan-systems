@@ -87,7 +87,7 @@ namespace editor
         bool visible_=false,cursor_free_=false;
         menu menu_=menu::none;
         int selected_row_=0;
-        int scroll_first_=0;
+        mutable int scroll_first_=0;
         double frame_time_ms_=0;
 
         std::uint64_t selected_object_=0;
