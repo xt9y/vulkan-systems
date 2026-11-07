@@ -97,10 +97,16 @@ namespace editor::vulkan
                 {
                     const unsigned char code=
                         static_cast<unsigned char>(sheet[i]);
-                    if(code>=33 && code<127)
+                    if(code>=33 && code<127 &&
+                       sheet.find(char(code))==i)
                         loaded[code]=std::move(entry);
                 }
             }
+            // The backup contains char_1..char_90, while the original
+            // mapping refers to five additional lowercase glyphs (v-z).
+            // Reuse their authentic uppercase PNGs, never a synthetic font.
+            for(unsigned char c='v';c<='z';++c)
+                loaded[c]=loaded[static_cast<unsigned char>(c-'a'+'A')];
             atlas.glyphs=std::move(loaded);
             atlas.ready=true;
             std::clog<<"editor: hardloaded 90 original HellEngine font PNGs\n";
