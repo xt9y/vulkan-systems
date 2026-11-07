@@ -60,14 +60,44 @@ const float PI=3.14159265358979323846;
 const float EPSILON=0.0015;
 const int FACE_COUNT=16;
 
+bool intersects_bounds(vec3 ro,vec3 rd,float limit,
+                       vec3 lower,vec3 upper)
+{
+    float lo=0.0,hi=limit;
+    for(int axis=0;axis<3;axis++)
+    {
+        if(abs(rd[axis])<0.000001)
+        {
+            if(ro[axis]<lower[axis] || ro[axis]>upper[axis])
+                return false;
+        }
+        else
+        {
+            float a=(lower[axis]-ro[axis])/rd[axis];
+            float b=(upper[axis]-ro[axis])/rd[axis];
+            lo=max(lo,min(a,b));
+            hi=min(hi,max(a,b));
+            if(hi<lo)return false;
+        }
+    }
+    return hi>EPSILON;
+}
+
 bool blocked(vec3 ro,vec3 rd,float limit)
 {
-    // The emitter (face 15) is the destination, not an occluder.
-    for(int i=0;i<FACE_COUNT-1;i++)
+    // The enclosing Cornell room is convex: only the two internal blocks
+    // can occlude an interior point's segment to the ceiling emitter.
+    // Their conservative AABBs reject most rays before face intersections.
+    bool small=intersects_bounds(ro,rd,limit,
+                  vec3(.80,-.01,.63),vec3(2.92,1.67,2.74));
+    bool tall=intersects_bounds(ro,rd,limit,
+                  vec3(2.63,-.01,2.45),vec3(4.74,3.32,4.58));
+    if(!small && !tall)return false;
+    for(int i=5;i<15;i++)
     {
+        if((i<10 && !small) || (i>=10 && !tall))continue;
         Face f=faces[i];
         float denom=dot(f.normal.xyz,rd);
-        // Two-sided occlusion: all box walls block shadow rays.
         if(abs(denom)<0.000001)continue;
         float t=dot(f.origin.xyz-ro,f.normal.xyz)/denom;
         if(t<=EPSILON || t>=limit)continue;
