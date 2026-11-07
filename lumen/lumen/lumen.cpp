@@ -1168,12 +1168,22 @@ void system::resize(vk::RenderPass pass,vk::Format format,vk::Extent2D extent) {
     impl_=std::move(next);
 }
 void system::set_scene(const scene& value) {
+    // The demo is intentionally self-contained. Until arbitrary GPU mesh
+    // layouts have a defined contract, do not silently ignore live scenes.
+    if(value.vertices || value.indices || value.instances || value.materials ||
+       value.vertex_count || value.index_count || value.instance_count)
+        throw std::logic_error("VulkanLumen external scene format not implemented");
     if(impl_)impl_->geometry=value;
 }
 void system::set_lighting(const lighting& value) {
+    if(value.lights || value.count)
+        throw std::logic_error("VulkanLumen external light format not implemented");
     if(impl_)impl_->lights=value;
 }
 void system::set_gbuffer(const gbuffer& value) {
+    if(value.depth || value.normal || value.albedo || value.roughness ||
+       value.motion)
+        throw std::logic_error("VulkanLumen external G-buffer format not implemented");
     if(impl_)impl_->surfaces=value;
 }
 void system::invalidate() {
