@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <vector>
 #include <string>
+#include <iostream>
 #include <mutex>
 #include <utility>
 #define STBI_IMAGE_STATIC
@@ -112,6 +113,7 @@ namespace editor::vulkan
         // byte offsets (std::string::find) as the old text blitter did.
         void load_font(font_data& out)
         {
+            unsigned int glyph_count=0;
             const std::string sheet=
                 "•!\"#$%&'••*+,-./0123456789:;<=>?_"
                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ\\^_`abcdefghijklmnopqrstuvwxyz";
@@ -145,7 +147,11 @@ namespace editor::vulkan
                 stbi_image_free(pixels);
                 out.glyphs[std::size_t(character)]=std::move(glyph);
                 out.available=true;
+                ++glyph_count;
             }
+            if(glyph_count)
+                std::clog<<"editor: original HellEngine bitmap font: "
+                         <<glyph_count<<" glyphs loaded\\n";
         }
 
         bool same(color a,color b)
