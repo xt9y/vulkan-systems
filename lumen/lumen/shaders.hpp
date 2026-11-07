@@ -100,7 +100,15 @@ bool box_hit(vec3 origin,vec3 direction,float limit,
     return far_t>EPSILON;
 }
 
-bool triangle_hit(vec3 origin,vec3 direction,float limit,Triangle tri)
+struct RayHit {
+    uint primitive;
+    float distance;
+    vec2 barycentric;
+    bool overflow;
+};
+
+bool triangle_hit(vec3 origin,vec3 direction,float limit,Triangle tri,
+                  out float distance,out vec2 barycentric)
 {
     vec3 e1=tri.b.xyz-tri.a.xyz;
     vec3 e2=tri.c.xyz-tri.a.xyz;
@@ -114,14 +122,21 @@ bool triangle_hit(vec3 origin,vec3 direction,float limit,Triangle tri)
     vec3 q=cross(t,e1);
     float v=dot(direction,q)*inv;
     if(v<0.0 || u+v>1.0)return false;
-    float distance=dot(e2,q)*inv;
-    return distance>EPSILON && distance<limit;
+    float hit_t=dot(e2,q)*inv;
+    if(hit_t<=EPSILON || hit_t>=limit)return false;
+    distance=hit_t;
+    barycentric=vec2(u,v);
+    return true;
 }
 
-bool blocked(vec3 origin,vec3 direction,float limit)
+RayHit trace_scene(vec3 origin,vec3 direction,float limit,bool any_hit)
 {
-    // Any-hit query against arbitrary triangle geometry.
-    // A compact stack avoids scanning every triangle in every pixel.
+    // Closest- or any-hit traversal of the same arbitrary triangle BVH.
+    RayHit result;
+    result.primitive=INVALID;
+    result.distance=limit;
+    result.barycentric=vec2(0.0);
+    result.overflow=false;
     uint stack[64];
     int count=1;
     stack[0]=0u;
@@ -129,22 +144,35 @@ bool blocked(vec3 origin,vec3 direction,float limit)
     {
         uint index=stack[--count];
         Node n=nodes[index];
-        if(!box_hit(origin,direction,limit,n.lo.xyz,n.hi.xyz))
+        if(!box_hit(origin,direction,result.distance,n.lo.xyz,n.hi.xyz))
             continue;
         if(n.links.w!=INVALID)
         {
-            if(triangle_hit(origin,direction,limit,
-                            triangles[n.links.w]))return true;
+            float distance;
+            vec2 barycentric;
+            if(triangle_hit(origin,direction,result.distance,
+                            triangles[n.links.w],distance,barycentric))
+            {
+                result.primitive=n.links.w;
+                result.distance=distance;
+                result.barycentric=barycentric;
+                if(any_hit)return result;
+            }
         }
         else
         {
-            // Conservative fallback if a future scene exceeds stack capacity.
-            if(count+2>64)return true;
+            if(count+2>64){result.overflow=true;break;}
             stack[count++]=n.links.x;
             stack[count++]=n.links.y;
         }
     }
-    return false;
+    return result;
+}
+
+bool blocked(vec3 origin,vec3 direction,float limit)
+{
+    RayHit hit=trace_scene(origin,direction,limit,true);
+    return hit.primitive!=INVALID || hit.overflow;
 }
 
 vec3 direct_area_light(vec3 position,vec3 normal,vec3 albedo)
