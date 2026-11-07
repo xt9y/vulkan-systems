@@ -220,13 +220,31 @@ namespace editor::vulkan
                 continue;
             }
             const int scale=std::clamp(item.scale,1,5);
-            int pen_x=item.x;
+            int advance=0;
+            for(unsigned char letter:item.text)
+            {
+                if(letter=='\n')break;
+                if(letter==' ')
+                {
+                    advance+=atlas.available?6:6*scale;
+                    continue;
+                }
+                const auto& g=letter<atlas.glyphs.size()?
+                    atlas.glyphs[letter]:atlas.glyphs[0];
+                advance+=g.valid()?g.width:6*scale;
+            }
+            int start_x=item.x;
+            if(item.text_alignment==draw_command::alignment::center)
+                start_x-=advance/2;
+            else if(item.text_alignment==draw_command::alignment::right)
+                start_x-=advance;
+            int pen_x=start_x;
             int pen_y=item.y;
             for(unsigned char letter:item.text)
             {
                 if(letter=='\n')
                 {
-                    pen_x=item.x;
+                    pen_x=start_x;
                     pen_y+=atlas.available?24:8*scale;
                     continue;
                 }
