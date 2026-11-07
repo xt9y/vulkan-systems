@@ -924,8 +924,6 @@ struct system::implementation {
         cache_valid=true;
         cache_dirty=false;
     }
-    void trace_screen(vk::CommandBuffer,const frame&) {}
-    void trace_scene(vk::CommandBuffer,const frame&) {}
     void update_surface_lighting(vk::CommandBuffer cmd,const frame& current)
     {
         std::array<vk::ImageMemoryBarrier,2> images{};
@@ -1132,8 +1130,6 @@ struct system::implementation {
                             vk::PipelineStageFlagBits::eFragmentShader,
                             {},{},{barrier},{});
     }
-    void gather_indirect(vk::CommandBuffer,const frame&) {}
-    void trace_reflections(vk::CommandBuffer,const frame&) {}
 };
 
 system::system()=default;
@@ -1206,12 +1202,8 @@ void system::record(vk::CommandBuffer cmd,const frame& current) {
     impl_->stamp(cmd,2);
     impl_->draw_scene(cmd,current);
     impl_->stamp(cmd,3);
-    impl_->trace_screen(cmd,current);
-    impl_->trace_scene(cmd,current);
     impl_->update_screen_probes(cmd,current);
     impl_->stamp(cmd,4);
-    impl_->gather_indirect(cmd,current);
-    impl_->trace_reflections(cmd,current);
 }
 void system::compose(vk::CommandBuffer cmd) {
     if(!impl_ || !impl_->ready)return;
