@@ -1049,7 +1049,8 @@ struct system::implementation {
         const screen_constants push{
             current_camera,
             {std::clamp(options.screen_trace_distance,.5f,8.f),
-             0.f,screen_initialized?1.f:0.f,float(current.index%4096u)}
+             float(std::clamp(options.screen_rays_per_probe,1u,8u)),
+             screen_initialized?1.f:0.f,float(current.index%4096u)}
         };
         screen_pipeline.dispatch(cmd,(screen_extent.width+7)/8,
                                  (screen_extent.height+7)/8,1,
