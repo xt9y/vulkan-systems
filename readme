@@ -1,22 +1,35 @@
 vulkan-systems
-  gpu/       VulkanEngine resource ownership, staging, shaders, compute, culling
-  render/    frame scheduling, image/geometry ownership, graph passes, draws
-  bvh/       GPU radix LBVH, TLAS/BLAS instancing, triangle hits and refits
-  spatial/   CPU BVH index and frustum queries
-  network/   IPv4/IPv6 UDP, pinned DTLS 1.2 and reliable session
-  jobs/      bounded multithreaded jobs and completion queue
 
-Each module has a standalone build.c with C++17 APIs.
-Root build.c exports VulkanSystems (gpu/render/bvh), VulkanSpatial, VulkanNetwork,
-and VulkanJobs as independent static library targets. GPU and render depend
-on VulkanEngine. Network and jobs do not depend on Vulkan.
+Reusable independent C++17 Vulkan and CPU modules:
 
-Host initializes and shuts down the Vulkan device and swapchain.
-No game-specific scene serialization, weapon logic, or authority rules live here.
+  gpu/        VulkanGPU     GPU memory, descriptors, compute and barriers
+  render/     VulkanRender  Frame submission, swapchain rendering, pipelines
+  bvh/        VulkanBVH     GPU BLAS/TLAS and ray-query infrastructure
+  lumen/      VulkanLumen   Lumen-style GI API skeleton (no rendering yet)
+  spatial/    VulkanSpatial CPU index / spatial queries
+  network/    VulkanNetwork Authenticated UDP / DTLS session
+  jobs/       VulkanJobs    CPU job scheduling
 
+There is deliberately NO root build.c or combined VulkanSystems target.
+Each module has its own <module>/build.c, with precisely scoped sources,
+include paths and dependencies. Applications fetch only the needed modules:
 
-VulkanSystems includes the bvh/ implementation; include <bvh/bvh.hpp> using
-its bvh include directory. The standalone bvh/build.c target is for builds
-that use only BVH; do not link both target libraries into the same executable.
-The application compiles its BVH shader variants as it compiles render shaders.
-No tools directory, GI implementation, fixed BRDF, or game-specific shading policy.
+  C_Dependency* render=c_git(b,"VulkanRender",
+    "https://github.com/xt9y/vulkan-systems.git","main");
+  c_dep_subdir(render,"render");
+  c_dep_cbuild(render,"VulkanRender",C_TARGET_STATIC_LIBRARY);
+  c_dep_include(render,".");
+
+For render clients, also link VulkanGPU because the render/postprocess module
+uses GPU-managed images. Link users before providers (render, gpu, engine).
+For a Lumen harness, additionally fetch the lumen subdirectory and link
+VulkanLumen; it currently exports no-op create/set_scene/set_gbuffer/
+set_lighting/invalidate/resize/record/compose/result/reset entry points.
+The modules' VulkanEngine dependencies are defined by their own build.c files.
+
+No game-specific scene serialization, weapons, networking policy, or world
+authority belongs in VulkanGPU, VulkanRender, VulkanBVH, or VulkanLumen.
+
+The shader algorithms needed for Lumen (screen tracing, surface cache, probe
+gather, world radiance cache, reflections and composite) have intentionally
+NOT been implemented. See lumen/readme for the fixed integration contract.
