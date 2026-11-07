@@ -5,6 +5,8 @@ void build(C_Build* b)
     C_Target* target=c_static_library(b,"VulkanLumen");
     c_sources(target,"lumen/*.cpp");
     c_include(target,".");
+    c_include(target,"../gpu");
+    c_include(target,"../render");
     c_flag(target,"-std=c++17");
 
     C_Dependency* engine=c_git(
