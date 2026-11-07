@@ -16,6 +16,7 @@ namespace editor
         bool question=false,tab=false,enter=false,escape=false;
         bool up=false,down=false,left=false,right=false,click=false;
         int mouse_x=0,mouse_y=0;
+        int viewport_width=0,viewport_height=0; // Framebuffer pixel coordinates
     };
 
     struct object_type
