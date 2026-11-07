@@ -156,7 +156,9 @@ bool advance(peer_state& p) {
             if(!certificate || !identity::verify_or_pin(
                 p.owner->limits.storage_directory,
                 p.owner->limits.trust_identity,*certificate))
-                return false;
+                throw std::runtime_error(
+                    "DTLS server identity failed verification: server key changed "
+                    "or certificate invalid. Refusing to reconnect.");
         }
         p.authorized = true;
         return true;
