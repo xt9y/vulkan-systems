@@ -361,38 +361,32 @@ const int FACE_COUNT=16;
 const int CARD_SIZE=64;
 /* LUMEN_SHARED_TRACING */
 /* LUMEN_SHARED_IRRADIANCE */
-layout(set=0,binding=9) uniform sampler2D previous_lighting;
 layout(rgba16f,set=0,binding=10) writeonly uniform image2D next_lighting;
 layout(push_constant) uniform LightUpdate {
     uint card_to_update;
-    uint first_frame;
-    uint reset_history;
-    uint reserved;
+    uint enable_indirect;
+    uint reserved0;
+    uint reserved1;
 } params;
 void main()
 {
-    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
-    if(any(greaterThanEqual(pixel,ivec2(256))))return;
-    uint face_id=uint(pixel.x/64+(pixel.y/64)*4);
-    vec3 current=vec3(0);
-    if(params.first_frame==0u && params.reset_history==0u)
-        current=texelFetch(previous_lighting,pixel,0).rgb;
-    if(face_id==params.card_to_update || params.first_frame!=0u ||
-       params.reset_history!=0u)
+    ivec2 local_pixel=ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(local_pixel,ivec2(64))))return;
+    uint face_id=params.card_to_update;
+    ivec2 pixel=ivec2(int(face_id%4u),int(face_id/4u))*64+local_pixel;
+    Face face=faces[face_id];
+    vec2 uv=(vec2(local_pixel)+.5)/64.0;
+    vec3 position=face.origin.xyz+uv.x*face.u.xyz+uv.y*face.v.xyz;
+    vec3 albedo=cached_albedo(position,face_id);
+    vec3 normal=normalize(face.normal.xyz);
+    vec3 radiance=face.emission.rgb;
+    if(all(lessThanEqual(radiance,vec3(0.0))))
     {
-        Face face=faces[face_id];
-        vec2 uv=(vec2(pixel%64)+.5)/64.0;
-        vec3 position=face.origin.xyz+uv.x*face.u.xyz+uv.y*face.v.xyz;
-        vec3 normal=normalize(face.normal.xyz);
-        vec3 albedo=cached_albedo(position,face_id);
-        if(any(greaterThan(face.emission.rgb,vec3(0.0))))
-            current=face.emission.rgb;
-        else
-            current=direct_area_light(position,normal,albedo)+
-                (params.first_frame!=0u?vec3(0.0):
-                    albedo*indirect_irradiance(position,normal));
+        radiance=direct_area_light(position,normal,albedo);
+        if(params.enable_indirect!=0u)
+            radiance+=albedo*indirect_irradiance(position,normal);
     }
-    imageStore(next_lighting,pixel,vec4(max(current,vec3(0.0)),1.0));
+    imageStore(next_lighting,pixel,vec4(max(radiance,vec3(0.0)),1.0));
 }
 )glsl";
 
