@@ -45,10 +45,13 @@ namespace editor
             solid(out,{r.x,r.y,2,r.h},c);
             solid(out,{r.x+r.w-2,r.y,2,r.h},c);
         }
-        void text(draw_list& out,int x,int y,std::string content,color c=foreground)
+        void text(draw_list& out,int x,int y,std::string content,
+                  color c=foreground,
+                  draw_command::alignment alignment=draw_command::alignment::left)
         {
             draw_command item{};
             item.kind=draw_command::type::text;
+            item.text_alignment=alignment;
             item.x=x;item.y=y;item.tint=c;item.scale=text_scale;
             item.text=std::move(content);
             out.push_back(std::move(item));
@@ -304,8 +307,8 @@ namespace editor
         border(out,panel,frame);
         const char* heading=menu_==menu::insert?"----- INSERT -----":
             menu_==menu::properties?"----- SELECT -----":"----- EDITOR -----";
-        const int title_width=int(std::string(heading).size())*12;
-        text(out,panel.x+(panel.w-title_width)/2,panel.y+38,heading);
+        text(out,panel.x+panel.w/2,panel.y+38,heading,foreground,
+             draw_command::alignment::center);
 
         // Independent top-right counter, outside the scene's HDR pipeline.
         if(frame_time_ms_>0 && width>panel.x+panel.w+170)
@@ -317,8 +320,10 @@ namespace editor
             frame<<std::fixed<<std::setprecision(2)
                  <<frame_time_ms_<<" MS";
             const auto right=width-24;
-            text(out,right-int(timing.str().size())*12,26,timing.str());
-            text(out,right-int(frame.str().size())*12,54,frame.str());
+            text(out,right,26,timing.str(),foreground,
+                 draw_command::alignment::right);
+            text(out,right,54,frame.str(),foreground,
+                 draw_command::alignment::right);
         }
 
         if(menu_==menu::none)return out;
