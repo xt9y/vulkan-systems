@@ -733,6 +733,24 @@ struct system::implementation {
     void update_screen_probes(vk::CommandBuffer,const frame&) {}
     void update_radiance_cache(vk::CommandBuffer cmd,const frame& current)
     {
+        if(radiance_initialized)
+        {
+            // The previous frame read these coefficients in the fragment
+            // stage. Make previous compute writes visible before new probe
+            // read/modify/write updates, including across queue submissions.
+            vk::BufferMemoryBarrier reuse{};
+            reuse.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+            reuse.dstAccessMask=vk::AccessFlagBits::eShaderRead |
+                                vk::AccessFlagBits::eShaderWrite;
+            reuse.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            reuse.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            reuse.buffer=radiance_probes.handle();
+            reuse.offset=0;
+            reuse.size=radiance_cache_bytes;
+            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                                vk::PipelineStageFlagBits::eComputeShader,
+                                {},{},{reuse},{});
+        }
         if(!radiance_initialized)
         {
             // Clear once: untouched probes are invalid (history count 0).
