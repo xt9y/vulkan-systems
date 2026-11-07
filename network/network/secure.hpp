@@ -10,21 +10,14 @@
 #include <string>
 
 namespace net::secure {
-// DTLS 1.2 with two modes: strict CA-verified mutual TLS or automatic
-// server-key TOFU. Neither mode permits plaintext application packets.
+// One transport: DTLS 1.2 with automatic persistent server identity and
+// client-side trust-on-first-use public-key pinning. No plaintext fallback.
 enum class role { client, server };
 struct settings {
-    std::string ca_file;
-    std::string certificate_file;
-    std::string private_key_file;
-    // Client: expected server DNS/IP identity used for certificate verification.
-    std::string server_name;
-    // Explicit opt-in. A persistent local server key is generated automatically;
-    // clients pin its public key on first connection. First use does not
-    // authenticate against an independent trust anchor.
-    bool automatic_identity = false;
+    // A persistent per-user directory, never inside the repository.
     std::string storage_directory;
-    std::string trust_identity; // stable configured server host:port (client)
+    // Client: configured DNS/IP and port. Trust pins are scoped per endpoint.
+    std::string trust_identity;
     std::size_t max_peers = 64;
     std::size_t max_delivered_bytes = 4 * 1024 * 1024;
     std::size_t max_pending_bytes_per_peer = 64 * 1024;
@@ -34,7 +27,8 @@ using resource = std::shared_ptr<state>;
 resource create(role side, settings config, std::uint16_t port = 0,
                 const std::string& bind_host = "0.0.0.0");
 void destroy(resource& connection) noexcept;
-// Required for clients: pin the UDP endpoint before accepting DTLS traffic.
+// Called initially and on a reconnect: discards the previous DTLS session,
+// // regenerates the handshake, and retains the pinned server key on disk.
 void connect(const resource& connection, const endpoint::resource& remote);
 bool send(const resource& connection, const endpoint::resource& peer,
           const void* bytes, std::size_t size);
