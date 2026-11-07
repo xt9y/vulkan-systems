@@ -1,5 +1,6 @@
 #include "lumen.hpp"
 #include "shaders.hpp"
+#include "trace.hpp"
 
 #include <gpu/buffer.hpp>
 #include <gpu/image.hpp>
@@ -211,7 +212,7 @@ struct system::implementation {
     lighting lights{};
     gbuffer surfaces{};
 
-    gpu::buffer vertex_buffer,faces_buffer;
+    gpu::buffer vertex_buffer,faces_buffer,trace_nodes,trace_triangles;
     gpu::image color,depth;
     render::target target;
     render::pipeline geometry_pipeline,composite_pipeline;
@@ -247,6 +248,8 @@ struct system::implementation {
             color.reset();
             vertex_buffer.reset();
             faces_buffer.reset();
+            trace_nodes.reset();
+            trace_triangles.reset();
             box_mesh={};
             fullscreen={};
             vertex_count=0;
@@ -276,6 +279,12 @@ struct system::implementation {
 
         const auto vertices=cornell_box();
         const auto faces=make_faces(vertices);
+        std::vector<point> shadow_vertices;
+        shadow_vertices.reserve(vertices.size()-6);
+        // Exclude the ceiling emitter from shadow occluders.
+        for(std::size_t i=0;i<vertices.size()-6;i++)
+            shadow_vertices.push_back(vertices[i].position);
+        const auto accel=trace::build(shadow_vertices);
         vertex_count=std::uint32_t(vertices.size());
         vertex_buffer.create(vertices.size()*sizeof(vertex),
             vk::BufferUsageFlagBits::eVertexBuffer,
@@ -286,6 +295,17 @@ struct system::implementation {
             vk::MemoryPropertyFlagBits::eHostVisible |
             vk::MemoryPropertyFlagBits::eHostCoherent);
         faces_buffer.upload(faces.data(),sizeof(faces));
+        const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
+        const auto host_memory=vk::MemoryPropertyFlagBits::eHostVisible |
+                               vk::MemoryPropertyFlagBits::eHostCoherent;
+        trace_nodes.create(accel.nodes.size()*sizeof(bvh::node),
+                           storage,host_memory);
+        trace_nodes.upload(accel.nodes.data(),
+                           accel.nodes.size()*sizeof(bvh::node));
+        trace_triangles.create(accel.triangles.size()*sizeof(bvh::triangle),
+                               storage,host_memory);
+        trace_triangles.upload(accel.triangles.data(),
+                               accel.triangles.size()*sizeof(bvh::triangle));
         box_mesh.vertex_count=vertex_count;
         box_mesh.streams={{0,vertex_buffer.handle(),0}};
         fullscreen.vertex_count=3;
@@ -326,8 +346,14 @@ struct system::implementation {
         scene_binding.descriptorType=vk::DescriptorType::eStorageBuffer;
         scene_binding.descriptorCount=1;
         scene_binding.stageFlags=vk::ShaderStageFlagBits::eFragment;
-        geometry_sets.create({scene_binding});
+        auto nodes_binding=scene_binding;
+        nodes_binding.binding=1;
+        auto triangles_binding=scene_binding;
+        triangles_binding.binding=2;
+        geometry_sets.create({scene_binding,nodes_binding,triangles_binding});
         geometry_sets.write_buffer(0,0,faces_buffer.descriptor());
+        geometry_sets.write_buffer(0,1,trace_nodes.descriptor());
+        geometry_sets.write_buffer(0,2,trace_triangles.descriptor());
 
         vk::DescriptorSetLayoutBinding image_binding{};
         image_binding.binding=0;
