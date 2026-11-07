@@ -1,4 +1,5 @@
 #include "secure.hpp"
+#include "identity.hpp"
 
 #include <mbedtls/ssl.h>
 #include <mbedtls/ssl_ciphersuites.h>
@@ -122,11 +123,11 @@ void configure_peer(peer_state& p) {
                              mbedtls_timing_set_delay,
                              mbedtls_timing_get_delay);
     mbedtls_ssl_set_mtu(&p.tls, 1400);
-    if(p.owner->side == role::client) {
+    if(p.owner->side == role::client && !p.owner->limits.automatic_identity) {
         require(mbedtls_ssl_set_hostname(
             &p.tls, p.owner->limits.server_name.c_str()),
             "DTLS server identity setup failed");
-    } else {
+    } else if(p.owner->side == role::server) {
         const auto id = endpoint::identifier(p.endpoint);
         require(mbedtls_ssl_set_client_transport_id(
             &p.tls, reinterpret_cast<const unsigned char*>(id.data()),
@@ -154,8 +155,17 @@ bool advance(peer_state& p) {
     if(p.authorized) return true;
     const int result = mbedtls_ssl_handshake(&p.tls);
     if(result == 0) {
-        // VERIFY_REQUIRED is configured at both ends; still verify flags.
-        if(mbedtls_ssl_get_verify_result(&p.tls) != 0) return false;
+        if(p.owner->limits.automatic_identity) {
+            if(p.owner->side == role::client) {
+                const auto* certificate=mbedtls_ssl_get_peer_cert(&p.tls);
+                if(!certificate || !identity::verify_or_pin(
+                    p.owner->limits.storage_directory,
+                    p.owner->limits.trust_identity,*certificate))
+                    return false;
+            }
+        } else if(mbedtls_ssl_get_verify_result(&p.tls) != 0) {
+            return false;
+        }
         p.authorized = true;
         return true;
     }
@@ -261,11 +271,19 @@ state::~state() {
 
 resource create(role side, settings config, std::uint16_t port,
                 const std::string& bind_host) {
-    if(config.ca_file.empty() || config.certificate_file.empty() ||
-       config.private_key_file.empty() ||
-       (side == role::client && config.server_name.empty()))
-        throw std::invalid_argument("DTLS requires a CA, a certificate, "
-                                    "a private key and a verified server name");
+    if(config.automatic_identity) {
+        if(config.storage_directory.empty() ||
+           (side == role::client && config.trust_identity.empty()))
+            throw std::invalid_argument("Automatic DTLS requires persistent storage and a stable server identity");
+        if(!config.ca_file.empty() || !config.certificate_file.empty() ||
+           !config.private_key_file.empty())
+            throw std::invalid_argument("Automatic DTLS and explicit certificates cannot be mixed");
+    } else if(config.ca_file.empty() || config.certificate_file.empty() ||
+              config.private_key_file.empty() ||
+              (side == role::client && config.server_name.empty())) {
+        throw std::invalid_argument("Mutual TLS requires CA, local certificate, "
+                                    "private key and verified server name");
+    }
     if(!config.max_peers || !config.max_delivered_bytes ||
        config.max_pending_bytes_per_peer < max_plaintext)
         throw std::invalid_argument("invalid DTLS memory limits");
@@ -274,15 +292,21 @@ resource create(role side, settings config, std::uint16_t port,
     require(mbedtls_ctr_drbg_seed(&s->drbg, mbedtls_entropy_func,
              &s->entropy, personalization, sizeof(personalization) - 1),
              "DTLS random generator setup failed");
-    require(mbedtls_x509_crt_parse_file(
-        &s->ca, s->limits.ca_file.c_str()), "DTLS CA cannot be loaded");
-    require(mbedtls_x509_crt_parse_file(
-        &s->identity, s->limits.certificate_file.c_str()),
-        "DTLS local certificate cannot be loaded");
-    require(mbedtls_pk_parse_keyfile(
-        &s->private_key, s->limits.private_key_file.c_str(), nullptr,
-        mbedtls_ctr_drbg_random, &s->drbg),
-        "DTLS private key cannot be loaded");
+    if(s->limits.automatic_identity) {
+        if(side == role::server)
+            identity::local_server(s->limits.storage_directory,
+                                   s->drbg,s->identity,s->private_key);
+    } else {
+        require(mbedtls_x509_crt_parse_file(
+            &s->ca, s->limits.ca_file.c_str()), "DTLS CA cannot be loaded");
+        require(mbedtls_x509_crt_parse_file(
+            &s->identity, s->limits.certificate_file.c_str()),
+            "DTLS local certificate cannot be loaded");
+        require(mbedtls_pk_parse_keyfile(
+            &s->private_key, s->limits.private_key_file.c_str(), nullptr,
+            mbedtls_ctr_drbg_random, &s->drbg),
+            "DTLS private key cannot be loaded");
+    }
     require(mbedtls_ssl_config_defaults(
         &s->tls_config, side == role::server ?
         MBEDTLS_SSL_IS_SERVER : MBEDTLS_SSL_IS_CLIENT,
@@ -296,11 +320,16 @@ resource create(role side, settings config, std::uint16_t port,
     };
     mbedtls_ssl_conf_ciphersuites(&s->tls_config, allowed_suites);
     mbedtls_ssl_conf_rng(&s->tls_config, mbedtls_ctr_drbg_random, &s->drbg);
-    mbedtls_ssl_conf_authmode(&s->tls_config, MBEDTLS_SSL_VERIFY_REQUIRED);
-    mbedtls_ssl_conf_ca_chain(&s->tls_config, &s->ca, nullptr);
-    require(mbedtls_ssl_conf_own_cert(
-        &s->tls_config, &s->identity, &s->private_key),
-        "DTLS certificate/key mismatch");
+    mbedtls_ssl_conf_authmode(&s->tls_config,
+        s->limits.automatic_identity ?
+            (side == role::client ? MBEDTLS_SSL_VERIFY_OPTIONAL : MBEDTLS_SSL_VERIFY_NONE)
+            : MBEDTLS_SSL_VERIFY_REQUIRED);
+    if(!s->limits.automatic_identity)
+        mbedtls_ssl_conf_ca_chain(&s->tls_config, &s->ca, nullptr);
+    if(side == role::server || !s->limits.automatic_identity)
+        require(mbedtls_ssl_conf_own_cert(
+            &s->tls_config, &s->identity, &s->private_key),
+            "DTLS certificate/key mismatch");
     mbedtls_ssl_conf_handshake_timeout(&s->tls_config, 1000, 8000);
     if(side == role::server) {
         require(mbedtls_ssl_cookie_setup(&s->cookies,
