@@ -11,7 +11,7 @@ Scene and API
   - No neural or analytic spatiotemporal denoising.
 
 Stage 4 material-card cache
-  - One RGBA16F 256x256 atlas with 16 material cards (4x4 grid).
+  - One compact RGBA8_UNORM 256x256 atlas with 16 material cards (4x4 grid).
   - Each 64x64 card owns a stable surface face ID and local UV coordinates.
   - A tiny compute shader writes material albedo to all cards, once at startup
     and again when the cache is invalidated. The atlas remains shader-readable
