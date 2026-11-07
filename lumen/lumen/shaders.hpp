@@ -19,7 +19,7 @@ layout(push_constant) uniform Camera {
 void main()
 {
     vec3 relative=position-camera.eye.xyz;
-    vec3 forward=cross(camera.right.xyz,camera.up.xyz);
+    vec3 forward=cross(camera.up.xyz,camera.right.xyz);
     float view_x=dot(relative,camera.right.xyz);
     float view_y=dot(relative,camera.up.xyz);
     float view_z=dot(relative,forward);
