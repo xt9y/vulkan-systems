@@ -98,7 +98,7 @@ static pc_build_targets pc_build_attach(C_Build* b,C_Target* wrapper,
        existing.pcloud)
     {
         fprintf(stderr,"pc: attach requires an existing wrapper and five "
-                       "distinct system targets; PCloud must not exist yet\\n");
+                       "distinct system targets; PCloud must not exist yet\n");
         exit(1);
     }
     existing.pcloud=pc_build_module(b,"VulkanPCloud","pcloud",paths,wrapper);
@@ -118,7 +118,7 @@ static void pc_build_link(C_Target* consumer,pc_build_targets targets,
     if(!consumer || !wrapper || !targets.pcloud || !targets.render ||
        !targets.bvh || !targets.gpu || !targets.spatial || !targets.jobs)
     {
-        fprintf(stderr,"pc: incomplete targets in pc_build_link\\n");
+        fprintf(stderr,"pc: incomplete targets in pc_build_link\n");
         exit(1);
     }
     c_link_target(consumer,targets.pcloud);
