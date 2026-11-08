@@ -1,5 +1,6 @@
 #pragma once
 #include <vk/vk.hpp>
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -12,6 +13,36 @@ namespace pc
     struct light {vec3 position{};float radius=1.f;vec3 color{1.f,1.f,1.f};float strength=1.f;};
     struct collision_box {vec3 minimum{},maximum{};};
     struct triangle {vec3 a{},b{},c{};};
+
+    // The same conservative light-range test as the BVH builder. Hosts
+    // may use it while flattening millions of meshes to avoid creating
+    // irrelevant triangle inputs; pc still validates all supplied ones.
+    inline bool relevant_triangle(const triangle& t,
+                                  const std::vector<light>& lights)
+    {
+        using namespace vk::util::math;
+        const auto& a=t.a;
+        const auto& b=t.b;
+        const auto& c=t.c;
+        const vec3 lo{std::min({a.x,b.x,c.x}),
+                      std::min({a.y,b.y,c.y}),
+                      std::min({a.z,b.z,c.z})};
+        const vec3 hi{std::max({a.x,b.x,c.x}),
+                      std::max({a.y,b.y,c.y}),
+                      std::max({a.z,b.z,c.z})};
+        for(const auto& light:lights)
+        {
+            const vec3 near{
+                std::clamp(light.position.x,lo.x,hi.x),
+                std::clamp(light.position.y,lo.y,hi.y),
+                std::clamp(light.position.z,lo.z,hi.z)
+            };
+            if(length_squared(near-light.position)<=light.radius*light.radius)
+                return true;
+        }
+        return false;
+    }
+
     struct world
     {
         std::vector<light> lights;
