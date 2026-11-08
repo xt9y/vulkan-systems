@@ -1,4 +1,4 @@
-VulkanGPU - reusable C++17 VulkanEngine resources and compute.
+VulkanGPU - reusable C++17 VulkanWrapper resources and compute.
   gpu/gpu.hpp              umbrella API
   gpu/resource.hpp         move-only owned buffer/image and creation helpers
   gpu/buffer.*             owned GPU buffer, mapped uploads
@@ -14,7 +14,7 @@ VulkanGPU - reusable C++17 VulkanEngine resources and compute.
   gpu/culler.*             frustum sphere compaction to indirect draws
   gpu/shaders/cull.comp    reference shader
 
-owned_buffer and owned_image wrap VulkanEngine resource structs with RAII,
+owned_buffer and owned_image wrap VulkanWrapper resource structs with RAII,
 move-only semantics, and raw handle compatibility. create_buffer/create_image
 return owned resources. Ensure all referencing GPU work has finished before
 replacing or destroying them.
