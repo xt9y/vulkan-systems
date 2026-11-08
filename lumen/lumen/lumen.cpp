@@ -1088,7 +1088,7 @@ struct system::implementation {
             {},{},{},barriers);
         const screen_constants push{
             current_camera,
-            {std::clamp(options.screen_trace_distance,.5f,8.f),
+            {std::clamp(options.screen_trace_distance,.5f,16.f),
              float(std::clamp(options.screen_rays_per_probe,1u,8u)),
              screen_initialized?1.f:0.f,float(current.index%4096u)}
         };

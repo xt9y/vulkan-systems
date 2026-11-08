@@ -15,11 +15,11 @@ enum class demo_scene : std::uint8_t {
 struct settings {
     demo_scene demo=demo_scene::cornell_box;
     std::uint32_t probe_updates_per_frame=64;
-    std::uint32_t rays_per_probe=4;
+    std::uint32_t rays_per_probe=8;
     // Internal raster resolution scale, capped at 1280 pixels wide by Lumen.
     float tracing_scale=1.0f;
     // Depth-screen ray tracing, with a geometry-BVH fallback on misses.
-    float screen_trace_distance=3.0f;
+    float screen_trace_distance=12.0f;
     std::uint32_t screen_rays_per_probe=4; // 1..8 directional rays/frame
 };
 

@@ -684,17 +684,31 @@ bool screen_hit(vec3 origin,vec3 direction,float limit,
             (forward+camera.right.xyz*ndc_center.x*
                 camera.projection.x*camera.projection.y-
                 camera.up.xyz*ndc_center.y*camera.projection.x)*depth;
-        radiance=cached_lighting(hit,face_id-1u);
+        // A projected depth sample is not a verified ray hit. Confirm it
+        // matches the first BVH intersection in face and distance.
+        vec3 separation=hit-origin;
+        float ray_t=dot(separation,direction);
+        float lateral=length(separation-direction*ray_t);
+        if(ray_t<=EPSILON || ray_t>=limit ||
+           lateral>max(.015,.007*ray_t))continue;
+        RayHit actual=trace_scene(origin,direction,
+                                  min(limit,ray_t+max(.08,.015*ray_t)),false);
+        if(actual.overflow || actual.primitive==INVALID ||
+           actual.primitive/2u!=face_id-1u ||
+           abs(actual.distance-ray_t)>max(.05,.012*ray_t))
+            continue;
+        radiance=cached_lighting(origin+direction*actual.distance,face_id-1u);
         return true;
     }
     return false;
 }
-vec3 scene_radiance(vec3 origin,vec3 direction,float max_distance,
-                    WorldSample world)
+vec3 scene_radiance(vec3 origin,vec3 direction,float max_distance)
 {
     RayHit hit=trace_scene(origin,direction,max_distance,false);
+    // This demo has no external illumination. Rays escaping the open front
+    // must not receive unrelated local probe radiance.
     if(hit.primitive==INVALID || hit.overflow)
-        return distant_radiance(world,direction);
+        return vec3(0.0);
     uint face_id=hit.primitive/2u;
     Face face=faces[face_id];
     if(dot(face.normal.xyz,-direction)<=0.0)return vec3(0);
@@ -707,7 +721,7 @@ vec3 directional_radiance(vec3 origin,vec3 direction,
     vec3 result=vec3(0);
     if(screen_hit(origin,direction,max_distance,face_id,result))
         return result;
-    return scene_radiance(origin,direction,max_distance,world);
+    return scene_radiance(origin,direction,max_distance);
 }
 void main()
 {
@@ -736,17 +750,21 @@ void main()
     vec3 normal=normalize(faces[id-1u].normal.xyz);
     WorldSample world=sample_world(position);
     bool reuse=false;
+    vec3 history_anchor=position;
     if(camera.trace_parameters.z>.5)
     {
         vec4 old_meta=imageLoad(screen_meta,tile);
         vec4 old_gather=imageLoad(screen_gather,tile);
         reuse=abs(old_gather.a-float(id))<.1 &&
               distance(old_meta.xyz,position)<.10;
+        // Keep the original anchor until history is rejected; otherwise
+        // small per-frame motion can drift the history across the room.
+        if(reuse)history_anchor=old_meta.xyz;
     }
     uint frame=uint(camera.trace_parameters.w);
     vec3 integrated=vec3(0);
+    vec3 integrated_prior=vec3(0);
     float total_weight=0.0;
-    float confidence_sum=0.0;
     int rays=int(clamp(camera.trace_parameters.y,1.0,8.0));
     int start=(int(frame)*rays)%64;
     for(int i=0;i<64;i++)
@@ -773,7 +791,7 @@ void main()
             vec2 jitter=(vec2(rx,ry)-.5)*(.23);
             vec3 sample_direction=oct_decode(clamp(uv+jitter,vec2(-.999),vec2(.999)));
             vec3 fresh=directional_radiance(position+normal*.012,
-                         sample_direction,clamp(camera.trace_parameters.x,.5,8.0),id,world);
+                         sample_direction,clamp(camera.trace_parameters.x,.5,16.0),id,world);
             // Reprojected directional samples are accumulated in probe space,
             // not in full-resolution screen pixels.
             count=min(count+1.0,24.0);
@@ -789,17 +807,16 @@ void main()
         float jacobian=pow(abs(direction.x)+abs(direction.y)+abs(direction.z),3.0);
         float weight=cosine*jacobian;
         integrated+=Li*weight;
+        integrated_prior+=prior*weight;
         total_weight+=weight;
-        confidence_sum+=confidence*weight;
     }
-    vec3 incoming=total_weight>0.0?integrated/total_weight:vec3(0);
-    vec3 base=indirect_irradiance(position,normal);
-    vec3 albedo=cached_albedo(position,id-1u);
-    // Correct the cached irradiance only as directional coverage becomes
-    // established; newly exposed surface probes don't flash at full gain.
-    float coverage=total_weight>0.0?confidence_sum/total_weight:0.0;
-    vec3 delta=(incoming-base)*albedo*coverage;
-    imageStore(screen_meta,tile,vec4(position,view_z));
+    // Compare equal directional quadratures: the SH irradiance baseline
+    // uses a different estimator and caused nonzero correction on uniform
+    // radiance. The confidence weight is already part of Li.
+    vec3 delta=total_weight>0.0?
+        (integrated-integrated_prior)/total_weight*
+        cached_albedo(position,id-1u):vec3(0.0);
+    imageStore(screen_meta,tile,vec4(history_anchor,view_z));
     imageStore(screen_gather,tile,vec4(delta,float(id)));
 }
 )glsl";
