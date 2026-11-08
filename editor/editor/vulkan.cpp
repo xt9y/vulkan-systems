@@ -1,4 +1,5 @@
 #include "vulkan.hpp"
+#include "uploaded_font.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -40,8 +41,6 @@ namespace editor::vulkan
         };
         struct font_data
         {
-            std::string directory="build/editor-hell2024/"
-                "Hell2024/Hell2024/res/textures/font";
             std::string ui_directory="build/editor-hell2024/"
                 "Hell2024/Hell2024/res/textures/ui";
             std::array<glyph,128> glyphs;
@@ -52,15 +51,6 @@ namespace editor::vulkan
         {
             static font_data data;
             return data;
-        }
-        // Exact byte-oriented mapping from Hell2024/src/Renderer/TextBlitting.cpp.
-        const std::string& font_sheet()
-        {
-            static const std::string sheet=
-                "•!\"#$%&'••*+,-./0123456789:;<=>?_"
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZ\\^_`abcdefghijklmnopqrstuvwxyz";
-
-            return sheet;
         }
         sprite load_sprite(const std::string& filename,int w,int h)
         {
@@ -114,67 +104,74 @@ namespace editor::vulkan
 
         void load_font(font_data& atlas)
         {
-            std::array<glyph,128> loaded{};
-            const std::string& sheet=font_sheet();
-            // Hell2024/TextBlitting.cpp looks up the *byte offset* of
-            // each character in its UTF-8 sheet, not its codepoint index.
-            // The initial bullet and the two later bullets each occupy
-            // three bytes, so indexing sheet[i] by image number is wrong.
-            // Resolve printable ASCII to its exact original char_N.png.
-            std::array<unsigned char,90> original_character{};
-            for(unsigned char c=33;c<127;++c)
+
+            // The uploaded x_font.png is a 16x16 CP437 grid, with each
+            // character occupying 9x16 pixels. Its 1-bit pixel mask is
+            // embedded in uploaded_font.hpp; decode once at startup.
+            const std::string encoded=uploaded_font::encoded_png;
+            std::vector<stbi_uc> png;
+            png.reserve(encoded.size()*3/4);
+            unsigned int bits=0;
+            int count=0;
+            for(unsigned char c:encoded)
             {
-                const std::size_t index=sheet.find(static_cast<char>(c));
-                if(index<original_character.size())
-                    original_character[index]=c;
-            }
-            // Decode the complete original 90-image font, before drawing.
-            for(std::size_t i=0;i<90;++i)
-            {
-                const std::string filename=atlas.directory+"/char_"+
-                    std::to_string(i+1)+".png";
-                int width=0,height=0,channels=0;
-                stbi_uc* pixels=stbi_load(filename.c_str(),&width,&height,
-                                          &channels,4);
-                if(!pixels || width<=0 || height<=0 ||
-                   width>128 || height>128)
+                if(c=='=')break;
+                int value=-1;
+                if(c>='A'&&c<='Z')value=c-'A';
+                else if(c>='a'&&c<='z')value=c-'a'+26;
+                else if(c>='0'&&c<='9')value=c-'0'+52;
+                else if(c=='+')value=62;
+                else if(c=='/')value=63;
+                if(value<0)
+                    throw std::runtime_error("Corrupted embedded x_font base64");
+                bits=(bits<<6)|static_cast<unsigned int>(value);
+                count+=6;
+                if(count>=8)
                 {
-                    stbi_image_free(pixels);
-                    throw std::runtime_error(
-                        "VulkanEditor original font missing or invalid: "+filename+
-                        " (fetch original Hell2024 editor assets before running)");
+                    count-=8;
+                    png.push_back(static_cast<stbi_uc>((bits>>count)&255u));
                 }
+            }
+            int width=0,height=0,channels=0;
+            stbi_uc* pixels=stbi_load_from_memory(png.data(),
+                static_cast<int>(png.size()),&width,&height,&channels,4);
+            if(!pixels||width!=144||height!=256)
+            {
+                stbi_image_free(pixels);
+                throw std::runtime_error("Embedded x_font must be 144x256");
+            }
+            std::array<glyph,128> loaded{};
+            for(unsigned int character=33;character<=126;++character)
+            {
+                const int x0=int(character%16u)*9;
+                const int y0=int(character/16u)*16;
                 glyph entry;
-                entry.width=width;
-                entry.height=height;
+                entry.width=8; // 7-pixel ink width and one spacing pixel.
+                entry.height=16;
                 entry.present=true;
-                for(int y=0;y<height;++y)
+                for(int y=0;y<16;++y)
                 {
-                    for(int x=0;x<width;)
+                    for(int x=0;x<9;)
                     {
-                        const auto coverage=[&](int col)
+                        const auto ink=[&](int column)
                         {
-                            const int index=(y*width+col)*4;
-                            const int r=pixels[index],g=pixels[index+1];
-                            const int b=pixels[index+2],a=pixels[index+3];
-                            return std::max({r,g,b})*a/255>72;
+                            const std::size_t offset=4u*(
+                                std::size_t(y0+y)*144u+
+                                std::size_t(x0+column));
+                            return pixels[offset]>127;
                         };
-                        if(!coverage(x)){++x;continue;}
-                        const int begin=x;
-                        do{++x;}while(x<width && coverage(x));
+                        if(!ink(x)){++x;continue;}
+                        const int first=x;
+                        do{++x;}while(x<9&&ink(x));
                         entry.spans.push_back({
-                            static_cast<std::uint16_t>(begin),
+                            static_cast<std::uint16_t>(first),
                             static_cast<std::uint16_t>(y),
-                            static_cast<std::uint16_t>(x-begin)});
+                            static_cast<std::uint16_t>(x-first)});
                     }
                 }
-                stbi_image_free(pixels);
-                const unsigned char c=original_character[i];
-                if(c!=0)loaded[c]=std::move(entry);
+                loaded[character]=std::move(entry);
             }
-            // The original asset snapshot stops at char_90 (ASCII 'u').
-            // Preserve its authentic glyphs rather than inventing sprites.
-            // The glyphs for lowercase v-z are intentionally unavailable.
+            stbi_image_free(pixels);
             const std::array<const char*,8> names{{
                 "MenuBG.png","MenuBorderHorizontal.png",
                 "MenuBorderVertical.png","MenuBorderCornerTL.png",
@@ -193,22 +190,14 @@ namespace editor::vulkan
             atlas.glyphs=std::move(loaded);
             atlas.sprites=std::move(ui);
             atlas.ready=true;
-            std::clog<<"editor: preloaded Hell2024 original bitmap font "
-                     <<"and 8 original UI sprites\n";
+            std::clog<<"editor: preloaded uploaded x_font.png CP437 atlas "
+                     <<"and Hell2024 UI textures\\n";
         }
 
         bool same(color a,color b)
         {
             return a.r==b.r && a.g==b.g && a.b==b.b;
         }
-    }
-
-    void set_font_directory(std::string directory)
-    {
-        if(font().ready)
-            throw std::logic_error(
-                "Editor font directory cannot change after initialization");
-        font().directory=std::move(directory);
     }
 
     void set_ui_directory(std::string directory)
