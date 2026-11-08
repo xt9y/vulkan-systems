@@ -23,6 +23,7 @@ Floating menus use the original 200px logical width and 16px row spacing, a cent
 - `Up`/`Down`: navigate and scroll menu entries
 - `Left`/`Right`: decrease/increase the selected property by one configured unit
 - `Shift` + `Left`/`Right`: decrease/increase by ten configured units
+- `Up`/`Down`: move one menu row; `Shift` + `Up`/`Down`: move ten rows
 - `Delete` is a built-in bottom inspector row for every object, independent of the host's property definitions; `Right` arms `TRUE`, `Left` resets `FALSE`
 - `Escape`: close the current menu without leaving editor mode; when closing a Properties menu with Delete = TRUE, emit a single `action_kind::remove` for the host to process
 - Left-click a projected label while cursor is free: open its properties
