@@ -15,6 +15,7 @@ namespace editor
     {
         bool question=false,tab=false,enter=false,escape=false;
         bool up=false,down=false,left=false,right=false,click=false;
+        bool shift=false; // Hold Shift to change numeric properties by 10 steps.
         bool mouse_down=false; // Held button for dragging floating panels
         int mouse_x=0,mouse_y=0;
         int viewport_width=0,viewport_height=0; // Framebuffer pixel coordinates
@@ -46,7 +47,7 @@ namespace editor
         int precision=2; // Exact Hell2024-style numeric precision, host-defined.
     };
 
-    enum class action_kind { insert,edit };
+    enum class action_kind { insert,edit,remove };
     struct action
     {
         action_kind kind=action_kind::insert;
@@ -100,6 +101,7 @@ namespace editor
         int line_height_=16;
         int menu_x_=60,menu_y_=60;
         bool dragging_menu_=false;
+        bool delete_armed_=false; // Committed only on Escape from Properties.
         int drag_x_=0,drag_y_=0;
 
         std::uint64_t selected_object_=0;
