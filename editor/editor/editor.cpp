@@ -74,14 +74,14 @@ namespace editor
             const int cy=virtual_y(label.y,height);
             const int label_width=std::max(62,
                 int(label.text.size())*8+12);
-            const int height=22;
+            constexpr int label_height=22;
             // Hell2024's Icon_Light uses Alignment::CENTERED: its visual
             // center must coincide with the light's projected 3D position.
-            const int top=label.text=="LIGHT"?cy-height/2:cy-20;
+            const int top=label.text=="LIGHT"?cy-label_height/2:cy-20;
             return {std::clamp(cx-label_width/2,0,
                      std::max(0,virtual_width-label_width)),
-                    std::clamp(top,0,virtual_height-height),
-                    label_width,height};
+                    std::clamp(top,0,virtual_height-label_height),
+                    label_width,label_height};
         }
         std::string value_string(const property& p)
         {
