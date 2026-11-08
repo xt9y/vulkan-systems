@@ -68,8 +68,13 @@ namespace pc
     };
     struct targets {vk::Image grid{};vk::Buffer points{};vk::Image hdr{},ldr{};};
     using overlay_callback=std::function<void(vk::CommandBuffer,vk::Extent2D)>;
+    // Explicit targets work with any VulkanWrapper-based renderer.
     void create(const configuration&,const std::vector<gbuffer>&,
                 const presentation_target&);
+    // Convenience for existing VulkanWrapper renderers with an active
+    // vk::swapchain. No separate presentation_target boilerplate required.
+    void create(const std::vector<gbuffer>&,
+                const configuration& shaders={});
     void set_scene(std::shared_ptr<const world>);
     void synchronize_scene();
     void updated(std::uint32_t);
@@ -81,5 +86,11 @@ namespace pc
     void lighting(vk::CommandBuffer,std::uint32_t,const camera_frame&);
     void tonemap(vk::CommandBuffer,std::uint32_t,const camera_frame&);
     void present(vk::CommandBuffer,std::uint32_t,const overlay_callback& overlay={});
+    // One-call path: records cloud + GI + lighting + tonemap + present with
+    // internally tracked Vulkan memory/image barriers for this swapchain image.
+    // G-buffer must be finished and shader-readable before record().
+    void record(vk::CommandBuffer,std::uint32_t,const camera_frame&,
+                const overlay_callback& overlay={});
+    // Call only after successful queue submission, not merely after record().
     void release();
 }
