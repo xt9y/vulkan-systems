@@ -130,7 +130,7 @@ namespace editor
         properties_[object]=std::move(values);
         if(menu_==menu::properties && selected_object_==object)
             selected_row_=std::clamp(selected_row_,0,
-                std::max(0,int(properties_[object].size())-1));
+                int(properties_[object].size()));
     }
 
     void session::set_font_metrics(std::array<int,128> widths,int line_height)
@@ -158,13 +158,20 @@ namespace editor
             visible_=!visible_;
             menu_=menu::none;
             dragging_menu_=false;
+            delete_armed_=false;
             selected_row_=scroll_first_=0;
         }
         if(!visible_)return;
         if(events.escape)
         {
+            // Deletion is deliberately deferred until closing the selected
+            // object's inspector; simply toggling TRUE changes no world state.
+            if(menu_==menu::properties && delete_armed_ && selected_object_)
+                pending_.push_back({action_kind::remove,"",
+                                    selected_object_,"",0});
             menu_=menu::none;
             dragging_menu_=false;
+            delete_armed_=false;
             return;
         }
 
@@ -202,26 +209,35 @@ namespace editor
         else if(menu_==menu::properties)
         {
             const auto it=properties_.find(selected_object_);
-            if(it!=properties_.end() && !it->second.empty())
+            const int property_count=it!=properties_.end() ?
+                int(it->second.size()):0;
+            // The Delete field is always the last inspector entry. It is
+            // built into VulkanEditor, not part of host property schemas.
+            if(events.up)selected_row_=std::max(0,selected_row_-1);
+            if(events.down)selected_row_=std::min(
+                property_count,selected_row_+1);
+            if(events.left || events.right)
             {
-                auto& values=it->second;
-                if(events.up)selected_row_=std::max(0,selected_row_-1);
-                if(events.down)selected_row_=std::min(
-                    int(values.size())-1,selected_row_+1);
-                if(events.left || events.right)
+                if(selected_row_==property_count)
                 {
-                    property& p=values[std::size_t(selected_row_)];
+                    if(events.right)delete_armed_=true;
+                    if(events.left)delete_armed_=false;
+                }
+                else if(it!=properties_.end())
+                {
+                    property& p=it->second[std::size_t(selected_row_)];
                     const double before=p.value;
                     if(p.kind==property_kind::boolean)
-                        p.value=before==0?1:0;
+                        p.value=events.right?1.0:0.0;
                     else
                     {
                         const double upper=p.kind==property_kind::choice ?
                             double(std::max(0,int(p.choices.size())-1)):
                             p.maximum;
-                        const double delta=p.kind==property_kind::real ?
-                            (p.step>0?p.step:0.1):
-                            std::max(1.0,p.step);
+                        // Right/Left change one host-defined unit, or ten
+                        // with Shift. Colors may use e.g. percentage units.
+                        const double unit=p.step>0?p.step:1.0;
+                        const double delta=unit*(events.shift?10.0:1.0);
                         p.value=std::clamp(before+
                             (events.right?delta:-delta),
                             std::min(p.minimum,upper),
@@ -255,6 +271,7 @@ namespace editor
                     events.viewport_width,events.viewport_height)))continue;
                 selected_object_=it->object;
                 menu_=menu::properties;
+                delete_armed_=false;
                 selected_row_=scroll_first_=0;
                 break;
             }
@@ -344,10 +361,10 @@ namespace editor
         }
         const int rows=menu_==menu::insert?int(catalog_.size()):
             values?int(values->size()):0;
-        if(rows==0)
+        const bool inspector=menu_==menu::properties;
+        if(rows==0 && !inspector)
         {
-            text(out,area.x+margin_x,area.y+70,
-                 menu_==menu::insert?"NO TYPES REGISTERED":"NO PROPERTIES");
+            text(out,area.x+margin_x,area.y+70,"NO TYPES REGISTERED");
             return out;
         }
 
@@ -408,20 +425,27 @@ namespace editor
         }
 
         const int start_y=area.y+56;
-        const int bottom=area.y+area.h-margin_y;
-        int first=std::clamp(scroll_first_,0,rows-1);
+        // Keep Delete fixed at the bottom, independent of the scrollable
+        // property list (which may be longer than the menu).
+        const int bottom=area.y+area.h-margin_y-
+            (inspector?line_height+8:0);
+        int first=std::clamp(scroll_first_,0,std::max(0,rows-1));
         if(selected_row_<first)first=selected_row_;
+        // Selection of Delete does not scroll away the earlier fields.
+        const int selected_for_scroll=inspector ?
+            std::min(selected_row_,std::max(0,rows-1)):
+            selected_row_;
         const auto is_visible=[&](int initial)
         {
             int pos=start_y;
-            for(int i=initial;i<=selected_row_ && i<rows;++i)
+            for(int i=initial;i<=selected_for_scroll && i<rows;++i)
             {
                 if(pos+heights[std::size_t(i)]>bottom)return false;
                 pos+=heights[std::size_t(i)];
             }
             return true;
         };
-        while(first<selected_row_ && !is_visible(first))++first;
+        while(first<selected_for_scroll && !is_visible(first))++first;
         scroll_first_=first;
         int y=start_y;
         for(int row=first;row<rows;++row)
@@ -432,6 +456,20 @@ namespace editor
                 if(y+line_height>bottom)break;
                 text(out,area.x+margin_x,y,line);
                 y+=line_height;
+            }
+        }
+        if(inspector)
+        {
+            const bool selected=selected_row_==rows;
+            const auto row=std::string("  Delete: ")+
+                (selected?"<":" ")+
+                (delete_armed_?"TRUE":"FALSE")+(selected?">":" ");
+            for(const auto& part:wrap(row))
+            {
+                // Delete always occupies its reserved bottom line.
+                text(out,area.x+margin_x,
+                     area.y+area.h-margin_y-line_height,part);
+                break;
             }
         }
         return out;
