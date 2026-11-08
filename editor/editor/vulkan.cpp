@@ -116,6 +116,18 @@ namespace editor::vulkan
         {
             std::array<glyph,128> loaded{};
             const std::string& sheet=font_sheet();
+            // Hell2024/TextBlitting.cpp looks up the *byte offset* of
+            // each character in its UTF-8 sheet, not its codepoint index.
+            // The initial bullet and the two later bullets each occupy
+            // three bytes, so indexing sheet[i] by image number is wrong.
+            // Resolve printable ASCII to its exact original char_N.png.
+            std::array<unsigned char,90> original_character{};
+            for(unsigned char c=33;c<127;++c)
+            {
+                const std::size_t index=sheet.find(static_cast<char>(c));
+                if(index<original_character.size())
+                    original_character[index]=c;
+            }
             // Decode the complete original 90-image font, before drawing.
             for(std::size_t i=0;i<90;++i)
             {
@@ -157,22 +169,12 @@ namespace editor::vulkan
                     }
                 }
                 stbi_image_free(pixels);
-                // The original character map contains three-byte UTF-8
-                // placeholders; only printable ASCII slots are used here.
-                if(i<sheet.size())
-                {
-                    const unsigned char code=
-                        static_cast<unsigned char>(sheet[i]);
-                    if(code>=33 && code<127 &&
-                       sheet.find(char(code))==i)
-                        loaded[code]=std::move(entry);
-                }
+                const unsigned char c=original_character[i];
+                if(c!=0)loaded[c]=std::move(entry);
             }
-            // The backup contains char_1..char_90, while the original
-            // mapping refers to five additional lowercase glyphs (v-z).
-            // Reuse their authentic uppercase PNGs, never a synthetic font.
-            for(unsigned char c='v';c<='z';++c)
-                loaded[c]=loaded[static_cast<unsigned char>(c-'a'+'A')];
+            // The original asset snapshot stops at char_90 (ASCII 'u').
+            // Preserve its authentic glyphs rather than inventing sprites.
+            // The glyphs for lowercase v-z are intentionally unavailable.
             const std::array<const char*,8> names{{
                 "MenuBG.png","MenuBorderHorizontal.png",
                 "MenuBorderVertical.png","MenuBorderCornerTL.png",
