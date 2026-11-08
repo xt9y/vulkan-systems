@@ -262,12 +262,13 @@ struct system::implementation {
     gpu::buffer vertex_buffer,faces_buffer,trace_nodes,trace_triangles;
     gpu::buffer radiance_probes;
     gpu::image color,depth,surface_cache,surface_lighting,direct_lighting;
-    gpu::image screen_light,screen_meta,screen_gather;
+    gpu::image screen_light,screen_meta,screen_gather,screen_filtered;
     render::target target;
     render::pipeline geometry_pipeline,composite_pipeline;
     gpu::compute cache_pipeline,lighting_pipeline,radiance_pipeline,screen_pipeline;
+    gpu::compute screen_filter_pipeline;
     gpu::descriptors geometry_sets,composite_sets,cache_sets,lighting_sets;
-    gpu::descriptors radiance_sets,screen_sets;
+    gpu::descriptors radiance_sets,screen_sets,screen_filter_sets;
     vk::PipelineLayout geometry_layout{},composite_layout{};
     vk::Sampler sampler{},depth_sampler{};
     render::mesh box_mesh,fullscreen;
@@ -282,10 +283,10 @@ struct system::implementation {
     bool cache_valid=false,cache_dirty=true;
     bool lighting_initialized=false;
     bool radiance_initialized=false;
-    bool screen_initialized=false;
+    bool screen_initialized=false,filter_initialized=false;
     std::string geometry_vertex_spv,geometry_fragment_spv;
     std::string composite_vertex_spv,composite_fragment_spv,cache_spv;
-    std::string lighting_spv,radiance_spv,screen_spv;
+    std::string lighting_spv,radiance_spv,screen_spv,filter_spv;
 
     ~implementation(){release();}
 
@@ -304,6 +305,7 @@ struct system::implementation {
             lighting_pipeline.reset();
             radiance_pipeline.reset();
             screen_pipeline.reset();
+            screen_filter_pipeline.reset();
             if(geometry_layout)vk::pipeline_layout::destroy(geometry_layout);
             if(composite_layout)vk::pipeline_layout::destroy(composite_layout);
             geometry_layout=vk::PipelineLayout{};
@@ -314,6 +316,7 @@ struct system::implementation {
             lighting_sets.reset();
             radiance_sets.reset();
             screen_sets.reset();
+            screen_filter_sets.reset();
             if(sampler)vk::device::get()->handle.destroySampler(sampler);
             if(depth_sampler)vk::device::get()->handle.destroySampler(depth_sampler);
             sampler=vk::Sampler{};
@@ -328,7 +331,9 @@ struct system::implementation {
             screen_light.reset();
             screen_meta.reset();
             screen_gather.reset();
+            screen_filtered.reset();
             screen_initialized=false;
+            filter_initialized=false;
             radiance_probes.reset();
             radiance_initialized=false;
             cache_valid=false;
@@ -444,6 +449,10 @@ struct system::implementation {
             vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eColor);
         make_image(screen_gather,screen_extent,color_format,
+            vk::ImageUsageFlagBits::eStorage |
+            vk::ImageUsageFlagBits::eSampled,
+            vk::ImageAspectFlagBits::eColor);
+        make_image(screen_filtered,screen_extent,color_format,
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eColor);
@@ -580,6 +589,17 @@ struct system::implementation {
                     vk::DescriptorType::eStorageBuffer);
         }
         screen_sets.create(screen_bindings);
+        std::array<vk::DescriptorSetLayoutBinding,3> filter_bindings{};
+        for(std::uint32_t i=0;i<filter_bindings.size();i++)
+        {
+            auto& binding=filter_bindings[i];
+            binding.binding=i;
+            binding.descriptorCount=1;
+            binding.stageFlags=vk::ShaderStageFlagBits::eCompute;
+            binding.descriptorType=i==2?vk::DescriptorType::eStorageImage:
+                vk::DescriptorType::eCombinedImageSampler;
+        }
+        screen_filter_sets.create({filter_bindings.begin(),filter_bindings.end()});
         screen_sets.write_buffer(0,0,faces_buffer.descriptor());
         screen_sets.write_buffer(0,1,trace_nodes.descriptor());
         screen_sets.write_buffer(0,2,trace_triangles.descriptor());
@@ -647,8 +667,24 @@ struct system::implementation {
             info.imageLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
             composite_sets.write_image(0,binding,info);
         };
-        screen_read(screen_gather,2);
+        screen_read(screen_filtered,2);
         screen_read(screen_meta,3);
+
+        const auto filter_read=[&](const gpu::image& image,
+                                   std::uint32_t binding)
+        {
+            vk::DescriptorImageInfo info{};
+            info.sampler=depth_sampler;
+            info.imageView=image.view();
+            info.imageLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+            screen_filter_sets.write_image(0,binding,info);
+        };
+        filter_read(screen_gather,0);
+        filter_read(screen_meta,1);
+        vk::DescriptorImageInfo filtered_write{};
+        filtered_write.imageView=screen_filtered.view();
+        filtered_write.imageLayout=vk::ImageLayout::eGeneral;
+        screen_filter_sets.write_image(0,2,filtered_write);
 
         const auto screen_write=[&](const gpu::image& image,
                                     std::uint32_t binding)
@@ -676,6 +712,8 @@ struct system::implementation {
         screen_spv=compile("screen","comp",screen_source.c_str());
         screen_pipeline.create(screen_spv,{screen_sets.layout()},
                                sizeof(screen_constants));
+        filter_spv=compile("screen_filter","comp",shaders::screen_filter_comp);
+        screen_filter_pipeline.create(filter_spv,{screen_filter_sets.layout()});
         geometry_vertex_spv=compile("geometry","vert",shaders::geometry_vert);
         const std::string fragment_source=with_tracing(shaders::geometry_frag);
         geometry_fragment_spv=compile("geometry","frag",fragment_source.c_str());
@@ -1066,6 +1104,42 @@ struct system::implementation {
                             {},{},{},barriers);
         screen_initialized=true;
     }
+    void filter_screen_probes(vk::CommandBuffer cmd)
+    {
+        // The directional pass has already transitioned gather/meta into
+        // shader-read layout. Filter on the smaller screen-probe grid before
+        // the full-resolution composite, respecting face and world depth.
+        vk::ImageMemoryBarrier barrier{};
+        barrier.oldLayout=filter_initialized?
+            vk::ImageLayout::eShaderReadOnlyOptimal:vk::ImageLayout::eUndefined;
+        barrier.newLayout=vk::ImageLayout::eGeneral;
+        barrier.srcAccessMask=filter_initialized?
+            vk::AccessFlags(vk::AccessFlagBits::eShaderRead):vk::AccessFlags{};
+        barrier.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
+        barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        barrier.image=screen_filtered.handle();
+        barrier.subresourceRange={
+            vk::ImageAspectFlagBits::eColor,0,1,0,1
+        };
+        cmd.pipelineBarrier(filter_initialized?
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eFragmentShader):
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eTopOfPipe),
+            vk::PipelineStageFlagBits::eComputeShader,
+            {},{},{},{barrier});
+        screen_filter_pipeline.dispatch(cmd,(screen_extent.width+7u)/8u,
+                                        (screen_extent.height+7u)/8u,1,
+                                        {screen_filter_sets.set()});
+        barrier.oldLayout=vk::ImageLayout::eGeneral;
+        barrier.newLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+        barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+        barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                            vk::PipelineStageFlagBits::eFragmentShader,
+                            {},{},{},{barrier});
+        filter_initialized=true;
+    }
+
     void update_radiance_cache(vk::CommandBuffer cmd,const frame& current)
     {
         if(radiance_initialized)
@@ -1188,6 +1262,7 @@ void system::invalidate() {
         impl_->cache_dirty=true;
         impl_->lighting_initialized=false;
         impl_->screen_initialized=false;
+        impl_->filter_initialized=false;
         // Reinitialize all cached irradiance on the next record.
         impl_->radiance_initialized=false;
     }
@@ -1203,6 +1278,7 @@ void system::record(vk::CommandBuffer cmd,const frame& current) {
     impl_->draw_scene(cmd,current);
     impl_->stamp(cmd,3);
     impl_->update_screen_probes(cmd,current);
+    impl_->filter_screen_probes(cmd);
     impl_->stamp(cmd,4);
 }
 void system::compose(vk::CommandBuffer cmd) {
