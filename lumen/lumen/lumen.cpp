@@ -147,8 +147,10 @@ quad_scene default_quads()
 
 std::vector<vertex> quad_vertices(const quad_scene& scene)
 {
-    if(scene.faces.size()<2 || scene.faces.size()>64)
-        throw std::invalid_argument("Lumen requires 2..64 cards with emitter last");
+    if(scene.faces.size()<2 || scene.faces.size()>64 ||
+       scene.emitter_count<1u || scene.emitter_count>4u ||
+       scene.emitter_count>=scene.faces.size())
+        throw std::invalid_argument("Lumen requires 2..64 cards, 1..4 final emitters");
     std::vector<vertex> vertices;
     vertices.reserve(scene.faces.size()*6);
     for(std::size_t i=0;i<scene.faces.size();i++)
@@ -180,7 +182,8 @@ std::vector<vertex> quad_vertices(const quad_scene& scene)
                 throw std::invalid_argument("Lumen negative emission");
             emits|=emission>0.f;
         }
-        if(emits!=(i+1==scene.faces.size()) || (emits && q.triangular))
+        if(emits!=(i>=scene.faces.size()-scene.emitter_count) ||
+           (emits && q.triangular))
             throw std::invalid_argument(
                 "Lumen requires one rectangular emitter at the last card");
         if(q.triangular)
@@ -293,7 +296,8 @@ std::string with_tracing(const char* source)
 // Specialize static scene/card layout when the host changes the number of
 // material faces. Defaults replace themselves exactly, preserving Cornell.
 std::string specialize_scene_shader(std::string source,std::uint32_t faces,
-                                    std::uint32_t columns,point lo,point hi,
+                                    std::uint32_t columns,std::uint32_t emitters,
+                                    point lo,point hi,point environment,
                                     bool external)
 {
     const auto replace=[&](const std::string& old,const std::string& next)
@@ -309,7 +313,8 @@ std::string specialize_scene_shader(std::string source,std::uint32_t faces,
             "const int FACE_COUNT="+std::to_string(faces)+";");
     replace("const int CARD_COLUMNS=4;",
             "const int CARD_COLUMNS="+std::to_string(columns)+";");
-    if(external)
+    replace("const int EMITTER_COUNT=1;",
+            "const int EMITTER_COUNT="+std::to_string(emitters)+";");
     {
         const auto format=[](point xyz)
         {
@@ -318,15 +323,20 @@ std::string specialize_scene_shader(std::string source,std::uint32_t faces,
                <<"vec3("<<xyz[0]<<","<<xyz[1]<<","<<xyz[2]<<")";
             return out.str();
         };
-        replace("const vec3 GRID_MIN=vec3(.25,.24,.25);",
-                "const vec3 GRID_MIN="+format(lo)+";");
-        replace("const vec3 GRID_MAX=vec3(5.30,5.22,5.34);",
-                "const vec3 GRID_MAX="+format(hi)+";");
-        const std::string version="#version 450\n";
-        const auto index=source.find(version);
-        if(index!=std::string::npos)
-            source.insert(index+version.size(),
-                          "#define LUMEN_EXTERNAL_SCENE 1\n");
+        if(external)
+        {
+            replace("const vec3 GRID_MIN=vec3(.25,.24,.25);",
+                    "const vec3 GRID_MIN="+format(lo)+";");
+            replace("const vec3 GRID_MAX=vec3(5.30,5.22,5.34);",
+                    "const vec3 GRID_MAX="+format(hi)+";");
+            const std::string version="#version 450\n";
+            const auto index=source.find(version);
+            if(index!=std::string::npos)
+                source.insert(index+version.size(),
+                              "#define LUMEN_EXTERNAL_SCENE 1\n");
+        }
+        replace("const vec3 ENVIRONMENT_RADIANCE=vec3(0.0);",
+                "const vec3 ENVIRONMENT_RADIANCE="+format(environment)+";");
     }
     return source;
 }
@@ -406,7 +416,7 @@ struct system::implementation {
     vk::Extent2D extent{};
     vk::Extent2D render_extent{},screen_extent{};
     camera_data current_camera{};
-    std::uint32_t face_count=16,card_columns=4;
+    std::uint32_t face_count=16,card_columns=4,emitter_count=1;
     point grid_min{.25f,.24f,.25f},grid_max{5.30f,5.22f,5.34f};
     scene geometry{};
     lighting lights{};
@@ -560,6 +570,10 @@ struct system::implementation {
         const auto faces=make_faces(vertices,custom_quads?&*custom_quads:nullptr);
         face_count=std::uint32_t(faces.size());
         card_columns=face_count>16?8u:4u;
+        emitter_count=custom_quads?custom_quads->emitter_count:1u;
+        for(float channel:options.environment_radiance)
+            if(!std::isfinite(channel) || channel<0.f || channel>1000.f)
+                throw std::invalid_argument("Lumen environment channel invalid");
         if(custom_quads)
         {
             point lo=vertices.front().position,hi=lo;
@@ -966,8 +980,8 @@ struct system::implementation {
         {
             return specialize_scene_shader(
                 tracing?with_tracing(text):std::string(text),
-                face_count,card_columns,grid_min,grid_max,
-                custom_quads.has_value());
+                face_count,card_columns,emitter_count,grid_min,grid_max,
+                options.environment_radiance,custom_quads.has_value());
         };
         const std::string cards_source=scene_shader(shaders::cards_comp,false);
         cache_spv=compile("cards","comp",cards_source.c_str());
@@ -1078,6 +1092,7 @@ struct system::implementation {
                  <<" BVH nodes | lit cards="<<face_count<<" x 128x128"
                  <<" atlas="<<card_columns<<"x"<<card_columns
                  <<" updates/frame="<<std::clamp(options.surface_updates_per_frame,1u,8u)
+                 <<" lights="<<emitter_count
                  <<" | world probes="<<radiance_probe_count
                  <<" updates/frame="<<std::clamp(options.probe_updates_per_frame,
                                                     1u,radiance_probe_count)

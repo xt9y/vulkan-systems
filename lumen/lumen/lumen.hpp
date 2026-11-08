@@ -24,6 +24,8 @@ struct settings {
     float screen_trace_distance=12.0f;
     std::uint32_t screen_rays_per_probe=4; // 1..8 directional rays/frame
     std::uint32_t surface_updates_per_frame=1; // 1..8 amortized cards
+    // Constant environment radiance sampled only by escaped GI/reflection rays.
+    std::array<float,3> environment_radiance{0.f,0.f,0.f};
     bool full_resolution_outputs=false; // optional compute reconstruction
 };
 
@@ -69,6 +71,7 @@ struct quad {
 };
 struct quad_scene {
     std::vector<quad> faces;
+    std::uint32_t emitter_count=1; // last 1..4 rectangular cards are lights
 };
 
 // One planar card per triangle. The final rectangular light is separate.
