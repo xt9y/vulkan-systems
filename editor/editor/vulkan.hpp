@@ -7,18 +7,16 @@
 
 namespace editor::vulkan
 {
-    // Mandatory exact legacy bitmap font from xt9y/hellengine-bak:
-    // Rogue/Rogue/res/textures/font/char_1.png ... char_90.png.
-    // Configure before initialize_font(); incomplete assets are fatal.
-    void set_font_directory(std::string directory);
+    // The uploaded x_font.png is embedded in the library as a pixel-exact
+    // 16x16 CP437 bitmap atlas (9x16 pixels per character). No external
+    // font files, remapping or synthetic fallback are used.
+    // Only the Hell2024 menu/background/icon textures need external assets.
     void set_ui_directory(std::string directory);
     std::array<int,128> font_metrics();
 
-    // Decode ALL PNGs, compute opaque horizontal glyph spans and cache them.
-    // The host MUST call this on its initialization thread, before creating
-    // the render thread or recording any editor command buffers.
-    // record() never performs disk access, image decoding or font preparation.
-    // initialize_font() also preloads the original UI panel/border/icon PNGs.
+    // Decode the embedded atlas and preload menu textures once at startup,
+    // before the render thread records any editor commands.
+    // record() never accesses the filesystem or decodes images.
     void initialize_font();
 
     // Draws opaque unlit pixels directly into an already-open Vulkan color
