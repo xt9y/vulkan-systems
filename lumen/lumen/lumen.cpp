@@ -22,6 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -122,7 +123,70 @@ std::vector<vertex> cornell_box() {
     return vertices;
 }
 
-std::array<face,16> make_faces(const std::vector<vertex>& vertices) {
+quad_scene default_quads()
+{
+    const auto vertices=cornell_box();
+    quad_scene value{};
+    for(std::size_t i=0;i<value.faces.size();i++)
+    {
+        const auto& v=vertices[i*6];
+        auto& quad=value.faces[i];
+        quad.origin=v.position;
+        quad.u=sub(vertices[i*6+1].position,v.position);
+        quad.v=sub(vertices[i*6+5].position,v.position);
+        quad.normal=v.normal;
+        quad.albedo=v.albedo;
+        quad.emission=v.emission;
+        quad.roughness=i==0?.68f:(i>=5 && i<15?.56f:.92f);
+    }
+    return value;
+}
+
+std::vector<vertex> quad_vertices(const quad_scene& scene)
+{
+    std::vector<vertex> vertices;
+    vertices.reserve(scene.faces.size()*6);
+    for(std::size_t i=0;i<scene.faces.size();i++)
+    {
+        const auto& q=scene.faces[i];
+        for(const auto& vector:std::array<point,6>{
+                q.origin,q.u,q.v,q.normal,q.albedo,q.emission})
+            for(float component:vector)
+                if(!std::isfinite(component))
+                    throw std::invalid_argument("Lumen quad has nonfinite values");
+        if(!std::isfinite(q.roughness) || q.roughness<.4f ||
+           q.roughness>.95f)
+            throw std::invalid_argument("Lumen quad roughness must be 0.4..0.95");
+        if(dot(q.u,q.u)<1.e-5f || dot(q.v,q.v)<1.e-5f ||
+           dot(cross(q.u,q.v),cross(q.u,q.v))<1.e-8f ||
+           dot(q.normal,q.normal)<1.e-6f)
+            throw std::invalid_argument("Lumen quad has degenerate geometry");
+        const point N=normalized(q.normal);
+        if(std::abs(dot(N,q.u))>1.e-3f*std::sqrt(dot(q.u,q.u)) ||
+           std::abs(dot(N,q.v))>1.e-3f*std::sqrt(dot(q.v,q.v)))
+            throw std::invalid_argument("Lumen quad normal is not perpendicular");
+        for(float albedo:q.albedo)
+            if(albedo<0.f || albedo>1.f)
+                throw std::invalid_argument("Lumen albedo must be 0..1");
+        bool emits=false;
+        for(float emission:q.emission)
+        {
+            if(emission<0.f)
+                throw std::invalid_argument("Lumen negative emission");
+            emits|=emission>0.f;
+        }
+        if(emits!=(i==15))
+            throw std::invalid_argument(
+                "Lumen currently requires emitter only in quad 15");
+        add_face(vertices,q.origin,q.u,q.v,N,q.albedo,q.emission);
+    }
+    for(std::size_t i=0;i<vertices.size();i++)
+        vertices[i].face_index=std::uint32_t(i/6);
+    return vertices;
+}
+
+std::array<face,16> make_faces(const std::vector<vertex>& vertices,
+                               const quad_scene* custom=nullptr) {
     std::array<face,16> result{};
     for(std::size_t i=0;i<result.size();i++) {
         const auto& a=vertices[i*6];
@@ -137,7 +201,8 @@ std::array<face,16> make_faces(const std::vector<vertex>& vertices) {
         // Keep diffuse RGB untouched; albedo.w stores roughness for the
         // demo's low-cost, radiance-cache-based rough reflections.
         auto material=pack(a.albedo);
-        material[3]=i==0?0.68f:(i>=5 && i<15?0.56f:0.92f);
+        material[3]=custom?custom->faces[i].roughness:
+                             (i==0?.68f:(i>=5 && i<15?.56f:.92f));
         result[i]={
             pack(a.position),pack(u),pack(v),pack(a.normal),
             material,pack(a.emission),
@@ -252,6 +317,8 @@ vk::PipelineLayout make_layout(vk::DescriptorSetLayout descriptor,
 
 } // namespace
 
+quad_scene cornell_quads() {return default_quads();}
+
 struct system::implementation {
     settings options{};
     vk::RenderPass presentation_pass{};
@@ -262,6 +329,7 @@ struct system::implementation {
     scene geometry{};
     lighting lights{};
     gbuffer surfaces{};
+    std::optional<quad_scene> custom_quads{};
 
     gpu::buffer vertex_buffer,faces_buffer,trace_nodes,trace_triangles;
     gpu::buffer radiance_probes;
@@ -364,8 +432,8 @@ struct system::implementation {
     }
 
     void initialize() {
-        if(options.demo!=demo_scene::cornell_box)
-            throw std::logic_error("Lumen Stage 1 supports only the Cornell demo");
+        if(options.demo!=demo_scene::cornell_box && !custom_quads)
+            throw std::logic_error("Lumen requires Cornell demo or external quads");
         if(!presentation_pass || !extent.width || !extent.height)
             throw std::invalid_argument("invalid Lumen host presentation target");
 
@@ -405,8 +473,9 @@ struct system::implementation {
         if((depth_features & depth_required)!=depth_required)
             throw std::runtime_error("sampled D32 depth attachment unsupported");
 
-        const auto vertices=cornell_box();
-        const auto faces=make_faces(vertices);
+        const auto vertices=custom_quads?
+            quad_vertices(*custom_quads):cornell_box();
+        const auto faces=make_faces(vertices,custom_quads?&*custom_quads:nullptr);
         std::vector<point> scene_vertices;
         scene_vertices.reserve(vertices.size());
         // Include the emissive panel in radiance rays. Shadow rays use a
@@ -1376,6 +1445,20 @@ void system::create(vk::RenderPass pass,vk::Format format,
     next->initialize();
     impl_=std::move(next);
 }
+void system::create(vk::RenderPass pass,vk::Format format,
+                    vk::Extent2D extent,const settings& options,
+                    const quad_scene& quads) {
+    if(impl_)throw std::logic_error("VulkanLumen already created");
+    auto next=std::make_unique<implementation>();
+    next->options=options;
+    next->options.demo=demo_scene::none;
+    next->custom_quads=quads;
+    next->presentation_pass=pass;
+    next->presentation_format=format;
+    next->extent=extent;
+    next->initialize();
+    impl_=std::move(next);
+}
 void system::resize(vk::RenderPass pass,vk::Format format,vk::Extent2D extent) {
     if(!impl_)throw std::logic_error("VulkanLumen not created");
     // Resize requires the caller to have waited for device idle.
@@ -1388,6 +1471,7 @@ void system::resize(vk::RenderPass pass,vk::Format format,vk::Extent2D extent) {
     next->geometry=impl_->geometry;
     next->lights=impl_->lights;
     next->surfaces=impl_->surfaces;
+    next->custom_quads=impl_->custom_quads;
     next->initialize();
     impl_=std::move(next);
 }
@@ -1479,9 +1563,10 @@ bool system::implemented() const noexcept {
     return impl_ && impl_->ready;
 }
 const char* system::status() const noexcept {
-    return implemented()?
-        "lit cards + diffuse GI, rough reflections and analytic direct specular":
-        "not initialized";
+    if(!implemented())return "not initialized";
+    return impl_->custom_quads?
+        "external 16-quads + diffuse GI and rough reflections":
+        "lit cards + diffuse GI, rough reflections and analytic direct specular";
 }
 void system::reset() noexcept {impl_.reset();}
 

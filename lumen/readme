@@ -194,3 +194,23 @@ Direct/indirect decomposition:
   - Output lighting_extent/full_resolution identify the image dimensions;
     metadata always remains at probe_extent. Results are borrowed resources.
   - Native M2 shader compilation and 60 FPS performance are not verified.
+
+2026-11-08 first external static-geometry milestone
+  - New quad_scene / quad input API accepts exactly 16 static planar
+    parallelogram faces during create(); this is an explicit intermediate
+    scene format, NOT arbitrary triangle mesh or runtime mesh streaming.
+  - Host controls face position, U/V axes, normal, RGB albedo, roughness
+    and RGB emission. The last face is the area emitter; other faces
+    must be nonemissive, preserving the current analytic emitter shader.
+  - Quad inputs are validated (finite attributes, nondegenerate geometry,
+    perpendicular normals, 0..1 albedo and valid roughness) and copied by
+    the system. It creates its own GPU vertex/face buffers and CPU-built BVH.
+  - Existing no-extra-argument create() keeps the original Cornell scene,
+    shader layouts, timings and exact geometry; resize() preserves user quads.
+  - cornell_quads() exposes a reference room through the external API,
+    so callers can change the materials/geometry without copying internals.
+  - The 4x4 card atlas, fixed world-probe bounds and demo analytic emitter
+    remain limitations. External scenes should fit the original Cornell
+    world volume; fully generic meshes, dynamic BVHs and multiple lights
+    are later milestones.
+  - No additional GPU passes, probes or BVH rays in the default path.

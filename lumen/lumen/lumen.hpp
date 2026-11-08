@@ -1,5 +1,6 @@
 #pragma once
 #include <vk/vk.hpp>
+#include <array>
 #include <cstdint>
 #include <memory>
 
@@ -53,6 +54,21 @@ struct lighting {
     vk::Buffer lights{};
     std::uint32_t count=0;
 };
+
+// Initial external geometry contract: exactly 16 static planar quads.
+// The first 15 are nonemissive; face 15 is the rectangular area emitter.
+// This preserves the current 4x4 Surface Cache atlas and BVH ray format.
+// The world-probe grid still covers the Cornell room volume.
+struct quad {
+    std::array<float,3> origin{},u{},v{},normal{},albedo{},emission{};
+    float roughness=.92f;
+};
+struct quad_scene {
+    std::array<quad,16> faces{};
+};
+// Reference input for testing the external-geometry path. The caller can
+// modify the returned quads before passing them to create().
+quad_scene cornell_quads();
 
 // Optional primary rasterization guides, owned by the calling renderer.
 struct gbuffer {
@@ -118,6 +134,12 @@ public:
     // Call after VulkanWrapper device/swapchain setup. Compatible with host pass.
     void create(vk::RenderPass presentation_pass, vk::Format presentation_format,
                 vk::Extent2D extent, const settings& options={});
+    // Copies caller-owned static geometry at creation time. No borrowed
+    // input data or GPU buffer layout is required; preserves existing shaders.
+    // Create-time only; resize() retains these quads.
+    void create(vk::RenderPass presentation_pass, vk::Format presentation_format,
+                vk::Extent2D extent, const settings& options,
+                const quad_scene& quads);
     void resize(vk::RenderPass presentation_pass, vk::Format presentation_format,
                 vk::Extent2D extent);
     void set_scene(const scene& geometry);
