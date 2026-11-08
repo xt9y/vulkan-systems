@@ -4,7 +4,7 @@
 
 namespace gpu
 {
-    // Owned VulkanEngine buffer. Lifetime must exceed pending GPU submissions.
+    // Owned VulkanWrapper buffer. Lifetime must exceed pending GPU submissions.
     class buffer
     {
     public:
