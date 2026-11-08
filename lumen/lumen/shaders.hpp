@@ -820,6 +820,23 @@ vec3 directional_radiance(vec3 origin,vec3 direction,
         return result;
     return scene_radiance(origin,direction,max_distance);
 }
+
+// Low-roughness reflections need a direction-specific hit rather than
+// integrating broad screen radiance bins. One BVH ray per smooth screen
+// probe; direct rect-light specular remains handled analytically.
+vec3 smooth_reflection(vec3 position,vec3 normal,vec3 reflected,float limit)
+{
+    vec3 ray_origin=position+normal*.012;
+    RayHit hit=trace_scene(ray_origin,reflected,limit,false);
+    if(hit.overflow)return vec3(0.0);
+    if(hit.primitive==INVALID)return ENVIRONMENT_RADIANCE;
+    uint face_id=hit.primitive/2u;
+    Face face=faces[face_id];
+    if(dot(face.normal.xyz,-reflected)<=.0)return vec3(0.0);
+    if(any(greaterThan(face.emission.rgb,vec3(0.0))))
+        return vec3(0.0); // direct emitter is evaluated as GGX area light
+    return cached_lighting(ray_origin+reflected*hit.distance,face_id);
+}
 // Integrate the ceiling emitter at screen-probe resolution, not at
 // raster resolution. Indirect radiance intentionally excludes emitter
 // hits, so direct rough specular needs a separate analytic term.
@@ -923,8 +940,9 @@ void main()
     float total_weight=0.0;
     // Reuse the same directional radiance samples for broad specular.
     // Smooth mirror reflections require a separate tracing milestone.
-    float roughness=clamp(faces[id-1u].albedo.w,.4,.95);
+    float roughness=clamp(faces[id-1u].albedo.w,.05,.95);
     bool glossy=roughness<.90;
+    bool smooth=roughness<.40;
     vec3 reflected=vec3(0.0);
     float fresnel=0.0;
     if(glossy)
@@ -1003,6 +1021,13 @@ void main()
     if(glossy)
     {
         vec3 V=normalize(camera.eye.xyz-position);
+        if(smooth)
+        {
+            vec3 smooth_li=smooth_reflection(position,normal,reflected,
+                                             clamp(camera.trace_parameters.x,.5,16.0));
+            float blend=1.0-smoothstep(.05,.40,roughness);
+            specular=mix(specular,smooth_li*fresnel,blend);
+        }
         specular+=area_specular(position,normal,V,
                                cached_albedo(position,id-1u),
                                roughness,id-1u);
