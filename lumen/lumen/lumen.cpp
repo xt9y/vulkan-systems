@@ -290,6 +290,47 @@ std::string with_tracing(const char* source)
     return result;
 }
 
+// Specialize static scene/card layout when the host changes the number of
+// material faces. Defaults replace themselves exactly, preserving Cornell.
+std::string specialize_scene_shader(std::string source,std::uint32_t faces,
+                                    std::uint32_t columns,point lo,point hi,
+                                    bool external)
+{
+    const auto replace=[&](const std::string& old,const std::string& next)
+    {
+        std::size_t pos=0;
+        while((pos=source.find(old,pos))!=std::string::npos)
+        {
+            source.replace(pos,old.size(),next);
+            pos+=next.size();
+        }
+    };
+    replace("const int FACE_COUNT=16;",
+            "const int FACE_COUNT="+std::to_string(faces)+";");
+    replace("const int CARD_COLUMNS=4;",
+            "const int CARD_COLUMNS="+std::to_string(columns)+";");
+    if(external)
+    {
+        const auto format=[](point xyz)
+        {
+            std::ostringstream out;
+            out<<std::fixed<<std::setprecision(7)
+               <<"vec3("<<xyz[0]<<","<<xyz[1]<<","<<xyz[2]<<")";
+            return out.str();
+        };
+        replace("const vec3 GRID_MIN=vec3(.25,.24,.25);",
+                "const vec3 GRID_MIN="+format(lo)+";");
+        replace("const vec3 GRID_MAX=vec3(5.30,5.22,5.34);",
+                "const vec3 GRID_MAX="+format(hi)+";");
+        const std::string version="#version 450\n";
+        const auto index=source.find(version);
+        if(index!=std::string::npos)
+            source.insert(index+version.size(),
+                          "#define LUMEN_EXTERNAL_SCENE 1\n");
+    }
+    return source;
+}
+
 vk::ImageViewCreateInfo image_view(vk::Format format,vk::ImageAspectFlags aspect) {
     vk::ImageViewCreateInfo view{};
     view.viewType=vk::ImageViewType::e2D;
@@ -921,17 +962,25 @@ struct system::implementation {
             write(full_diffuse,5);
             write(full_specular,6);
         }
-        cache_spv=compile("cards","comp",shaders::cards_comp);
+        const auto scene_shader=[&](const char* text,bool tracing)
+        {
+            return specialize_scene_shader(
+                tracing?with_tracing(text):std::string(text),
+                face_count,card_columns,grid_min,grid_max,
+                custom_quads.has_value());
+        };
+        const std::string cards_source=scene_shader(shaders::cards_comp,false);
+        cache_spv=compile("cards","comp",cards_source.c_str());
         cache_pipeline.create(cache_spv,{cache_sets.layout()});
-        const std::string lighting_source=with_tracing(shaders::lighting_comp);
+        const std::string lighting_source=scene_shader(shaders::lighting_comp,true);
         lighting_spv=compile("surface_lighting","comp",lighting_source.c_str());
         lighting_pipeline.create(lighting_spv,{lighting_sets.layout()},
                                 sizeof(light_constants));
-        const std::string radiance_source=with_tracing(shaders::radiance_comp);
+        const std::string radiance_source=scene_shader(shaders::radiance_comp,true);
         radiance_spv=compile("radiance","comp",radiance_source.c_str());
         radiance_pipeline.create(radiance_spv,{radiance_sets.layout()},
                                 sizeof(radiance_constants));
-        const std::string screen_source=with_tracing(shaders::screen_comp);
+        const std::string screen_source=scene_shader(shaders::screen_comp,true);
         screen_spv=compile("screen","comp",screen_source.c_str());
         screen_pipeline.create(screen_spv,{screen_sets.layout()},
                                sizeof(screen_constants));
@@ -945,7 +994,7 @@ struct system::implementation {
                                         {full_output_sets.layout()});
         }
         geometry_vertex_spv=compile("geometry","vert",shaders::geometry_vert);
-        const std::string fragment_source=with_tracing(shaders::geometry_frag);
+        const std::string fragment_source=scene_shader(shaders::geometry_frag,true);
         geometry_fragment_spv=compile("geometry","frag",fragment_source.c_str());
         composite_vertex_spv=compile("composite","vert",shaders::composite_vert);
         composite_fragment_spv=compile("composite","frag",shaders::composite_frag);
