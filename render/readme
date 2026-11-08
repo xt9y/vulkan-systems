@@ -1,4 +1,4 @@
-VulkanRender - reusable C++17 VulkanEngine rendering.
+VulkanRender - reusable C++17 VulkanWrapper rendering.
   render/render.hpp         umbrella API
   render/frame.*            two+ in-flight command/fence and present scheduler
   render/postprocess.*      owned offscreen HDR/LDR targets and presentation pass
@@ -16,7 +16,7 @@ VulkanRender - reusable C++17 VulkanEngine rendering.
 frame_scheduler.create(frames), resize(swapchain image count), wait(), begin(),
 then render to ticket.command and submit(ticket). Handle out-of-date/suboptimal
 swapchain results in the host and recreate resources only after device idle.
-The host owns surface creation, format/present-mode choice and VulkanEngine
+The host owns surface creation, format/present-mode choice and VulkanWrapper
 lifecycle. It also controls shader semantics, camera, lighting and passes.
 
 postprocess_targets creates sampled/storage HDR and LDR GPU images and views
