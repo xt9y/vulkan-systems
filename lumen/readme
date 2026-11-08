@@ -2,10 +2,10 @@ VulkanLumen — Cornell prototype with stabilized directional GI
 
 Architecture
   1. Raster HDR + depth + face ID
-  2. 16 planar material cards (RGBA8, 64x64)
+  2. 16 planar material cards (RGBA8, 64x64; separate lit cards 128x128)
   3. Direct/total Surface Cache radiance atlases (RGBA16F)
   4. 12x8x12 directional world radiance cache
-  5. 8x8 directional radiance per 16x16 screen probe
+  5. 8x8 directional radiance per 8x8 screen probe
   6. Geometry-aware 3x3 screen-probe-space filter
   7. Depth/face-validated full-resolution indirect composition
 
@@ -39,7 +39,7 @@ Visual-quality correction following the first lit-card/directional-probe test:
     result is read by the fullscreen composite.
 
 Runtime
-  - Material cards update when dirty; one 64x64 direct/total lighting card
+  - Material cards update when dirty; one 128x128 direct/total lighting card
     updated per frame to amortize area-light shadow rays.
   - World radiance cache updates 64 probes x 8 rays/frame by default.
   - Screen probes trace 4 of 64 directional bins/frame by default.
@@ -92,3 +92,13 @@ Direct/indirect decomposition:
   World radiance and Screen Probe Gather rays ignore direct hits of the
   emissive panel; they collect radiance from non-emissive lit surfaces.
   This prevents the area-light contribution from being counted twice.
+
+2026-11-08 direct shadow and directional reconstruction fidelity
+  - Retained 64x64 RGBA8 albedo cards; direct/total radiance cards are
+    independently 128x128 in 512x512 HDR atlases, dispatched 16x16x8x8.
+  - Screen probes now cover 8x8 pixels, with matching center reconstruction
+    and updated probe allocations. The directional atlas stays 8x8 per probe.
+  - Shadow rays use a small slope-aware receiver offset and retrace toward
+    the actual light sample from the biased ray origin.
+  - Both lit and direct card lookups clamp bilinear taps within their face.
+  - Expect higher lighting-card and screen-probe GPU costs; benchmark on M2.

@@ -366,7 +366,7 @@ struct system::implementation {
             std::max(1u,std::uint32_t(std::lround(extent.height*factor)))
         };
         screen_extent=vk::Extent2D{
-            (render_extent.width+15u)/16u,(render_extent.height+15u)/16u
+            (render_extent.width+7u)/8u,(render_extent.height+7u)/8u
         };
         const auto physical=vk::physical_device::get()->handle;
         const auto color_format=vk::Format::eR16G16B16A16Sfloat;
@@ -456,12 +456,12 @@ struct system::implementation {
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eColor);
-        make_image(surface_lighting,vk::Extent2D{256,256},color_format,
+        make_image(surface_lighting,vk::Extent2D{512,512},color_format,
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled |
             vk::ImageUsageFlagBits::eTransferDst,
             vk::ImageAspectFlagBits::eColor);
-        make_image(direct_lighting,vk::Extent2D{256,256},color_format,
+        make_image(direct_lighting,vk::Extent2D{512,512},color_format,
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled |
             vk::ImageUsageFlagBits::eTransferDst,
@@ -798,12 +798,13 @@ struct system::implementation {
         std::cout<<"[lumen] Lit Surface Cache + directional Screen Radiance Cache: "
                  <<accel.triangles.size()
                  <<" triangles / "<<accel.nodes.size()
-                 <<" BVH nodes | lit cards=16 x 64x64"
+                 <<" BVH nodes | lit cards=16 x 128x128"
                  <<" | world probes="<<radiance_probe_count
                  <<" updates/frame="<<std::clamp(options.probe_updates_per_frame,
                                                     1u,radiance_probe_count)
                  <<" rays/update="<<std::clamp(options.rays_per_probe,1u,16u)
                  <<" | screen probes="<<screen_extent.width<<"x"<<screen_extent.height
+                 <<" spacing=8px"
                  <<" directions=8x8"
                  <<" | geometry-aware probe filter=3x3"
                  <<" trace=8 steps+"<<options.screen_trace_distance<<"m BVH fallback"
@@ -1033,13 +1034,13 @@ struct system::implementation {
                 vk::PipelineStageFlagBits::eComputeShader,
                 {},{},{probe_barrier},{});
         }
-        // One 64x64 card per frame amortizes four-sample soft shadowing and
+        // One 128x128 lit card per frame amortizes four-sample soft shadowing and
         // indirect radiosity. Both atlases remain resident between frames.
         const light_constants push{
             std::uint32_t(current.index%16u),
             radiance_initialized?1u:0u,0u,0u
         };
-        lighting_pipeline.dispatch(cmd,8,8,1,{lighting_sets.set()},
+        lighting_pipeline.dispatch(cmd,16,16,1,{lighting_sets.set()},
                                    &push,sizeof(push));
         for(auto& barrier:images)
         {

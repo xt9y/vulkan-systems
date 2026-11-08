@@ -13,7 +13,9 @@ vec3 cached_albedo(vec3 position,uint face_id)
     vec2 uv=vec2(q.x*f.metric.x+q.y*f.metric.y,
                   q.x*f.metric.y+q.y*f.metric.z);
     ivec2 card=ivec2(int(face_id%4u),int(face_id/4u));
-    ivec2 texel=card*CARD_SIZE+ivec2(clamp(uv,vec2(0.0),vec2(.9999))*float(CARD_SIZE));
+    vec2 card_uv=clamp(uv,vec2(.5/float(CARD_SIZE)),
+                        vec2(1.0-.5/float(CARD_SIZE)));
+    ivec2 texel=card*CARD_SIZE+ivec2(card_uv*float(CARD_SIZE));
     return texelFetch(surface_cards,texel,0).rgb;
 }
 
@@ -29,18 +31,19 @@ vec3 cached_lighting(vec3 position,uint face_id)
     vec2 q=vec2(dot(d,face.u.xyz),dot(d,face.v.xyz));
     vec2 uv=vec2(q.x*face.metric.x+q.y*face.metric.y,
                   q.x*face.metric.y+q.y*face.metric.z);
-    // Bilinear reconstruction INSIDE the 64x64 card. Nearest texel fetches
-    // produced discontinuous reflected radiance across visible surfaces.
-    vec2 texel=clamp(uv*float(CARD_SIZE)-.5,
-                     vec2(0.0),vec2(float(CARD_SIZE-1)));
+    // Bilinear interpolation must remain within the face's own lit card.
+    // Clamp to the texel centers so edge taps cannot bleed or go invalid.
+    uv=clamp(uv,vec2(.5/float(LIT_CARD_SIZE)),
+                vec2(1.0-.5/float(LIT_CARD_SIZE)));
+    vec2 texel=uv*float(LIT_CARD_SIZE)-.5;
     ivec2 base=ivec2(floor(texel));
     vec2 fraction=fract(texel);
-    ivec2 origin=ivec2(int(face_id%4u),int(face_id/4u))*CARD_SIZE;
+    ivec2 origin=ivec2(int(face_id%4u),int(face_id/4u))*LIT_CARD_SIZE;
     vec3 result=vec3(0.0);
     for(int y=0;y<2;y++)
     for(int x=0;x<2;x++)
     {
-        ivec2 xy=clamp(base+ivec2(x,y),ivec2(0),ivec2(CARD_SIZE-1));
+        ivec2 xy=clamp(base+ivec2(x,y),ivec2(0),ivec2(LIT_CARD_SIZE-1));
         float w=(x==0?1.0-fraction.x:fraction.x)*
                 (y==0?1.0-fraction.y:fraction.y);
         result+=max(texelFetch(lit_cards,origin+xy,0).rgb,vec3(0.0))*w;
@@ -196,8 +199,16 @@ vec3 direct_area_light(vec3 position,vec3 normal,vec3 albedo)
         float incoming=max(dot(normal,wi),0.0);
         float outgoing=max(dot(lamp.normal.xyz,-wi),0.0);
         if(incoming<=0.0 || outgoing<=0.0)continue;
-        if(blocked(position+normal*EPSILON*2.0,wi,
-                   distance-EPSILON*4.0))
+        // Slope-aware receiver offset. Aim from the biased point at the
+        // emitter sample instead of reusing the original ray direction.
+        // Keep the offset small so contact shadows do not detach.
+        float bias=EPSILON*2.0+.009*(1.0-incoming);
+        vec3 shadow_origin=position+normal*bias;
+        vec3 shadow_delta=target-shadow_origin;
+        float shadow_distance=length(shadow_delta);
+        if(shadow_distance>EPSILON*4.0 &&
+           blocked(shadow_origin,shadow_delta/shadow_distance,
+                   shadow_distance-EPSILON*4.0))
             continue;
         radiance+=lamp.emission.rgb*
                   (incoming*outgoing*lamp.metric.w/distance2);
@@ -320,6 +331,7 @@ const float PI=3.14159265358979323846;
 const float EPSILON=0.0015;
 const int FACE_COUNT=16;
 const int CARD_SIZE=64;
+const int LIT_CARD_SIZE=128;
 layout(set=0,binding=3) uniform sampler2D surface_cards;
 layout(set=0,binding=11) uniform sampler2D direct_cards;
 vec3 cached_direct(vec3 position,uint face_id)
@@ -329,17 +341,18 @@ vec3 cached_direct(vec3 position,uint face_id)
     vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
     vec2 uv=clamp(vec2(q.x*f.metric.x+q.y*f.metric.y,
                        q.x*f.metric.y+q.y*f.metric.z),
-                   vec2(.5/64.0),vec2(1.0-.5/64.0));
-    // Bilinear interpolation confined to this card (no atlas bleeding).
-    vec2 sample_pixel=uv*64.0-.5;
+                   vec2(.5/float(LIT_CARD_SIZE)),
+                   vec2(1.0-.5/float(LIT_CARD_SIZE)));
+    // Bilinear interpolation is clamped to this face's 128x128 lit card.
+    vec2 sample_pixel=uv*float(LIT_CARD_SIZE)-.5;
     ivec2 cell=ivec2(floor(sample_pixel));
     vec2 fraction=fract(sample_pixel);
-    ivec2 card=ivec2(int(face_id%4u),int(face_id/4u))*64;
+    ivec2 card=ivec2(int(face_id%4u),int(face_id/4u))*LIT_CARD_SIZE;
     vec3 value=vec3(0);
     for(int y=0;y<2;y++)
     for(int x=0;x<2;x++)
     {
-        ivec2 local=clamp(cell+ivec2(x,y),ivec2(0),ivec2(63));
+        ivec2 local=clamp(cell+ivec2(x,y),ivec2(0),ivec2(LIT_CARD_SIZE-1));
         float w=(x==0?1.0-fraction.x:fraction.x)*
                 (y==0?1.0-fraction.y:fraction.y);
         value+=texelFetch(direct_cards,card+local,0).rgb*w;
@@ -401,6 +414,7 @@ const float PI=3.14159265358979323846;
 const float EPSILON=.0015;
 const int FACE_COUNT=16;
 const int CARD_SIZE=64;
+const int LIT_CARD_SIZE=128;
 /* LUMEN_SHARED_TRACING */
 /* LUMEN_SHARED_IRRADIANCE */
 layout(rgba16f,set=0,binding=10) writeonly uniform image2D next_lighting;
@@ -414,11 +428,11 @@ layout(push_constant) uniform LightUpdate {
 void main()
 {
     ivec2 local_pixel=ivec2(gl_GlobalInvocationID.xy);
-    if(any(greaterThanEqual(local_pixel,ivec2(64))))return;
+    if(any(greaterThanEqual(local_pixel,ivec2(LIT_CARD_SIZE))))return;
     uint face_id=params.card_to_update;
-    ivec2 pixel=ivec2(int(face_id%4u),int(face_id/4u))*64+local_pixel;
+    ivec2 pixel=ivec2(int(face_id%4u),int(face_id/4u))*LIT_CARD_SIZE+local_pixel;
     Face face=faces[face_id];
-    vec2 uv=(vec2(local_pixel)+.5)/64.0;
+    vec2 uv=(vec2(local_pixel)+.5)/float(LIT_CARD_SIZE);
     vec3 position=face.origin.xyz+uv.x*face.u.xyz+uv.y*face.v.xyz;
     vec3 albedo=cached_albedo(position,face_id);
     vec3 normal=normalize(face.normal.xyz);
@@ -449,6 +463,7 @@ const float PI=3.14159265358979323846;
 const float EPSILON=0.0015;
 const int FACE_COUNT=16;
 const int CARD_SIZE=64;
+const int LIT_CARD_SIZE=128;
 
 #define LUMEN_LIT_TEXTURE
 /* LUMEN_SHARED_TRACING */
@@ -595,11 +610,12 @@ const float PI=3.14159265358979323846;
 const float EPSILON=.0015;
 const int FACE_COUNT=16;
 const int CARD_SIZE=64;
+const int LIT_CARD_SIZE=128;
 /* LUMEN_SHARED_TRACING */
 /* LUMEN_SHARED_IRRADIANCE */
 layout(set=0,binding=5) uniform sampler2D scene_color;
 layout(set=0,binding=6) uniform sampler2D scene_depth;
-// 8x8 octahedral directional atlas for each 16x16 screen probe.
+// 8x8 octahedral directional atlas for each 8x8 screen probe.
 layout(rgba16f,set=0,binding=7) uniform image2D screen_directions;
 layout(rgba16f,set=0,binding=8) uniform image2D screen_meta;
 layout(rgba16f,set=0,binding=10) uniform image2D screen_gather;
@@ -757,7 +773,7 @@ void main()
     ivec2 grid=imageSize(screen_gather);
     if(any(greaterThanEqual(tile,grid)))return;
     ivec2 size=textureSize(scene_color,0);
-    ivec2 pixel=min(tile*16+ivec2(8),size-1);
+    ivec2 pixel=min(tile*8+ivec2(4),size-1);
     vec4 sample_color=texelFetch(scene_color,pixel,0);
     float z=texelFetch(scene_depth,pixel,0).r;
     uint id=uint(sample_color.a+.5);
@@ -930,7 +946,7 @@ void main()
     if(id>.5 && z<.99999)
     {
         float distance=linear_depth(z);
-        vec2 coord=(vec2(pixel)-vec2(8.0))/16.0;
+        vec2 coord=(vec2(pixel)-vec2(4.0))/8.0;
         ivec2 origin=ivec2(floor(coord));
         vec2 fraction=fract(coord);
         ivec2 probe_size=textureSize(screen_gather,0);
