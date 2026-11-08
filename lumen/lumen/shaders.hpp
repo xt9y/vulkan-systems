@@ -167,53 +167,68 @@ bool blocked(vec3 origin,vec3 direction,float limit)
     return hit.primitive!=INVALID || hit.overflow;
 }
 
+vec3 area_light_sample(Face lamp,vec3 position,vec3 normal,vec2 uv,
+                       out bool valid,out bool visible)
+{
+    valid=false;
+    visible=false;
+    vec3 target=lamp.origin.xyz+lamp.u.xyz*uv.x+lamp.v.xyz*uv.y;
+    vec3 delta=target-position;
+    float distance2=dot(delta,delta);
+    if(distance2<.0001)return vec3(0.0);
+    float distance=sqrt(distance2);
+    vec3 wi=delta/distance;
+    float incoming=max(dot(normal,wi),0.0);
+    float outgoing=max(dot(lamp.normal.xyz,-wi),0.0);
+    if(incoming<=0.0 || outgoing<=0.0)return vec3(0.0);
+    valid=true;
+
+    // Bias just enough to avoid self-intersection without lifting contact
+    // shadows away from the occluder. Aim at the light from the new origin.
+    float bias=EPSILON*1.5+.0025*(1.0-incoming);
+    vec3 origin=position+normal*bias;
+    vec3 offset=target-origin;
+    float travel=length(offset);
+    if(travel<=EPSILON*4.0)return vec3(0.0);
+    visible=!blocked(origin,offset/travel,travel-EPSILON*4.0);
+    if(!visible)return vec3(0.0);
+    return lamp.emission.rgb*(incoming*outgoing*lamp.metric.w/distance2);
+}
+
 vec3 direct_area_light(vec3 position,vec3 normal,vec3 albedo)
 {
     Face lamp=faces[FACE_COUNT-1];
     vec3 radiance=vec3(0.0);
-    // M1 fast path: one BVH visibility query for this surface. Four geometry
-    // samples still integrate the emitter's smooth angular falloff.
-    // The shadow silhouette is intentionally harder than four distinct rays.
-    vec3 center=lamp.origin.xyz+.5*lamp.u.xyz+.5*lamp.v.xyz;
-    vec3 to_center=center-position;
-    float center_distance=length(to_center);
-    if(center_distance<EPSILON)return vec3(0.0);
-    vec3 center_direction=to_center/center_distance;
-    if(dot(normal,center_direction)<=0.0 ||
-       dot(lamp.normal.xyz,-center_direction)<=0.0)
-        return vec3(0.0);
-    // Primary geometry uses the separately computed direct-light cache.
-    // The cache itself samples four actual visibility rays for penumbrae.
-    // Fixed 2x2 emitter quadrature; no stochastic noise or denoising.
+    int valid_count=0;
+    int visible_count=0;
+
+    // Four rays suffice in fully illuminated or fully shadowed regions.
     for(int y=0;y<2;y++)
     for(int x=0;x<2;x++)
     {
+        bool valid,visible;
         vec2 uv=(vec2(x,y)+vec2(.5))*.5;
-        vec3 target=lamp.origin.xyz+lamp.u.xyz*uv.x+
-                    lamp.v.xyz*uv.y;
-        vec3 delta=target-position;
-        float distance2=dot(delta,delta);
-        if(distance2<0.0001)continue;
-        float distance=sqrt(distance2);
-        vec3 wi=delta/distance;
-        float incoming=max(dot(normal,wi),0.0);
-        float outgoing=max(dot(lamp.normal.xyz,-wi),0.0);
-        if(incoming<=0.0 || outgoing<=0.0)continue;
-        // Slope-aware receiver offset. Aim from the biased point at the
-        // emitter sample instead of reusing the original ray direction.
-        // Keep the offset small so contact shadows do not detach.
-        float bias=EPSILON*2.0+.009*(1.0-incoming);
-        vec3 shadow_origin=position+normal*bias;
-        vec3 shadow_delta=target-shadow_origin;
-        float shadow_distance=length(shadow_delta);
-        if(shadow_distance>EPSILON*4.0 &&
-           blocked(shadow_origin,shadow_delta/shadow_distance,
-                   shadow_distance-EPSILON*4.0))
-            continue;
-        radiance+=lamp.emission.rgb*
-                  (incoming*outgoing*lamp.metric.w/distance2);
+        radiance+=area_light_sample(lamp,position,normal,uv,valid,visible);
+        if(valid)valid_count++;
+        if(visible)visible_count++;
     }
-    return albedo*(radiance/(4.0*PI));
+
+    float sample_count=4.0;
+    if(visible_count>0 && visible_count<valid_count)
+    {
+        // Re-evaluate the penumbra with sixteen fixed stratified emitter
+        // samples. This is deterministic and adds no temporal noise.
+        radiance=vec3(0.0);
+        for(int y=0;y<4;y++)
+        for(int x=0;x<4;x++)
+        {
+            bool valid,visible;
+            vec2 uv=(vec2(x,y)+vec2(.5))*.25;
+            radiance+=area_light_sample(lamp,position,normal,uv,valid,visible);
+        }
+        sample_count=16.0;
+    }
+    return albedo*(radiance/(sample_count*PI));
 }
 
 )glsl";
@@ -373,10 +388,16 @@ void main()
     }
     vec3 normal=normalize(surface_normal);
     vec3 albedo=cached_albedo(world_position,surface_index);
-    // The final Screen Probe Gather evaluates indirect radiance once.
-    // Rendering world-cache GI here and adding a signed probe delta later
-    // could subtract more light than the surface received.
+    // Screen Probe Gather supplies indirect light once; the raster pass
+    // supplies direct light, with selective per-pixel shadow refinement.
     vec3 direct=cached_direct(world_position,surface_index);
+    // The 128px Surface Cache is sufficient for smooth lighting, but its
+    // baked shadow silhouette stair-steps when magnified. At high-contrast
+    // shadow boundaries, reconstruct direct lighting per raster pixel.
+    // Only the edge pixels pay for BVH rays; GI stays in the Surface Cache.
+    float shadow_gradient=length(fwidth(direct));
+    if(shadow_gradient>.006)
+        direct=direct_area_light(world_position,normal,albedo);
     hdr_color=vec4(max(direct,vec3(0.0)),float(surface_index+1u));
 }
 )glsl";

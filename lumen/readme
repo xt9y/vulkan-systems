@@ -102,3 +102,14 @@ Direct/indirect decomposition:
     the actual light sample from the biased ray origin.
   - Both lit and direct card lookups clamp bilinear taps within their face.
   - Expect higher lighting-card and screen-probe GPU costs; benchmark on M2.
+
+2026-11-08 shadow edge correction
+  - Replaced fixed 2x2 area-light shadow sampling with adaptive 2x2/4x4:
+    four visibility rays in smooth regions and sixteen stratified rays
+    where the emitter is partially occluded. All samples are deterministic.
+  - Lowered slope-aware shadow bias to reduce contact shadow separation.
+  - On the primary raster, cached direct lighting is refined at full
+    1280x720 internal resolution only when screen derivatives reveal a
+    sharp shadow boundary. Lit/material cards and world/screen GI remain
+    unchanged, avoiding a blanket 4x cache-size/work increase.
+  - GPU time is device-dependent; validate the raster pass and 60 FPS.
