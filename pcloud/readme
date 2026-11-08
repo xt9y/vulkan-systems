@@ -1,48 +1,142 @@
-# VulkanPCloud — `pc::`
+# VulkanPCloud (`pc::`)
 
-This system extracts the complete original point-cloud, shadow, indirect
-irradiance, and direct-lighting pipeline from `xt9y/vulkan-game`. It owns
-surface-probe generation (0.3 spacing), light-derived 3D probe grid,
-BVH construction including per-light local trees, bricked point index,
-point-cloud trace, GI gather, tile-binned direct light, PBR shading,
-tonemapping, and the original full-screen Vulkan presentation. The six
-original shader files are kept unmodified in `pcloud/shaders/`.
+Reusable point-cloud global illumination, point-light rendering and BVH
+shadowing for renderers that already use **VulkanWrapper**. PCloud is a
+standalone module in `vulkan-systems/pcloud/`; it has no dependencies on
+`vulkan-game`, a particular mesh format, a server, GLFW, Ozz, or an editor.
 
-The public `pc::` API accepts **only** light data, surface collision boxes,
-world-space caster triangles, camera parameters, and G-buffer image views.
-It does not include `clt/`, `srv/`, `game::`, scene streaming, input, Ozz,
-GLFW, or editor types. Hosts are responsible for generating geometry from
-their own meshes and animated characters (same as a geometry pass), and
-for providing a compatible four-attachment G-buffer. This preserves shader
-math and exact scene-to-light geometry when the host provides the same
-world-space triangles. The Vulkan backend requires the existing
-VulkanWrapper, VulkanGPU, VulkanRender, VulkanBVH, VulkanSpatial, VulkanJobs.
+The six original lighting/presentation shaders are stored unchanged in
+`pcloud/pcloud/shaders/`. The point cloud, world-space collision-box
+sampling, 3D GI volume, shadow BVH and light-local acceleration, bricked
+GI candidate lists, 16×16 tiled light selection, BRDF, tonemapping and
+presentation are implemented in `namespace pc`.
 
-```cpp
-pc::configuration shaders{};
-pc::presentation_target surface{swapchain_images,swapchain_format,extent};
-pc::create(shaders,gbuffer_views,surface); // after device and G-buffer
-pc::set_scene(world_ptr);                // shared_ptr<const pc::world>
-pc::synchronize_scene();           // only when previous GPU frames are idle
-const pc::targets img=pc::images(image_index);
-// Schedule pc::cloud, pc::gi, pc::lighting, pc::tonemap, pc::present
-// using your renderer's graph barriers. Call pc::updated(image_index)
-// after successful submit; pc::release() before Vulkan device shutdown.
+## Integrate into an existing VulkanWrapper project
+
+For a renderer using `c-build`, initialize these Git submodules:
+
+```text
+third-party/vulkan-wrapper
+third-party/vulkan-systems
+third-party/vulkan-headers
 ```
 
-The `pc::camera_frame` contains world eye position, yaw, pitch, FOV
-(vertical radians). `pc::present` accepts an optional callback that draws
-custom UI in the final pass, after tonemapping. The game adapter is solely
-responsible for converting its scene, skin matrices, and camera into these
-generic inputs. To compile the shader files, use `glslangValidator -V` and
-pass each output path in `pc::configuration`. No shaders or point-cloud
-algorithms need to live in the host's source tree.
+Add one build-only include in your existing `build.c`:
 
-The implementation maintains one active Vulkan context. It accepts the
-host's presentation images, format and extent explicitly (no global
-`vk::swapchain::get()` dependency), and assumes the four G-buffer formats
-and material packing match
-the bundled GLSL shaders. Adapting to Metal, D3D12, or different G-buffer
-contracts requires a new backend/shader variation; it is **not** automatically
-cross-API. Exact visual equivalence depends on the host's G-buffer,
-triangle transforms, and frame ordering.
+```c
+#include "third-party/vulkan-systems/pcloud/integration.h"
+```
+
+Then, inside `build(C_Build* b)`, after registering your existing
+`VulkanWrapper` static target and your application target:
+
+```c
+pc_build_paths paths={
+    "third-party/vulkan-systems",
+    "third-party/vulkan-wrapper",
+    "third-party/vulkan-headers",
+    "build/generated"
+};
+pc_build_targets pc_targets=pc_build_register(b,wrapper,paths);
+pc_build_include_paths(client,paths);
+c_link_target(client,pc_targets.pcloud);
+if(pc_build_compile_shaders(paths,"build/shaders")!=0)exit(1);
+```
+
+This compiles the local VulkanGPU, VulkanRender, VulkanBVH, VulkanSpatial,
+VulkanJobs and VulkanPCloud targets against the **same existing wrapper**,
+without fetching or compiling a second VulkanWrapper. If your host has
+already registered those systems targets, link PCloud to the existing
+targets instead of registering duplicate target names. The compiler
+requires `glslangValidator` on PATH; the shader helper creates and updates
+the six SPIR-V files incrementally.
+
+## Minimal runtime code
+
+When `vk::device` and `vk::swapchain` are already initialized, prepare
+one four-image-view G-buffer for **each swapchain image** and create pc:
+
+```cpp
+#include <pcloud/pcloud.hpp>
+
+// One entry for each swapchain image, in this precise order:
+// {albedo, encoded-normal, material, depth}
+std::vector<pc::gbuffer> gbuffers=...;
+pc::create(gbuffers);
+pc::set_exposure(1.0f);
+```
+
+Feed the world with your own scene format, without migrating to the
+`vulkan-game` ECS:
+
+```cpp
+auto world=std::make_shared<pc::world>();
+world->lights.push_back({{0,3,1},6,{1,0.5f,0.2f},4});
+world->collision_boxes.push_back({{-4,-1,-4},{4,0,4}});
+world->triangles.push_back({{-1,0,-1},{1,0,-1},{0,0,1}});
+pc::set_scene(world);
+pc::synchronize_scene(); // Only once previous GPU submissions are idle.
+```
+
+For each submitted frame, after the host renders and makes its G-buffer
+shader-readable:
+
+```cpp
+pc::camera_frame camera{eye,yaw,pitch,vertical_fov_radians};
+pc::record(command_buffer,swapchain_image_index,camera);
+// Submit the command buffer using your existing VulkanWrapper queue/fences.
+// Only after a successful queue submission:
+pc::updated(swapchain_image_index);
+```
+
+`pc::record()` internally records and synchronizes cloud, GI, lighting,
+tonemapping and the final swapchain presentation pass. You do not need to
+write these passes or their internal buffer/image barriers. The host still
+manages acquire/submit/present semaphores, the geometry-pass-to-G-buffer
+barrier, and GPU completion before replacing PCloud resources.
+
+On resize, wait for the GPU, call `pc::release()`, recreate your swapchain
+and G-buffers, then call `pc::create(gbuffers)` again. Call `pc::release()`
+before shutting down the Vulkan device.
+
+### G-buffer contract
+
+The original shaders require this exact packing and depth behavior:
+
+| Slot | Image | Packing |
+| --- | --- | --- |
+| 0 | Albedo | Linear RGB color |
+| 1 | Normal | World-space normal encoded as `N*0.5+0.5` |
+| 2 | Material | R=roughness, G=metallic, B=AO |
+| 3 | Depth | Original engine's sampled depth mapping; background depth=1, viewmodel values below 0.1 |
+
+The geometry pass must transition its output attachments for shader
+sampling before PCloud starts. Other G-buffer layouts, alternative
+projection/depth conventions, or different material representations
+require an explicit adapter or shader variant, not a new PCloud engine.
+
+### Advanced integration
+
+If your renderer already owns a render graph, use the individual API
+instead of `pc::record()`:
+
+```cpp
+pc::configuration shaders=pc::configuration::from_directory("build/shaders");
+pc::presentation_target surface{images,format,extent};
+pc::create(shaders,gbuffers,surface);
+pc::set_scene(world);
+pc::synchronize_scene();
+// In the host graph: pc::cloud, pc::gi, pc::lighting,
+// pc::tonemap, pc::present, with explicit resource accesses.
+// pc::images(image) returns cloud point/grid/HDR/LDR resource handles.
+```
+
+`pc::present` also takes an optional overlay callback for UI rasterization
+after tonemapping. All low-level API calls remain available; the simplified
+API does not require you to replace your existing VulkanWrapper renderer.
+
+PCloud currently maintains one active context and preserves the original
+shader/pipeline contract. It is reusable across VulkanWrapper hosts, but
+not a universal automatic Metal/D3D12 backend. Source migration and
+structural checks do not establish runtime visual or performance parity;
+build and GPU validation are still required on the target device.
