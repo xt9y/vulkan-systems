@@ -147,10 +147,10 @@ quad_scene default_quads()
 
 std::vector<vertex> quad_vertices(const quad_scene& scene)
 {
-    if(scene.faces.size()<2 || scene.faces.size()>64 ||
+    if(scene.faces.size()<2 || scene.faces.size()>256 ||
        scene.emitter_count<1u || scene.emitter_count>4u ||
        scene.emitter_count>=scene.faces.size())
-        throw std::invalid_argument("Lumen requires 2..64 cards, 1..4 final emitters");
+        throw std::invalid_argument("Lumen requires 2..256 cards, 1..4 final emitters");
     std::vector<vertex> vertices;
     vertices.reserve(scene.faces.size()*6);
     for(std::size_t i=0;i<scene.faces.size();i++)
@@ -388,8 +388,8 @@ quad_scene cornell_quads() {return default_quads();}
 namespace {
 quad_scene convert_triangles(const triangle_scene& input)
 {
-    if(input.triangles.empty() || input.triangles.size()>63u)
-        throw std::invalid_argument("Lumen expects 1..63 planar triangles");
+    if(input.triangles.empty() || input.triangles.size()>255u)
+        throw std::invalid_argument("Lumen expects 1..255 planar triangles");
     quad_scene result{};
     result.faces.reserve(input.triangles.size()+1);
     for(const auto& tri:input.triangles)
@@ -569,7 +569,7 @@ struct system::implementation {
             quad_vertices(*custom_quads):cornell_box();
         const auto faces=make_faces(vertices,custom_quads?&*custom_quads:nullptr);
         face_count=std::uint32_t(faces.size());
-        card_columns=face_count>16?8u:4u;
+        card_columns=face_count>64?16u:(face_count>16?8u:4u);
         emitter_count=custom_quads?custom_quads->emitter_count:1u;
         for(float channel:options.environment_radiance)
             if(!std::isfinite(channel) || channel<0.f || channel>1000.f)

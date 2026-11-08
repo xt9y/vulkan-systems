@@ -59,9 +59,9 @@ struct lighting {
     std::uint32_t count=0;
 };
 
-// Basic bounded static Surface Cache: 2..64 planar cards, with the last
-// card always a rectangular area emitter. Atlas width adapts from 4 to 8
-// columns, preserving the existing shading and ray-to-card mapping.
+// Basic bounded static Surface Cache: 2..256 planar cards, with the last
+// card always a rectangular area emitter. Atlas width adapts from 4 to
+// 4, 8 or 16 columns, preserving the ray-to-card mapping.
 // Triangle cards draw one real triangle and one degenerate placeholder.
 // The input is copied at create(), not borrowed from the caller.
 struct quad {
@@ -75,7 +75,7 @@ struct quad_scene {
 };
 
 // One planar card per triangle. The final rectangular light is separate.
-// Max 63 triangles; skinned/instanced meshes are not handled by this API.
+// Max 255 triangles; skinned/instanced meshes are not handled by this API.
 struct triangle {
     std::array<float,3> a{},b{},c{},albedo{.7f,.7f,.7f};
     float roughness=.8f;
