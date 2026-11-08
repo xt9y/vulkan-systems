@@ -551,7 +551,10 @@ void main()
             vec3 normal=hit_face.normal.xyz;
             // Discard backfaces. The room surfaces face inward; box faces
             // point outward, so backface hits indicate unsuitable probes.
-            if(dot(normal,-direction)>0.0)
+            // Analytic emitter light is already in direct cards. World probes
+            // gather only light reflected by non-emissive surfaces.
+            if(dot(normal,-direction)>0.0 &&
+               all(lessThanEqual(hit_face.emission.rgb,vec3(0.0))))
             {
                 vec3 position=origin+direction*hit.distance;
                 // Hit-lighting includes emissive energy and cached
@@ -718,7 +721,9 @@ bool screen_hit(vec3 origin,vec3 direction,float limit,
            actual.primitive/2u!=face_id-1u ||
            abs(actual.distance-ray_t)>max(.05,.012*ray_t))
             continue;
-        radiance=cached_lighting(origin+direction*actual.distance,face_id-1u);
+        radiance=any(greaterThan(faces[face_id-1u].emission.rgb,vec3(0.0)))?
+            vec3(0.0):
+            cached_lighting(origin+direction*actual.distance,face_id-1u);
         return true;
     }
     return false;
@@ -732,7 +737,9 @@ vec3 scene_radiance(vec3 origin,vec3 direction,float max_distance)
         return vec3(0.0);
     uint face_id=hit.primitive/2u;
     Face face=faces[face_id];
-    if(dot(face.normal.xyz,-direction)<=0.0)return vec3(0);
+    if(dot(face.normal.xyz,-direction)<=0.0 ||
+       any(greaterThan(face.emission.rgb,vec3(0.0))))
+        return vec3(0.0);
     return cached_lighting(origin+direction*hit.distance,face_id);
 }
 vec3 directional_radiance(vec3 origin,vec3 direction,

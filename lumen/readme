@@ -41,7 +41,7 @@ Visual-quality correction following the first lit-card/directional-probe test:
 Runtime
   - Material cards update when dirty; one 64x64 direct/total lighting card
     updated per frame to amortize area-light shadow rays.
-  - World radiance cache updates 64 probes x 4 rays/frame by default.
+  - World radiance cache updates 64 probes x 8 rays/frame by default.
   - Screen probes trace 4 of 64 directional bins/frame by default.
   - World cache and screen-probe temporal convergence takes several seconds.
   - There is no full-screen denoiser, TAA, or neural reconstruction.
@@ -86,3 +86,9 @@ xt9y/vulkan-systems branch lumen-stage7-bak.
   - Expect somewhat higher Screen Probe GPU time because of occlusion rays,
     partly offset by removing world-irradiance sampling from raster fragments.
   - Actual MoltenVK visual and GPU-time validation remains required.
+
+Direct/indirect decomposition:
+  Analytic area-light visibility and energy are stored in direct cards.
+  World radiance and Screen Probe Gather rays ignore direct hits of the
+  emissive panel; they collect radiance from non-emissive lit surfaces.
+  This prevents the area-light contribution from being counted twice.
