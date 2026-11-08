@@ -8,136 +8,94 @@ namespace editor
 {
     namespace
     {
-        constexpr color background{0.035f,0.027f,0.071f,1};
-        constexpr color frame{0.72f,0.71f,0.77f,1};
-        constexpr color foreground{0.90f,0.89f,0.93f,1};
-        constexpr color highlight{0.23f,0.19f,0.32f,1};
-        constexpr color label_color{0.20f,0.37f,0.35f,1};
-        constexpr color selected_label_color{0.45f,0.12f,0.12f,1};
-        // Fixed palette/layout deliberately mirrors the old Rogue editor.
-        constexpr int line_height=24;
-        constexpr int text_scale=2;
-        constexpr int side_margin=14;
-        constexpr int panel_width_limit=464;
-        constexpr int panel_padding=34;
-        constexpr int glyph_advance_max=14; // Conservative width for legacy PNGs
-        constexpr int header_height=100;
+        // Original Hell2024: PRESENT_WIDTH=960, PRESENT_HEIGHT=540.
+        // Menu uses g_menuLocation=(76,460), margins=(16,20) and 200px width.
+        // Game host controls all object types/labels/properties.
+        constexpr int virtual_width=960,virtual_height=540;
+        constexpr int menu_width=200,menu_height=245;
+        constexpr int margin_x=16,margin_y=20;
+        constexpr int line_height=16;
+        constexpr int row_start=122;
+        constexpr color white{1,1,1,1};
+        constexpr color teal{0.26f,0.46f,0.44f,1};
+        constexpr color red{0.55f,0.12f,0.15f,1};
 
-        struct rectangle { int x,y,w,h; };
-        rectangle label_rect(const screen_label& label,int width,int height)
+        struct rect { int x=0,y=0,w=0,h=0; };
+        bool inside(int x,int y,rect r)
         {
-            const int w=std::max(66,int(label.text.size())*glyph_advance_max+20);
-            const int x=std::clamp(label.x-w/2,0,std::max(0,width-w));
-            const int y=std::clamp(label.y-32,0,std::max(0,height-30));
-            return {x,y,w,30};
+            return x>=r.x && y>=r.y && x<r.x+r.w && y<r.y+r.h;
         }
-        void solid(draw_list& out,rectangle r,color c)
+        int virtual_x(int x,int viewport)
         {
-            if(r.w<=0 || r.h<=0)return;
+            return std::clamp(int(double(x)*virtual_width/
+                       double(std::max(1,viewport))),0,virtual_width);
+        }
+        int virtual_y(int y,int viewport)
+        {
+            return std::clamp(int(double(y)*virtual_height/
+                       double(std::max(1,viewport))),0,virtual_height);
+        }
+        void rectangle(draw_list& out,rect area,color tint)
+        {
+            if(area.w<=0 || area.h<=0)return;
             draw_command item{};
-            item.x=r.x;item.y=r.y;item.width=r.w;item.height=r.h;
-            item.tint=c;
+            item.kind=draw_command::type::rectangle;
+            item.x=area.x;item.y=area.y;
+            item.width=area.w;item.height=area.h;item.tint=tint;
             out.push_back(std::move(item));
         }
-        void border(draw_list& out,rectangle r,color c)
+        void image(draw_list& out,draw_command::texture texture,rect area)
         {
-            solid(out,{r.x,r.y,r.w,2},c);
-            solid(out,{r.x,r.y+r.h-2,r.w,2},c);
-            solid(out,{r.x,r.y,2,r.h},c);
-            solid(out,{r.x+r.w-2,r.y,2,r.h},c);
+            if(area.w<=0 || area.h<=0)return;
+            draw_command item{};
+            item.kind=draw_command::type::image;
+            item.image=texture;
+            item.x=area.x;item.y=area.y;
+            item.width=area.w;item.height=area.h;
+            out.push_back(std::move(item));
         }
         void text(draw_list& out,int x,int y,std::string content,
-                  color c=foreground,
-                  draw_command::alignment alignment=draw_command::alignment::left)
+                  draw_command::alignment align=draw_command::alignment::left)
         {
             draw_command item{};
             item.kind=draw_command::type::text;
-            item.text_alignment=alignment;
-            item.x=x;item.y=y;item.tint=c;item.scale=text_scale;
+            item.x=x;item.y=y;item.scale=1;
+            item.text_alignment=align;
             item.text=std::move(content);
+            item.tint=white;
             out.push_back(std::move(item));
         }
-        std::vector<std::string> wrap(const std::string& value,int columns)
+        rect menu_rect(int x,int y)
         {
-            columns=std::max(1,columns);
-            std::vector<std::string> lines;
-            std::string line,word;
-            const auto append=[&](const std::string& item)
-            {
-                std::size_t offset=0;
-                while(offset<item.size())
-                {
-                    const auto remaining=std::size_t(columns)-line.size();
-                    if(!remaining)
-                    {
-                        lines.push_back(line);
-                        line.clear();
-                        continue;
-                    }
-                    const auto count=std::min(remaining,item.size()-offset);
-                    line+=item.substr(offset,count);
-                    offset+=count;
-                    if(offset<item.size())
-                    {
-                        lines.push_back(line);
-                        line.clear();
-                    }
-                }
-            };
-            const auto flush_word=[&]()
-            {
-                if(word.empty())return;
-                if(!line.empty() && line.size()+1+word.size()>
-                    std::size_t(columns))
-                {
-                    lines.push_back(line);
-                    line.clear();
-                }
-                if(!line.empty())line+=' ';
-                append(word);
-                word.clear();
-            };
-            for(char c:value)
-            {
-                if(c==' ' || c=='\n')
-                {
-                    flush_word();
-                    if(c=='\n')
-                    {
-                        lines.push_back(line);
-                        line.clear();
-                    }
-                }
-                else word+=c;
-            }
-            flush_word();
-            if(!line.empty() || lines.empty())lines.push_back(line);
-            return lines;
+            return {x,y,menu_width,menu_height};
         }
-
-        // Single source of geometry for all menu modes (including idle).
-        rectangle editor_panel(int width,int height)
+        rect label_rect(const screen_label& label,int width,int height)
         {
-            const int x=side_margin,y=side_margin;
-            return {x,y,std::max(0,std::min(panel_width_limit,width-x*2)),
-                    std::max(0,height-y*2)};
+            const int cx=virtual_x(label.x,width);
+            const int cy=virtual_y(label.y,height);
+            const int label_width=std::max(62,
+                int(label.text.size())*8+12);
+            return {std::clamp(cx-label_width/2,0,
+                     std::max(0,virtual_width-label_width)),
+                    std::clamp(cy-20,0,virtual_height-22),
+                    label_width,22};
         }
-
-        std::string display(const property& p)
+        std::string value_string(const property& p)
         {
             if(p.kind==property_kind::boolean)
-                return p.value!=0 ? "ON" : "OFF";
+                return p.value!=0 ? "TRUE":"FALSE";
             if(p.kind==property_kind::choice)
             {
-                const int index=int(std::round(p.value));
+                const auto index=int(std::round(p.value));
                 return index>=0 && index<int(p.choices.size())
-                    ? p.choices[std::size_t(index)] : "NONE";
+                    ?p.choices[std::size_t(index)]:"NONE";
             }
             std::ostringstream out;
             if(p.kind==property_kind::integer)
                 out<<std::llround(p.value);
             else
-                out<<std::fixed<<std::setprecision(3)<<p.value;
+                out<<std::fixed<<std::setprecision(
+                    std::clamp(p.precision,0,6))<<p.value;
             return out.str();
         }
     }
@@ -150,289 +108,345 @@ namespace editor
 
     void session::set_catalog(std::vector<object_type> types)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> guard(mutex_);
         catalog_=std::move(types);
-        selected_row_=std::clamp(selected_row_,0,
-            std::max(0,int(catalog_.size())-1));
+        if(menu_==menu::insert)
+            selected_row_=std::clamp(selected_row_,0,
+                std::max(0,int(catalog_.size())-1));
     }
+
     void session::set_labels(std::vector<screen_label> labels)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> guard(mutex_);
         labels_=std::move(labels);
     }
+
     void session::set_properties(std::uint64_t object,std::vector<property> values)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> guard(mutex_);
         properties_[object]=std::move(values);
         if(menu_==menu::properties && selected_object_==object)
             selected_row_=std::clamp(selected_row_,0,
                 std::max(0,int(properties_[object].size())-1));
     }
+
+    void session::set_font_metrics(std::array<int,128> widths,int line_height)
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        font_widths_=std::move(widths);
+        line_height_=std::max(1,line_height);
+    }
+
     void session::set_frame_time(double milliseconds)
     {
-        if(!std::isfinite(milliseconds) || milliseconds<=0)return;
-        std::lock_guard<std::mutex> lock(mutex_);
-        // Smoothing avoids rapidly changing numbers dominating the overlay.
-        frame_time_ms_=frame_time_ms_>0
-            ? frame_time_ms_*0.85+milliseconds*0.15 : milliseconds;
+        if(!std::isfinite(milliseconds)||milliseconds<=0)return;
+        std::lock_guard<std::mutex> guard(mutex_);
+        frame_time_ms_=frame_time_ms_>0 ?
+            frame_time_ms_*0.85+milliseconds*0.15:milliseconds;
     }
 
     void session::handle(const input& events)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        // TAB works irrespective of editor mode and never changes selection.
+        std::lock_guard<std::mutex> guard(mutex_);
+        // Controls are intentionally hardcoded here, not in VulkanGame.
         if(events.tab)cursor_free_=!cursor_free_;
         if(events.question)
         {
             visible_=!visible_;
             menu_=menu::none;
-            selected_row_=0;
-            scroll_first_=0;
+            dragging_menu_=false;
+            selected_row_=scroll_first_=0;
         }
         if(!visible_)return;
         if(events.escape)
         {
             menu_=menu::none;
+            dragging_menu_=false;
             return;
         }
+
+        const int mx=virtual_x(events.mouse_x,events.viewport_width);
+        const int my=virtual_y(events.mouse_y,events.viewport_height);
+        if(!events.mouse_down)dragging_menu_=false;
+        if(dragging_menu_ && events.mouse_down)
+        {
+            menu_x_=std::clamp(mx-drag_x_,0,virtual_width-menu_width);
+            menu_y_=std::clamp(my-drag_y_,0,virtual_height-menu_height);
+            return;
+        }
+        if(menu_!=menu::none && cursor_free_ && events.click &&
+           inside(mx,my,{menu_x_,menu_y_,menu_width,52}))
+        {
+            dragging_menu_=true;
+            drag_x_=mx-menu_x_;
+            drag_y_=my-menu_y_;
+            return;
+        }
+
         if(menu_==menu::insert)
         {
-            if(!catalog_.empty())
+            if(events.up)selected_row_=std::max(0,selected_row_-1);
+            if(events.down)selected_row_=std::min(
+                std::max(0,int(catalog_.size())-1),selected_row_+1);
+            if(events.enter && !catalog_.empty())
             {
-                if(events.up)selected_row_=(selected_row_+
-                    int(catalog_.size())-1)%int(catalog_.size());
-                if(events.down)selected_row_=
-                    (selected_row_+1)%int(catalog_.size());
-                if(events.enter)
-                {
-                    pending_.push_back({action_kind::insert,
-                        catalog_[std::size_t(selected_row_)].id,0,"",0});
-                    menu_=menu::none;
-                }
+                pending_.push_back({action_kind::insert,
+                    catalog_[std::size_t(selected_row_)].id,0,"",0});
+                menu_=menu::none;
+                scroll_first_=0;
             }
-            return;
         }
-        if(menu_==menu::properties)
+        else if(menu_==menu::properties)
         {
-            auto found=properties_.find(selected_object_);
-            if(found==properties_.end() || found->second.empty())return;
-            auto& list=found->second;
-            if(events.up)selected_row_=
-                (selected_row_+int(list.size())-1)%int(list.size());
-            if(events.down)selected_row_=
-                (selected_row_+1)%int(list.size());
-            if(events.left || events.right)
+            const auto it=properties_.find(selected_object_);
+            if(it!=properties_.end() && !it->second.empty())
             {
-                property& p=list[std::size_t(selected_row_)];
-                const double old=p.value;
-                if(p.kind==property_kind::boolean)
-                    p.value=p.value==0?1:0;
-                else
+                auto& values=it->second;
+                if(events.up)selected_row_=std::max(0,selected_row_-1);
+                if(events.down)selected_row_=std::min(
+                    int(values.size())-1,selected_row_+1);
+                if(events.left || events.right)
                 {
-                    const double step=p.kind==property_kind::choice ||
-                        p.kind==property_kind::integer ? std::max(1.0,p.step) :
-                        (p.step>0?p.step:0.1);
-                    const double maximum=p.kind==property_kind::choice ?
-                        double(std::max(0,int(p.choices.size())-1)) : p.maximum;
-                    p.value=std::clamp(p.value+
-                        (events.right?step:-step),std::min(p.minimum,maximum),
-                        std::max(p.minimum,maximum));
-                    if(p.kind==property_kind::integer ||
-                       p.kind==property_kind::choice)
-                        p.value=std::round(p.value);
+                    property& p=values[std::size_t(selected_row_)];
+                    const double before=p.value;
+                    if(p.kind==property_kind::boolean)
+                        p.value=before==0?1:0;
+                    else
+                    {
+                        const double upper=p.kind==property_kind::choice ?
+                            double(std::max(0,int(p.choices.size())-1)):
+                            p.maximum;
+                        const double delta=p.kind==property_kind::real ?
+                            (p.step>0?p.step:0.1):
+                            std::max(1.0,p.step);
+                        p.value=std::clamp(before+
+                            (events.right?delta:-delta),
+                            std::min(p.minimum,upper),
+                            std::max(p.minimum,upper));
+                        if(p.kind==property_kind::integer ||
+                           p.kind==property_kind::choice)
+                            p.value=std::round(p.value);
+                    }
+                    if(p.value!=before)
+                        pending_.push_back({action_kind::edit,"",
+                            selected_object_,p.id,p.value});
                 }
-                if(old!=p.value)
-                    pending_.push_back({action_kind::edit,"",
-                        selected_object_,p.id,p.value});
             }
-            return;
         }
-        if(events.enter)
+        else if(events.enter)
         {
             menu_=menu::insert;
-            selected_row_=0;
-            scroll_first_=0;
-            return;
+            selected_row_=scroll_first_=0;
         }
-        if(events.click && cursor_free_)
+
+        // Original editor selection is by interactive world icons; the host
+        // projects its own objects and supplies stable IDs.
+        if(events.click && cursor_free_ &&
+           (menu_==menu::none ||
+            !inside(mx,my,menu_rect(menu_x_,menu_y_))))
         {
-            // Opaque editor panel blocks picking labels beneath it.
-            const auto panel=editor_panel(events.viewport_width,
-                                         events.viewport_height);
-            if(events.mouse_x>=panel.x && events.mouse_x<panel.x+panel.w &&
-               events.mouse_y>=panel.y && events.mouse_y<panel.y+panel.h)
-                return;
-            // Reverse order gives later (foreground) labels priority.
             for(auto it=labels_.rbegin();it!=labels_.rend();++it)
             {
-                if(!it->visible || !it->object)continue;
-                // Labels are screen-space; the host sends actual draw extent
-                // with set_labels and should clip invisible 3D objects.
-                const auto r=label_rect(*it,events.viewport_width,events.viewport_height);
-                if(events.mouse_x>=r.x && events.mouse_x<r.x+r.w &&
-                   events.mouse_y>=r.y && events.mouse_y<r.y+r.h)
-                {
-                    selected_object_=it->object;
-                    selected_row_=0;
-                    scroll_first_=0;
-                    menu_=menu::properties;
-                    break;
-                }
+                if(!it->visible || it->object==0)continue;
+                if(!inside(mx,my,label_rect(*it,
+                    events.viewport_width,events.viewport_height)))continue;
+                selected_object_=it->object;
+                menu_=menu::properties;
+                selected_row_=scroll_first_=0;
+                break;
             }
         }
     }
 
     std::vector<action> session::take_actions()
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::vector<action> result;
-        result.swap(pending_);
-        return result;
+        std::lock_guard<std::mutex> guard(mutex_);
+        std::vector<action> out;
+        out.swap(pending_);
+        return out;
     }
 
     draw_list session::paint(int width,int height) const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> guard(mutex_);
         draw_list out;
-        if(!visible_ || width<=0 || height<=0)return out;
+        if(!visible_||width<=0||height<=0)return out;
 
-        for(const auto& item:labels_)
+        // World icons appear whenever '?' mode is enabled, even without TAB.
+        for(const auto& label:labels_)
         {
-            if(!item.visible || !item.object)continue;
-            const auto r=label_rect(item,width,height);
-            solid(out,r,selected_object_==item.object?
-                selected_label_color:label_color);
-            border(out,r,frame);
-            text(out,r.x+10,r.y+8,item.text);
+            if(!label.visible || label.object==0)continue;
+            const rect r=label_rect(label,width,height);
+            if(label.text=="LIGHT")
+            {
+                image(out,draw_command::texture::light_icon,r);
+            }
+            else
+            {
+                rectangle(out,r,label.object==selected_object_?red:teal);
+                text(out,r.x+r.w/2,r.y+4,label.text,
+                     draw_command::alignment::center);
+            }
         }
 
-        // A single full-height panel replaces the former temporary status
-        // bar and short content-sized popups. No key legends are rendered.
-        const rectangle panel=editor_panel(width,height);
-        if(panel.w<80 || panel.h<100)return out;
-        solid(out,panel,background);
-        border(out,panel,frame);
-        std::string header_name=menu_==menu::insert?"INSERT":
-            menu_==menu::properties?"SELECT":"EDITOR";
+        // FPS/frame time on the right, separate from Hell's floating menus.
+        if(frame_time_ms_>0)
+        {
+            std::ostringstream fps,ms;
+            fps<<std::fixed<<std::setprecision(1)
+               <<1000.0/frame_time_ms_<<" FPS";
+            ms<<std::fixed<<std::setprecision(2)
+              <<frame_time_ms_<<" MS";
+            text(out,virtual_width-16,12,fps.str(),
+                draw_command::alignment::right);
+            text(out,virtual_width-16,28,ms.str(),
+                draw_command::alignment::right);
+        }
+
+        if(menu_==menu::none)return out;
+
+        // Recreate Editor::UpdateRenderItems from Hell2024 @7362a3a:
+        // textured MenuBG and four border pieces + four exact corner pieces.
+        const rect area=menu_rect(menu_x_,menu_y_);
+        using tex=draw_command::texture;
+        image(out,tex::menu_bg,area);
+        image(out,tex::border_horizontal,{area.x,area.y,area.w,3});
+        image(out,tex::border_horizontal,
+              {area.x,area.y+area.h-3,area.w,3});
+        image(out,tex::border_vertical,{area.x,area.y,3,area.h});
+        image(out,tex::border_vertical,
+              {area.x+area.w-3,area.y,3,area.h});
+        image(out,tex::corner_tl,{area.x,area.y,4,4});
+        image(out,tex::corner_tr,{area.x+area.w-4,area.y,4,4});
+        image(out,tex::corner_bl,{area.x,area.y+area.h-4,4,4});
+        image(out,tex::corner_br,
+              {area.x+area.w-4,area.y+area.h-4,4,4});
+
+        std::string heading=menu_==menu::insert?"------ INSERT ------":"------ SELECT ------";
         if(menu_==menu::properties)
             for(const auto& label:labels_)
                 if(label.object==selected_object_ && !label.text.empty())
                 {
-                    header_name=label.text;
+                    heading="------ "+label.text+" ------";
                     break;
                 }
-        const auto heading=wrap("----- "+header_name+" -----",
-            std::max(1,(panel.w-2*panel_padding)/glyph_advance_max));
-        for(std::size_t line=0;line<heading.size();++line)
-            text(out,panel.x+panel.w/2,panel.y+36+int(line)*line_height,
-                 heading[line],foreground,draw_command::alignment::center);
+        text(out,area.x+area.w/2,area.y+margin_y+4,
+             heading,draw_command::alignment::center);
 
-        // Independent top-right counter, outside the scene's HDR pipeline.
-        if(frame_time_ms_>0 && width>panel.x+panel.w+170)
-        {
-            std::ostringstream timing;
-            timing<<std::fixed<<std::setprecision(1)
-                  <<1000.0/frame_time_ms_<<" FPS";
-            std::ostringstream frame;
-            frame<<std::fixed<<std::setprecision(2)
-                 <<frame_time_ms_<<" MS";
-            const auto right=width-24;
-            text(out,right,26,timing.str(),foreground,
-                 draw_command::alignment::right);
-            text(out,right,54,frame.str(),foreground,
-                 draw_command::alignment::right);
-        }
-
-        if(menu_==menu::none)return out;
-        const std::vector<property>* selected_properties=nullptr;
+        const std::vector<property>* values=nullptr;
         if(menu_==menu::properties)
         {
             const auto it=properties_.find(selected_object_);
-            if(it!=properties_.end())selected_properties=&it->second;
+            if(it!=properties_.end())values=&it->second;
         }
         const int rows=menu_==menu::insert?int(catalog_.size()):
-            selected_properties?int(selected_properties->size()):0;
-        const int content_x=panel.x+panel_padding;
-        const int content_width=std::max(12,panel.w-2*panel_padding);
-        const int columns=std::max(1,content_width/glyph_advance_max);
-        const int content_y=panel.y+std::max(header_height,
-            52+int(heading.size())*line_height);
-        const int content_bottom=panel.y+panel.h-panel_padding;
-        if(content_bottom<=content_y)return out;
+            values?int(values->size()):0;
         if(rows==0)
         {
-            text(out,content_x,content_y,
+            text(out,area.x+margin_x,area.y+70,
                  menu_==menu::insert?"NO TYPES REGISTERED":"NO PROPERTIES");
             return out;
         }
 
-        std::vector<std::vector<std::string>> wrapped;
+        // TextBlitter uses glyph-specific advances and 16px line height.
+        // Wrap long host-defined strings by actual glyph widths.
+        const auto measure=[&](const std::string& str)
+        {
+            int total=0;
+            for(unsigned char c:str)
+                total+=c==' '?6:font_widths_[c<128?c:0];
+            return total;
+        };
+        const auto wrap=[&](const std::string& str)
+        {
+            std::vector<std::string> lines;
+            std::string current;
+            const int limit=menu_width-2*margin_x;
+            for(char c:str)
+            {
+                if(c=='\n')
+                {
+                    lines.push_back(current);
+                    current.clear();
+                    continue;
+                }
+                if(measure(current+std::string(1,c))>limit &&
+                   !current.empty())
+                {
+                    lines.push_back(current);
+                    current.clear();
+                }
+                if(c!=' '||!current.empty())current+=c;
+            }
+            lines.push_back(current);
+            return lines;
+        };
+
+        std::vector<std::vector<std::string>> lines;
         std::vector<int> heights;
-        wrapped.reserve(std::size_t(rows));
+        lines.reserve(std::size_t(rows));
         heights.reserve(std::size_t(rows));
         for(int i=0;i<rows;++i)
         {
+            const bool selected=i==selected_row_;
             std::string value;
             if(menu_==menu::insert)
-            {
-                const auto& item=catalog_[std::size_t(i)];
-                value=item.name;
-                if(!item.group.empty())value+=" - "+item.group;
-            }
+                value=(selected?"> ":"  ")+
+                    catalog_[std::size_t(i)].name;
             else
             {
-                const auto& item=(*selected_properties)[std::size_t(i)];
-                value=item.name+": "+display(item);
+                const auto& p=(*values)[std::size_t(i)];
+                value="  "+p.name+": "+
+                    (selected?"<":" ")+value_string(p)+(selected?">":" ");
             }
-            wrapped.push_back(wrap(value,columns));
-            heights.push_back(int(wrapped.back().size())*line_height+14);
+            lines.push_back(wrap(value));
+            heights.push_back(std::max(1,int(lines.back().size()))*
+                line_height);
         }
 
-        const int selected=std::clamp(selected_row_,0,rows-1);
+        const int start_y=area.y+68;
+        const int bottom=area.y+area.h-margin_y;
         int first=std::clamp(scroll_first_,0,rows-1);
-        if(selected<first)first=selected;
-        const auto last_visible=[&](int origin)
+        if(selected_row_<first)first=selected_row_;
+        const auto is_visible=[&](int initial)
         {
-            int y=content_y;
-            for(int i=origin;i<rows;++i)
+            int pos=start_y;
+            for(int i=initial;i<=selected_row_ && i<rows;++i)
             {
-                if(y+heights[std::size_t(i)]>content_bottom)return i;
-                y+=heights[std::size_t(i)];
+                if(pos+heights[std::size_t(i)]>bottom)return false;
+                pos+=heights[std::size_t(i)];
             }
-            return rows;
+            return true;
         };
-        while(first<selected && selected>=last_visible(first))++first;
+        while(first<selected_row_ && !is_visible(first))++first;
         scroll_first_=first;
-        int y=content_y;
-        for(int i=first;i<rows && y<content_bottom;++i)
+        int y=start_y;
+        for(int row=first;row<rows;++row)
         {
-            const int block=heights[std::size_t(i)];
-            if(i==selected)
-                solid(out,{content_x-12,y-5,content_width+24,
-                            std::min(block,content_bottom-y+5)},highlight);
-            for(std::size_t j=0;j<wrapped[std::size_t(i)].size();++j)
+            if(y+line_height>bottom)break;
+            for(const auto& line:lines[std::size_t(row)])
             {
-                const int line_y=y+int(j)*line_height;
-                if(line_y+14>content_bottom)break;
-                text(out,content_x,line_y,wrapped[std::size_t(i)][j]);
+                if(y+line_height>bottom)break;
+                text(out,area.x+margin_x,y,line);
+                y+=line_height;
             }
-            y+=block;
         }
         return out;
     }
+
     bool session::visible() const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> guard(mutex_);
         return visible_;
     }
     bool session::cursor_free() const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> guard(mutex_);
         return cursor_free_;
     }
     bool session::captures_input() const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return cursor_free_ || (visible_ && menu_!=menu::none);
+        std::lock_guard<std::mutex> guard(mutex_);
+        return cursor_free_ || (visible_&&menu_!=menu::none);
     }
 }
