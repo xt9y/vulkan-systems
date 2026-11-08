@@ -86,6 +86,50 @@ static C_Target* pc_build_module(C_Build* b,const char* name,
     return target;
 }
 
+// Reuse GPU/Render/BVH/Spatial/Jobs already owned by the host. This
+// creates only PCloud, so a VulkanWrapper renderer never needs to register
+// duplicate static-library targets.
+static pc_build_targets pc_build_attach(C_Build* b,C_Target* wrapper,
+                                         pc_build_paths paths,
+                                         pc_build_targets existing)
+{
+    if(!b || !wrapper || !existing.gpu || !existing.render ||
+       !existing.bvh || !existing.spatial || !existing.jobs ||
+       existing.pcloud)
+    {
+        fprintf(stderr,"pc: attach requires an existing wrapper and five "
+                       "distinct system targets; PCloud must not exist yet\\n");
+        exit(1);
+    }
+    existing.pcloud=pc_build_module(b,"VulkanPCloud","pcloud",paths,wrapper);
+    c_link_target(existing.pcloud,existing.render);
+    c_link_target(existing.pcloud,existing.gpu);
+    c_link_target(existing.pcloud,existing.bvh);
+    c_link_target(existing.pcloud,existing.spatial);
+    c_link_target(existing.pcloud,existing.jobs);
+    return existing;
+}
+
+// Link consumer first, providers afterward; do not depend on a build
+// system automatically propagating static archive dependencies.
+static void pc_build_link(C_Target* consumer,pc_build_targets targets,
+                          C_Target* wrapper)
+{
+    if(!consumer || !wrapper || !targets.pcloud || !targets.render ||
+       !targets.bvh || !targets.gpu || !targets.spatial || !targets.jobs)
+    {
+        fprintf(stderr,"pc: incomplete targets in pc_build_link\\n");
+        exit(1);
+    }
+    c_link_target(consumer,targets.pcloud);
+    c_link_target(consumer,targets.render);
+    c_link_target(consumer,targets.bvh);
+    c_link_target(consumer,targets.gpu);
+    c_link_target(consumer,targets.spatial);
+    c_link_target(consumer,targets.jobs);
+    c_link_target(consumer,wrapper);
+}
+
 // Register only when the host has not already created these named modules.
 // The returned targets can be linked/reused by the rest of the host renderer.
 static pc_build_targets pc_build_register(C_Build* b,C_Target* wrapper,
@@ -97,17 +141,12 @@ static pc_build_targets pc_build_register(C_Build* b,C_Target* wrapper,
     result.bvh=pc_build_module(b,"VulkanBVH","bvh",paths,wrapper);
     result.spatial=pc_build_module(b,"VulkanSpatial","spatial",paths,wrapper);
     result.jobs=pc_build_module(b,"VulkanJobs","jobs",paths,NULL);
-    result.pcloud=pc_build_module(b,"VulkanPCloud","pcloud",paths,wrapper);
+    result.pcloud=NULL;
     c_link_target(result.render,result.gpu);
-    c_link_target(result.pcloud,result.gpu);
-    c_link_target(result.pcloud,result.render);
-    c_link_target(result.pcloud,result.bvh);
-    c_link_target(result.pcloud,result.spatial);
-    c_link_target(result.pcloud,result.jobs);
 #ifndef _WIN32
     c_link_system(result.jobs,"pthread");
 #endif
-    return result;
+    return pc_build_attach(b,wrapper,paths,result);
 }
 
 static int pc_build_mkdirs(const char* path)
