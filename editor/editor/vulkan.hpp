@@ -3,6 +3,7 @@
 #include <vk/vk.hpp>
 #include <cstdint>
 #include <string>
+#include <array>
 
 namespace editor::vulkan
 {
@@ -10,11 +11,14 @@ namespace editor::vulkan
     // Rogue/Rogue/res/textures/font/char_1.png ... char_90.png.
     // Configure before initialize_font(); incomplete assets are fatal.
     void set_font_directory(std::string directory);
+    void set_ui_directory(std::string directory);
+    std::array<int,128> font_metrics();
 
     // Decode ALL PNGs, compute opaque horizontal glyph spans and cache them.
     // The host MUST call this on its initialization thread, before creating
     // the render thread or recording any editor command buffers.
     // record() never performs disk access, image decoding or font preparation.
+    // initialize_font() also preloads the original UI panel/border/icon PNGs.
     void initialize_font();
 
     // Draws opaque unlit pixels directly into an already-open Vulkan color
