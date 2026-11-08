@@ -317,6 +317,25 @@ namespace editor::vulkan
                         float((rgb>>16)&255u)/255.0f,
                         float((rgb>>8)&255u)/255.0f,
                         float(rgb&255u)/255.0f,1.0f};
+                    if(item.image==draw_command::texture::menu_bg)
+                    {
+                        // Keep the original sprite's texture pattern,
+                        // but shift its saturated blue palette toward
+                        // Hell's more neutral, dark purple-grey.
+                        const float luma=0.2126f*tint.r+
+                            0.7152f*tint.g+0.0722f*tint.b;
+                        tint={0.078f+0.22f*luma,
+                              0.069f+0.22f*luma,
+                              0.104f+0.24f*luma,1.0f};
+                    }
+                    else if(item.image!=draw_command::texture::light_icon)
+                    {
+                        // Borders and corners should be grey rather than
+                        // bright white, without modifying their geometry.
+                        tint.r*=0.80f;
+                        tint.g*=0.80f;
+                        tint.b*=0.82f;
+                    }
                     rectangle(item.x+span.x*image_x,
                               item.y+span.y*image_y,
                               span.length*image_x,image_y,tint);
