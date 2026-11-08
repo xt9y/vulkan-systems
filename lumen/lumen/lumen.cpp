@@ -1711,8 +1711,8 @@ outputs system::result() const noexcept {
     value.probe_extent=impl_->screen_extent;
     value.scene_extent=impl_->render_extent;
     value.lighting_extent=full?impl_->render_extent:impl_->screen_extent;
-    value.material_atlas_extent={impl_->card_columns*64u,impl_->card_columns*64u};
-    value.lit_atlas_extent={impl_->card_columns*128u,impl_->card_columns*128u};
+    value.material_atlas_extent=vk::Extent2D{impl_->card_columns*64u,impl_->card_columns*64u};
+    value.lit_atlas_extent=vk::Extent2D{impl_->card_columns*128u,impl_->card_columns*128u};
     value.card_count=impl_->face_count;
     value.area_light_count=impl_->emitter_count;
     value.full_resolution=full;
