@@ -590,14 +590,14 @@ struct system::implementation {
         }
         composite_sets.create(composite_bindings);
 
-        std::vector<vk::DescriptorSetLayoutBinding> screen_bindings(12);
+        std::vector<vk::DescriptorSetLayoutBinding> screen_bindings(13);
         for(std::uint32_t i=0;i<screen_bindings.size();i++)
         {
             auto& binding=screen_bindings[i];
             binding.binding=i;
             binding.descriptorCount=1;
             binding.stageFlags=vk::ShaderStageFlagBits::eCompute;
-            binding.descriptorType=(i==3 || i==5 || i==6 || i==9)?
+            binding.descriptorType=(i==3 || i==5 || i==6 || i==9 || i==12)?
                 vk::DescriptorType::eCombinedImageSampler:
                 ((i==7 || i==8 || i==10 || i==11)?
                     vk::DescriptorType::eStorageImage:
@@ -663,6 +663,7 @@ struct system::implementation {
         direct_read.imageView=direct_lighting.view();
         direct_read.imageLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
         geometry_sets.write_image(0,11,direct_read);
+        screen_sets.write_image(0,12,direct_read);
         vk::DescriptorImageInfo direct_write{};
         direct_write.imageView=direct_lighting.view();
         direct_write.imageLayout=vk::ImageLayout::eGeneral;
@@ -829,7 +830,7 @@ struct system::implementation {
                  <<" | screen probes="<<screen_extent.width<<"x"<<screen_extent.height
                  <<" spacing=8px"
                  <<" directions=8x8"
-                 <<" | rough specular=screen radiance reuse"
+                 <<" | rough specular=screen radiance + analytic rect light"
                  <<" | geometry-aware probe filter=3x3"
                  <<" trace=8 steps+"<<options.screen_trace_distance<<"m BVH fallback"
                  <<" | scene render="<<render_extent.width<<"x"<<render_extent.height
@@ -1336,7 +1337,7 @@ bool system::implemented() const noexcept {
 }
 const char* system::status() const noexcept {
     return implemented()?
-        "lit cards + filtered diffuse GI and rough specular from screen radiance":
+        "lit cards + diffuse GI, rough reflections and analytic direct specular":
         "not initialized";
 }
 void system::reset() noexcept {impl_.reset();}

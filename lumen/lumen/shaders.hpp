@@ -649,6 +649,7 @@ layout(rgba16f,set=0,binding=7) uniform image2D screen_directions;
 layout(rgba16f,set=0,binding=8) uniform image2D screen_meta;
 layout(rgba16f,set=0,binding=10) uniform image2D screen_gather;
 layout(rgba16f,set=0,binding=11) writeonly uniform image2D screen_specular;
+layout(set=0,binding=12) uniform sampler2D direct_cards;
 layout(push_constant) uniform Camera {
     vec4 eye,right,up,projection;
     vec4 trace_parameters; // range, reserved, history valid, frame index
@@ -797,6 +798,61 @@ vec3 directional_radiance(vec3 origin,vec3 direction,
         return result;
     return scene_radiance(origin,direction,max_distance);
 }
+// Integrate the ceiling emitter at screen-probe resolution, not at
+// raster resolution. Indirect radiance intentionally excludes emitter
+// hits, so direct rough specular needs a separate analytic term.
+// Estimate source visibility using the direct-light Surface Cache.
+vec3 area_specular(vec3 position,vec3 N,vec3 V,
+                   vec3 albedo,float roughness,uint face_id)
+{
+    float ndv=max(dot(N,V),0.0);
+    if(ndv<=.01)return vec3(0.0);
+    Face surface=faces[face_id];
+    vec3 d=position-surface.origin.xyz;
+    vec2 q=vec2(dot(d,surface.u.xyz),dot(d,surface.v.xyz));
+    vec2 uv=clamp(vec2(q.x*surface.metric.x+q.y*surface.metric.y,
+                       q.x*surface.metric.y+q.y*surface.metric.z),
+                  vec2(.5/float(LIT_CARD_SIZE)),
+                  vec2(1.0-.5/float(LIT_CARD_SIZE)));
+    vec2 atlas_uv=(vec2(float(face_id%4u),float(face_id/4u))+uv)*.25;
+    vec3 cached=max(textureLod(direct_cards,atlas_uv,0.0).rgb,vec3(0.0));
+    Face lamp=faces[FACE_COUNT-1];
+    float a=max(roughness*roughness,.04);
+    float a2=a*a;
+    float k=(roughness+1.0)*(roughness+1.0)*.125;
+    float gv=ndv/max(ndv*(1.0-k)+k,.0001);
+    vec3 unshadowed=vec3(0.0);
+    vec3 highlight=vec3(0.0);
+    for(int y=0;y<3;y++)
+    for(int x=0;x<3;x++)
+    {
+        vec2 uvLight=(vec2(x,y)+.5)/3.0;
+        vec3 delta=lamp.origin.xyz+
+                   lamp.u.xyz*uvLight.x+lamp.v.xyz*uvLight.y-position;
+        float d2=dot(delta,delta);
+        if(d2<.0001)continue;
+        vec3 L=delta*inversesqrt(d2);
+        float ndl=max(dot(N,L),0.0);
+        float emit=max(dot(lamp.normal.xyz,-L),0.0);
+        if(ndl<=0.0 || emit<=0.0)continue;
+        vec3 energy=lamp.emission.rgb*(ndl*emit*lamp.metric.w/(9.0*d2));
+        unshadowed+=energy*albedo/PI;
+        vec3 H=normalize(V+L);
+        float ndh=max(dot(N,H),0.0);
+        float vdh=max(dot(V,H),0.0);
+        float term=ndh*ndh*(a2-1.0)+1.0;
+        float D=a2/max(PI*term*term,.0001);
+        float gl=ndl/max(ndl*(1.0-k)+k,.0001);
+        float F=.04+.96*pow(1.0-vdh,5.0);
+        float brdf=D*gv*gl*F/max(4.0*ndv*ndl,.0001);
+        highlight+=energy*brdf;
+    }
+    const vec3 luma=vec3(.2126,.7152,.0722);
+    float reference=dot(unshadowed,luma);
+    if(reference<.0001)return vec3(0.0);
+    float visibility=clamp(dot(cached,luma)/reference,0.0,1.0);
+    return max(highlight*visibility,vec3(0.0));
+}
 void main()
 {
     ivec2 tile=ivec2(gl_GlobalInvocationID.xy);
@@ -918,6 +974,13 @@ void main()
     vec3 indirect=max(incoming,vec3(0.0))*cached_albedo(position,id-1u);
     vec3 specular=specular_weight>1.e-5?
         max(specular_sum/specular_weight,vec3(0.0))*fresnel:vec3(0.0);
+    if(glossy)
+    {
+        vec3 V=normalize(camera.eye.xyz-position);
+        specular+=area_specular(position,normal,V,
+                               cached_albedo(position,id-1u),
+                               roughness,id-1u);
+    }
     imageStore(screen_meta,tile,vec4(history_anchor,view_z));
     imageStore(screen_gather,tile,vec4(indirect,float(id)));
     imageStore(screen_specular,tile,vec4(specular,float(id)));

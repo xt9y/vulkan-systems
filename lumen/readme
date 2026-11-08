@@ -152,3 +152,16 @@ Direct/indirect decomposition:
   - The working diffuse/60-FPS renderer is preserved on branch
     lumen-diffuse-stable-60fps-20261108. Benchmark the GPU screen and total
     times on the M2 before further reflection refinements.
+
+2026-11-08 direct specular from rectangular area light
+  - Existing indirect screen-radiance samples deliberately exclude direct
+    hits on the emissive ceiling panel. A separate direct specular term
+    now integrates a 3x3 stratified emitter sample grid at 160x90 probe
+    resolution using GGX D, Schlick-Smith G and dielectric Fresnel F.
+  - Reuses the existing direct-light Surface Cache as an approximation to
+    shadow visibility (ratio of lit diffuse direct to unshadowed estimate).
+    Direction-dependent specular occlusion near sharp boundaries remains
+    approximate. No additional BVH rays or primary raster shading.
+  - Existing diffuse GI, rough indirect specular, and shadow caching remain
+    intact. Exact mirror rays and general material APIs are still missing.
+  - Verify native MoltenVK shader compilation and the M2 60 FPS budget.
