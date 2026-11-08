@@ -12,7 +12,7 @@ vec3 cached_albedo(vec3 position,uint face_id)
     vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
     vec2 uv=vec2(q.x*f.metric.x+q.y*f.metric.y,
                   q.x*f.metric.y+q.y*f.metric.z);
-    ivec2 card=ivec2(int(face_id%4u),int(face_id/4u));
+    ivec2 card=ivec2(int(face_id%uint(CARD_COLUMNS)),int(face_id/uint(CARD_COLUMNS)));
     vec2 card_uv=clamp(uv,vec2(.5/float(CARD_SIZE)),
                         vec2(1.0-.5/float(CARD_SIZE)));
     ivec2 texel=card*CARD_SIZE+ivec2(card_uv*float(CARD_SIZE));
@@ -38,7 +38,7 @@ vec3 cached_lighting(vec3 position,uint face_id)
     vec2 texel=uv*float(LIT_CARD_SIZE)-.5;
     ivec2 base=ivec2(floor(texel));
     vec2 fraction=fract(texel);
-    ivec2 origin=ivec2(int(face_id%4u),int(face_id/4u))*LIT_CARD_SIZE;
+    ivec2 origin=ivec2(int(face_id%uint(CARD_COLUMNS)),int(face_id/uint(CARD_COLUMNS)))*LIT_CARD_SIZE;
     vec3 result=vec3(0.0);
     for(int y=0;y<2;y++)
     for(int x=0;x<2;x++)
@@ -347,6 +347,7 @@ const float EPSILON=0.0015;
 const int FACE_COUNT=16;
 const int CARD_SIZE=64;
 const int LIT_CARD_SIZE=128;
+const int CARD_COLUMNS=4;
 layout(set=0,binding=3) uniform sampler2D surface_cards;
 layout(set=0,binding=11) uniform sampler2D direct_cards;
 // Cubic B-spline weights give a smooth, nonnegative, energy-preserving
@@ -376,7 +377,7 @@ vec3 cached_direct(vec3 position,uint face_id)
     vec2 fraction=fract(pixel);
     vec4 wx=shadow_weights(fraction.x);
     vec4 wy=shadow_weights(fraction.y);
-    ivec2 origin=ivec2(int(face_id%4u),int(face_id/4u))*LIT_CARD_SIZE;
+    ivec2 origin=ivec2(int(face_id%uint(CARD_COLUMNS)),int(face_id/uint(CARD_COLUMNS)))*LIT_CARD_SIZE;
     vec3 value=vec3(0.0);
     for(int y=0;y<4;y++)
     for(int x=0;x<4;x++)
@@ -420,12 +421,20 @@ layout(std430,set=0,binding=0) readonly buffer CornellFaces {
     Face faces[];
 };
 layout(rgba8,set=0,binding=1) writeonly uniform image2D cards;
+const int FACE_COUNT=16;
+const int CARD_SIZE=64;
+const int CARD_COLUMNS=4;
 
 void main()
 {
     ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
-    if(any(greaterThanEqual(pixel,ivec2(256))))return;
-    int face_index=(pixel.y/64)*4+(pixel.x/64);
+    if(any(greaterThanEqual(pixel,ivec2(CARD_SIZE*CARD_COLUMNS))))return;
+    int face_index=(pixel.y/CARD_SIZE)*CARD_COLUMNS+(pixel.x/CARD_SIZE);
+    if(face_index>=FACE_COUNT)
+    {
+        imageStore(cards,pixel,vec4(0.0));
+        return;
+    }
     Face f=faces[face_index];
     // Stage 4 material cards: colors/emission stay in world-independent UV
     // space. Future stages will add lighting caches and card recapture.
@@ -444,6 +453,7 @@ const float EPSILON=.0015;
 const int FACE_COUNT=16;
 const int CARD_SIZE=64;
 const int LIT_CARD_SIZE=128;
+const int CARD_COLUMNS=4;
 /* LUMEN_SHARED_TRACING */
 /* LUMEN_SHARED_IRRADIANCE */
 layout(rgba16f,set=0,binding=10) writeonly uniform image2D next_lighting;
@@ -459,7 +469,7 @@ void main()
     ivec2 local_pixel=ivec2(gl_GlobalInvocationID.xy);
     if(any(greaterThanEqual(local_pixel,ivec2(LIT_CARD_SIZE))))return;
     uint face_id=params.card_to_update;
-    ivec2 pixel=ivec2(int(face_id%4u),int(face_id/4u))*LIT_CARD_SIZE+local_pixel;
+    ivec2 pixel=ivec2(int(face_id%uint(CARD_COLUMNS)),int(face_id/uint(CARD_COLUMNS)))*LIT_CARD_SIZE+local_pixel;
     Face face=faces[face_id];
     vec2 uv=(vec2(local_pixel)+.5)/float(LIT_CARD_SIZE);
     vec3 position=face.origin.xyz+uv.x*face.u.xyz+uv.y*face.v.xyz;
@@ -493,6 +503,7 @@ const float EPSILON=0.0015;
 const int FACE_COUNT=16;
 const int CARD_SIZE=64;
 const int LIT_CARD_SIZE=128;
+const int CARD_COLUMNS=4;
 
 #define LUMEN_LIT_TEXTURE
 /* LUMEN_SHARED_TRACING */
@@ -548,10 +559,14 @@ bool inside_box(vec3 p,vec2 a,vec2 b,vec2 c,vec2 d,float top)
 }
 bool occupied(vec3 p)
 {
+#ifdef LUMEN_EXTERNAL_SCENE
+    return false;
+#else
     return inside_box(p,vec2(1.30,.65),vec2(.82,2.25),
-                      vec2(2.40,2.72),vec2(2.90,1.14),1.65) ||
+                       vec2(2.40,2.72),vec2(2.90,1.14),1.65) ||
            inside_box(p,vec2(4.23,2.47),vec2(2.65,2.96),
-                      vec2(3.14,4.56),vec2(4.72,4.06),3.30);
+                       vec2(3.14,4.56),vec2(4.72,4.06),3.30);
+#endif
 }
 void main()
 {
@@ -640,6 +655,7 @@ const float EPSILON=.0015;
 const int FACE_COUNT=16;
 const int CARD_SIZE=64;
 const int LIT_CARD_SIZE=128;
+const int CARD_COLUMNS=4;
 /* LUMEN_SHARED_TRACING */
 /* LUMEN_SHARED_IRRADIANCE */
 layout(set=0,binding=5) uniform sampler2D scene_color;
@@ -748,7 +764,7 @@ bool screen_hit(vec3 origin,vec3 direction,float limit,
         float depth=linear_depth(z);
         if(vz<depth || vz-depth>max(.08,.025*limit))continue;
         uint face_id=uint(texelFetch(scene_color,pixel,0).a+.5);
-        if(face_id<1u || face_id>16u || face_id==receiver)continue;
+        if(face_id<1u || face_id>uint(FACE_COUNT) || face_id==receiver)continue;
         if(dot(faces[face_id-1u].normal.xyz,-direction)<=.01)continue;
         vec2 ndc_center=(vec2(pixel)+.5)/vec2(size)*2.0-1.0;
         vec3 hit=camera.eye.xyz+
@@ -814,7 +830,8 @@ vec3 area_specular(vec3 position,vec3 N,vec3 V,
                        q.x*surface.metric.y+q.y*surface.metric.z),
                   vec2(.5/float(LIT_CARD_SIZE)),
                   vec2(1.0-.5/float(LIT_CARD_SIZE)));
-    vec2 atlas_uv=(vec2(float(face_id%4u),float(face_id/4u))+uv)*.25;
+    vec2 atlas_uv=(vec2(float(face_id%uint(CARD_COLUMNS)),
+                        float(face_id/uint(CARD_COLUMNS)))+uv)/float(CARD_COLUMNS);
     vec3 cached=max(textureLod(direct_cards,atlas_uv,0.0).rgb,vec3(0.0));
     Face lamp=faces[FACE_COUNT-1];
     float a=max(roughness*roughness,.04);
@@ -863,7 +880,7 @@ void main()
     vec4 sample_color=texelFetch(scene_color,pixel,0);
     float z=texelFetch(scene_depth,pixel,0).r;
     uint id=uint(sample_color.a+.5);
-    bool valid=id>=1u && id<=16u && z<.99999 &&
+    bool valid=id>=1u && id<=uint(FACE_COUNT) && z<.99999 &&
         all(lessThanEqual(faces[id-1u].emission.rgb,vec3(0)));
     if(!valid)
     {
