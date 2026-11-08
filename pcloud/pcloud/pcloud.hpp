@@ -50,6 +50,9 @@ namespace pc
         std::vector<triangle> triangles;
     };
     struct camera_frame {vec3 eye{};float yaw=0.f,pitch=0.f,fov=1.0471976f;};
+    // Shader contract: {albedo, normal, material, depth}. All views must
+    // already be shader-readable when pc::record is called. Packed normals
+    // are N*0.5+0.5; material channels are roughness, metallic, AO.
     using gbuffer=std::array<vk::ImageView,4>;
     struct presentation_target
     {
@@ -65,6 +68,19 @@ namespace pc
         std::string tonemap_shader="build/shaders/pcloud_tone.comp.spv";
         std::string fullscreen_shader="build/shaders/pcloud_fullscreen.vert.spv";
         std::string presentation_shader="build/shaders/pcloud_present.frag.spv";
+
+        static configuration from_directory(const std::string& dir)
+        {
+            const std::string base=dir.empty()?std::string("."):dir;
+            configuration value{};
+            value.cloud_shader=base+"/pcloud_cloud.comp.spv";
+            value.gi_shader=base+"/pcloud_gi.comp.spv";
+            value.lighting_shader=base+"/pcloud_light.comp.spv";
+            value.tonemap_shader=base+"/pcloud_tone.comp.spv";
+            value.fullscreen_shader=base+"/pcloud_fullscreen.vert.spv";
+            value.presentation_shader=base+"/pcloud_present.frag.spv";
+            return value;
+        }
     };
     struct targets {vk::Image grid{};vk::Buffer points{};vk::Image hdr{},ldr{};};
     using overlay_callback=std::function<void(vk::CommandBuffer,vk::Extent2D)>;
