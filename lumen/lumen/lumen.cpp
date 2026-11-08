@@ -599,7 +599,9 @@ struct system::implementation {
             binding.descriptorType=i==2?vk::DescriptorType::eStorageImage:
                 vk::DescriptorType::eCombinedImageSampler;
         }
-        screen_filter_sets.create({filter_bindings.begin(),filter_bindings.end()});
+        screen_filter_sets.create(
+            std::vector<vk::DescriptorSetLayoutBinding>(
+                filter_bindings.begin(),filter_bindings.end()));
         screen_sets.write_buffer(0,0,faces_buffer.descriptor());
         screen_sets.write_buffer(0,1,trace_nodes.descriptor());
         screen_sets.write_buffer(0,2,trace_triangles.descriptor());
