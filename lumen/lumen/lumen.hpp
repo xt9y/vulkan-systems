@@ -119,6 +119,8 @@ struct outputs {
     vk::ImageView diffuse_view{},reflections_view{},metadata_view{};
     vk::ImageView scene_color_view{},scene_depth_view{};
     vk::Extent2D probe_extent{},scene_extent{},lighting_extent{};
+    vk::Extent2D material_atlas_extent{},lit_atlas_extent{};
+    std::uint32_t card_count=0,area_light_count=0;
     bool full_resolution=false;
     vk::Format radiance_format=vk::Format::eUndefined;
     vk::Format depth_format=vk::Format::eUndefined;
