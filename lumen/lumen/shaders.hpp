@@ -231,27 +231,6 @@ vec3 direct_area_light(vec3 position,vec3 normal,vec3 albedo)
     return albedo*(radiance/(sample_count*PI));
 }
 
-// Reconstruct an area-light shadow only at direct-card discontinuities.
-// The deterministic 8x8 light samples also cover different positions
-// within the raster pixel, integrating the pixel footprint without TAA.
-vec3 refined_area_light(vec3 position,vec3 normal,vec3 albedo,
-                        vec3 pixel_dx,vec3 pixel_dy)
-{
-    Face lamp=faces[FACE_COUNT-1];
-    vec3 radiance=vec3(0.0);
-    for(int y=0;y<8;y++)
-    for(int x=0;x<8;x++)
-    {
-        float sample_id=float(y*8+x)+.5;
-        vec2 subpixel=fract(sample_id*vec2(.754877666,.569840296))-.5;
-        vec3 receiver=position+pixel_dx*subpixel.x+pixel_dy*subpixel.y;
-        vec2 uv=(vec2(x,y)+vec2(.5))/8.0;
-        bool valid,visible;
-        radiance+=area_light_sample(lamp,receiver,normal,uv,valid,visible);
-    }
-    return albedo*(radiance/(64.0*PI));
-}
-
 )glsl";
 
 inline constexpr const char* shared_irradiance=R"glsl(
@@ -370,6 +349,19 @@ const int CARD_SIZE=64;
 const int LIT_CARD_SIZE=128;
 layout(set=0,binding=3) uniform sampler2D surface_cards;
 layout(set=0,binding=11) uniform sampler2D direct_cards;
+// Cubic B-spline weights give a smooth, nonnegative, energy-preserving
+// footprint over a 4-texel span. Unlike ray retracing, this costs only
+// 16 cache reads and cannot introduce sampling noise into rasterization.
+vec4 shadow_weights(float t)
+{
+    float t2=t*t,t3=t2*t;
+    float a=1.0-t;
+    return vec4(a*a*a,
+                4.0-6.0*t2+3.0*t3,
+                1.0+3.0*t+3.0*t2-3.0*t3,
+                t3)/6.0;
+}
+
 vec3 cached_direct(vec3 position,uint face_id)
 {
     Face f=faces[face_id];
@@ -377,51 +369,24 @@ vec3 cached_direct(vec3 position,uint face_id)
     vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
     vec2 uv=clamp(vec2(q.x*f.metric.x+q.y*f.metric.y,
                        q.x*f.metric.y+q.y*f.metric.z),
-                   vec2(.5/float(LIT_CARD_SIZE)),
-                   vec2(1.0-.5/float(LIT_CARD_SIZE)));
-    // Bilinear interpolation is clamped to this face's 128x128 lit card.
-    vec2 sample_pixel=uv*float(LIT_CARD_SIZE)-.5;
-    ivec2 cell=ivec2(floor(sample_pixel));
-    vec2 fraction=fract(sample_pixel);
-    ivec2 card=ivec2(int(face_id%4u),int(face_id/4u))*LIT_CARD_SIZE;
-    vec3 value=vec3(0);
-    for(int y=0;y<2;y++)
-    for(int x=0;x<2;x++)
+                  vec2(.5/float(LIT_CARD_SIZE)),
+                  vec2(1.0-.5/float(LIT_CARD_SIZE)));
+    vec2 pixel=uv*float(LIT_CARD_SIZE)-.5;
+    ivec2 center=ivec2(floor(pixel));
+    vec2 fraction=fract(pixel);
+    vec4 wx=shadow_weights(fraction.x);
+    vec4 wy=shadow_weights(fraction.y);
+    ivec2 origin=ivec2(int(face_id%4u),int(face_id/4u))*LIT_CARD_SIZE;
+    vec3 value=vec3(0.0);
+    for(int y=0;y<4;y++)
+    for(int x=0;x<4;x++)
     {
-        ivec2 local=clamp(cell+ivec2(x,y),ivec2(0),ivec2(LIT_CARD_SIZE-1));
-        float w=(x==0?1.0-fraction.x:fraction.x)*
-                (y==0?1.0-fraction.y:fraction.y);
-        value+=texelFetch(direct_cards,card+local,0).rgb*w;
+        ivec2 local=clamp(center+ivec2(x-1,y-1),
+                          ivec2(0),ivec2(LIT_CARD_SIZE-1));
+        value+=max(texelFetch(direct_cards,origin+local,0).rgb,vec3(0.0))*
+               wx[x]*wy[y];
     }
     return value;
-}
-
-// Test the surrounding lighting-card texels for a cast-shadow silhouette.
-// Screen derivatives of nearly black radiance can be too small to detect
-// a visible edge; neighborhood contrast remains reliable in those cases.
-float shadow_edge_contrast(vec3 position,uint face_id)
-{
-    Face face=faces[face_id];
-    vec3 d=position-face.origin.xyz;
-    vec2 q=vec2(dot(d,face.u.xyz),dot(d,face.v.xyz));
-    vec2 uv=clamp(vec2(q.x*face.metric.x+q.y*face.metric.y,
-                       q.x*face.metric.y+q.y*face.metric.z),
-                  vec2(0.0),vec2(.999999));
-    ivec2 center=clamp(ivec2(uv*float(LIT_CARD_SIZE)),
-                       ivec2(0),ivec2(LIT_CARD_SIZE-1));
-    ivec2 origin=ivec2(int(face_id%4u),int(face_id/4u))*LIT_CARD_SIZE;
-    float low=1e20,high=0.0;
-    for(int y=-2;y<=2;y+=2)
-    for(int x=-2;x<=2;x+=2)
-    {
-        ivec2 local=clamp(center+ivec2(x,y),
-                          ivec2(0),ivec2(LIT_CARD_SIZE-1));
-        vec3 rgb=max(texelFetch(direct_cards,origin+local,0).rgb,vec3(0.0));
-        float luminance=dot(rgb,vec3(.2126,.7152,.0722));
-        low=min(low,luminance);
-        high=max(high,luminance);
-    }
-    return (high-low)/max(high,.01);
 }
 
 /* LUMEN_SHARED_TRACING */
@@ -437,18 +402,10 @@ void main()
     }
     vec3 normal=normalize(surface_normal);
     vec3 albedo=cached_albedo(world_position,surface_index);
-    // Screen Probe Gather supplies indirect light once; the raster pass
-    // supplies direct light, with selective per-pixel shadow refinement.
+    // All direct lighting comes from the Surface Cache. Reconstruct the
+    // shadow edge with cubic filtering; no fragment-stage BVH traversal.
+    // Screen Probe Gather continues to own all indirect lighting.
     vec3 direct=cached_direct(world_position,surface_index);
-    // The previous absolute fwidth test missed near-black silhouettes.
-    // Refining only direct-card transitions avoids extra BVH rays in the
-    // fully lit and fully shadowed interiors.
-    float shadow_edge=shadow_edge_contrast(world_position,surface_index);
-    vec3 pixel_dx=dFdx(world_position);
-    vec3 pixel_dy=dFdy(world_position);
-    if(shadow_edge>.06)
-        direct=refined_area_light(world_position,normal,albedo,
-                                  pixel_dx,pixel_dy);
     hdr_color=vec4(max(direct,vec3(0.0)),float(surface_index+1u));
 }
 )glsl";

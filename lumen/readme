@@ -124,3 +124,15 @@ Direct/indirect decomposition:
     the screen-pixel footprint. Fully lit and fully dark interiors remain
     cached. The diffuse GI pipeline and cache allocation are unchanged.
   - GPU performance and shadow appearance must be verified on MoltenVK.
+
+2026-11-08 critical 10 FPS scene regression correction
+  - Removed the 64-BVH-ray raster shadow refinement and the per-pixel
+    3x3 contrast detector. These dominated the measured 88-91ms scene pass.
+  - Direct lighting is again sampled entirely from the precomputed
+    128x128/face Surface Cache (one card updated per frame).
+  - The raster stage uses a 4x4 cubic B-spline reconstruction (16 clamped
+    texel reads per pixel) to smooth card-space shadow stair stepping.
+  - World radiance, Screen Probe Gather, material cards, light integration,
+    cache update cadence, and render resolutions are unchanged.
+  - Expect substantially lower scene GPU cost than 90ms, but confirm
+    total GPU time and shadow appearance on the M2/MoltenVK target.
