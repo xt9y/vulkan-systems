@@ -68,7 +68,7 @@ Known issues still to address as separate evidence-based milestones:
   - Screen-space motion-vector reprojection and adaptive probe sampling
   - Dynamic BLAS/TLAS/lighting invalidation, full multibounce scheduling
   - Physically-based materials, rough/smooth specular reflections
-  - Public standalone GI/reflection outputs instead of Cornell-only compose
+  - Generic external-scene capture and full-resolution output upsampling
 
 The known working older renderer is preserved in
 xt9y/vulkan-systems branch lumen-stage7-bak.
@@ -165,3 +165,22 @@ Direct/indirect decomposition:
   - Existing diffuse GI, rough indirect specular, and shadow caching remain
     intact. Exact mirror rays and general material APIs are still missing.
   - Verify native MoltenVK shader compilation and the M2 60 FPS budget.
+
+2026-11-08 reusable lighting outputs after library/submodule migration
+  - system::result() now exposes real borrowed Vulkan resources after
+    record(): low-resolution diffuse and rough-reflection images, metadata,
+    the internal direct+emissive scene color and the raster depth image.
+  - A matching VkImageView is exported for each resource, along with the
+    screen probe resolution, internal raster resolution, formats and layouts.
+  - The primary output images remain 160x90 for a 1280x720 internal raster
+    (8px screen probes); they are NOT full-resolution output textures.
+  - Diffuse/reflection alpha contains the demo face ID; metadata RGB holds
+    the world-space probe history anchor, and alpha holds view depth.
+  - Outputs are owned by VulkanLumen. They become available after record()
+    and are invalidated on resize() or reset(); the host must synchronize
+    GPU writes before external sampling.
+  - This is the first reusable host integration contract. Arbitrary mesh
+    scene capture, external G-buffers and generic full-resolution output
+    reconstruction remain separate future milestones.
+  - The Cornell shading, shadow rays, world probes and screen passes are
+    untouched. No GPU passes or per-frame work are added by result().

@@ -1328,7 +1328,28 @@ void system::compose(vk::CommandBuffer cmd) {
     impl_->composite(cmd);
     impl_->stamp(cmd,6);
 }
-outputs system::result() const noexcept {return {};}
+outputs system::result() const noexcept {
+    outputs value{};
+    if(!impl_ || !impl_->ready || !impl_->filter_initialized)return value;
+    value.diffuse=impl_->screen_filtered.handle();
+    value.reflections=impl_->screen_specular_filtered.handle();
+    value.metadata=impl_->screen_meta.handle();
+    value.scene_color=impl_->color.handle();
+    value.scene_depth=impl_->depth.handle();
+    value.diffuse_view=impl_->screen_filtered.view();
+    value.reflections_view=impl_->screen_specular_filtered.view();
+    value.metadata_view=impl_->screen_meta.view();
+    value.scene_color_view=impl_->color.view();
+    value.scene_depth_view=impl_->depth.view();
+    value.probe_extent=impl_->screen_extent;
+    value.scene_extent=impl_->render_extent;
+    value.radiance_format=impl_->screen_filtered.format();
+    value.depth_format=impl_->depth.format();
+    value.color_layout=vk::ImageLayout::eShaderReadOnlyOptimal;
+    value.depth_layout=vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+    value.available=true;
+    return value;
+}
 performance system::gpu_performance() const noexcept {
     return impl_?impl_->gpu_stats:performance{};
 }

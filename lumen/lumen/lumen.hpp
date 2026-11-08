@@ -63,11 +63,30 @@ struct gbuffer {
     vk::Extent2D extent{};
 };
 
-// Standalone outputs remain null. Demo GI is composed internally until a
-// reusable full-resolution lighting-output contract is implemented.
+// Borrowed, screen-probe-resolution outputs for host-renderer integration.
+// The RGB channels of diffuse and reflections hold their independent
+// lighting contributions; alpha stores the Cornell face ID (zero = invalid).
+// metadata.xyz is the surface world-space history anchor and metadata.w is
+// camera-space depth. scene_color is direct+emissive HDR and scene_depth is
+// the internally rasterized D32 surface depth.
+//
+// All image/image-view handles remain owned by VulkanLumen. They are valid
+// only while the system is alive and until resize(), reset() or create-time
+// replacement. Call result() after record(); the caller must synchronize the
+// recorded GPU work before sampling the images on another queue.
+// Lighting images are in eShaderReadOnlyOptimal after record(); scene_depth
+// is in eDepthStencilReadOnlyOptimal. No full-resolution lighting output is
+// implied by this API: use probe_extent and scene_extent explicitly.
 struct outputs {
-    vk::Image diffuse{};
-    vk::Image reflections{};
+    vk::Image diffuse{},reflections{},metadata{},scene_color{},scene_depth{};
+    vk::ImageView diffuse_view{},reflections_view{},metadata_view{};
+    vk::ImageView scene_color_view{},scene_depth_view{};
+    vk::Extent2D probe_extent{},scene_extent{};
+    vk::Format radiance_format=vk::Format::eUndefined;
+    vk::Format depth_format=vk::Format::eUndefined;
+    vk::ImageLayout color_layout=vk::ImageLayout::eUndefined;
+    vk::ImageLayout depth_layout=vk::ImageLayout::eUndefined;
+    bool available=false;
 };
 
 // Measured previous-frame GPU time; unavailable on queues without timestamps.
@@ -106,6 +125,8 @@ public:
     // Records the internal demo, all caches and screen radiance integration.
     void record(vk::CommandBuffer command, const frame& current_frame);
     void compose(vk::CommandBuffer command);
+    // Result handles become available after record() and are invalidated
+    // by resize()/reset(). The host does not own the image or image views.
     outputs result() const noexcept;
     performance gpu_performance() const noexcept;
     bool implemented() const noexcept; // True once the Cornell demo can render.
