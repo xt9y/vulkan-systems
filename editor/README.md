@@ -46,7 +46,9 @@ Label coordinates are framebuffer pixels, converted into the original 960×540 e
 
 ## Bitmap font and UI assets
 
-The game build fetches the **exact user-selected Hell2025 revision** by filtered sparse Git checkout, restricted to the font and UI texture directories. Assets live in `build/editor-hell2024/Hell2024/Hell2024/res/textures/`. The original font and all eight UI textures are mandatory; no synthetic fallback font or menu texture is included.
+The user-supplied `x_font.png` is now embedded in `editor/editor/uploaded_font.hpp` as a **pixel-exact 144×256 bitmap** (16×16 CP437 grid, 9×16 pixels per character). ASCII characters map directly to their codepoint cell. The atlas is decoded once at startup; the old Hell2024 `char_*.png` font is no longer used or downloaded. There is no synthetic fallback font.
+
+The game still fetches the original Hell2024 **UI textures only** from the pinned Hell2025 revision into `build/editor-hell2024/Hell2024/Hell2024/res/textures/ui/`. All eight UI textures remain mandatory.
 
 Initialize once on the startup thread, before Vulkan rendering begins:
 
@@ -55,7 +57,7 @@ editor::vulkan::initialize_font();
 editor::instance().set_font_metrics(editor::vulkan::font_metrics(),16);
 ```
 
-This decodes all font and UI textures and caches drawing spans. Neither PNG decoding nor filesystem access occurs during an editor frame. Missing assets cause an explicit startup error.
+This decodes the embedded font atlas and the original UI textures, then caches drawing spans. Neither font loading nor filesystem access occurs during an editor frame. Missing UI textures cause an explicit startup error.
 
 Draw in the existing presentation render pass, after the scene is tonemapped:
 
