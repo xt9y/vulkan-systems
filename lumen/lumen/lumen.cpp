@@ -365,6 +365,8 @@ struct system::implementation {
     vk::Extent2D extent{};
     vk::Extent2D render_extent{},screen_extent{};
     camera_data current_camera{};
+    std::uint32_t face_count=16,card_columns=4;
+    point grid_min{.25f,.24f,.25f},grid_max{5.30f,5.22f,5.34f};
     scene geometry{};
     lighting lights{};
     gbuffer surfaces{};
@@ -515,6 +517,31 @@ struct system::implementation {
         const auto vertices=custom_quads?
             quad_vertices(*custom_quads):cornell_box();
         const auto faces=make_faces(vertices,custom_quads?&*custom_quads:nullptr);
+        face_count=std::uint32_t(faces.size());
+        card_columns=face_count>16?8u:4u;
+        if(custom_quads)
+        {
+            point lo=vertices.front().position,hi=lo;
+            for(const auto& v:vertices)
+                for(int a=0;a<3;a++)
+                {
+                    lo[a]=std::min(lo[a],v.position[a]);
+                    hi[a]=std::max(hi[a],v.position[a]);
+                }
+            for(int a=0;a<3;a++)
+            {
+                const float span=hi[a]-lo[a];
+                const float pad=std::min(.20f*span,.04f*span+.01f);
+                grid_min[a]=lo[a]+pad;
+                grid_max[a]=hi[a]-pad;
+                if(grid_max[a]-grid_min[a]<.05f)
+                {
+                    float mid=(lo[a]+hi[a])*.5f;
+                    grid_min[a]=mid-.05f;
+                    grid_max[a]=mid+.05f;
+                }
+            }
+        }
         std::vector<point> scene_vertices;
         scene_vertices.reserve(vertices.size());
         // Include the emissive panel in radiance rays. Shadow rays use a
@@ -528,10 +555,11 @@ struct system::implementation {
             vk::MemoryPropertyFlagBits::eHostVisible |
             vk::MemoryPropertyFlagBits::eHostCoherent);
         vertex_buffer.upload(vertices.data(),vertices.size()*sizeof(vertex));
-        faces_buffer.create(sizeof(faces),vk::BufferUsageFlagBits::eStorageBuffer,
+        faces_buffer.create(faces.size()*sizeof(face),
+            vk::BufferUsageFlagBits::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible |
             vk::MemoryPropertyFlagBits::eHostCoherent);
-        faces_buffer.upload(faces.data(),sizeof(faces));
+        faces_buffer.upload(faces.data(),faces.size()*sizeof(face));
         const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
         const auto host_memory=vk::MemoryPropertyFlagBits::eHostVisible |
                                vk::MemoryPropertyFlagBits::eHostCoherent;
@@ -594,17 +622,19 @@ struct system::implementation {
             make_image(full_specular,render_extent,color_format,usage,
                        vk::ImageAspectFlagBits::eColor);
         }
-        make_image(surface_lighting,vk::Extent2D{512,512},color_format,
+        const auto lit_atlas=card_columns*128u;
+        const auto material_atlas=card_columns*64u;
+        make_image(surface_lighting,vk::Extent2D{lit_atlas,lit_atlas},color_format,
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled |
             vk::ImageUsageFlagBits::eTransferDst,
             vk::ImageAspectFlagBits::eColor);
-        make_image(direct_lighting,vk::Extent2D{512,512},color_format,
+        make_image(direct_lighting,vk::Extent2D{lit_atlas,lit_atlas},color_format,
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled |
             vk::ImageUsageFlagBits::eTransferDst,
             vk::ImageAspectFlagBits::eColor);
-        make_image(surface_cache,{256,256},card_format,
+        make_image(surface_cache,{material_atlas,material_atlas},card_format,
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eColor);
@@ -996,7 +1026,9 @@ struct system::implementation {
         std::cout<<"[lumen] Lit Surface Cache + directional Screen Radiance Cache: "
                  <<accel.triangles.size()
                  <<" triangles / "<<accel.nodes.size()
-                 <<" BVH nodes | lit cards=16 x 128x128"
+                 <<" BVH nodes | lit cards="<<face_count<<" x 128x128"
+                 <<" atlas="<<card_columns<<"x"<<card_columns
+                 <<" updates/frame="<<std::clamp(options.surface_updates_per_frame,1u,8u)
                  <<" | world probes="<<radiance_probe_count
                  <<" updates/frame="<<std::clamp(options.probe_updates_per_frame,
                                                     1u,radiance_probe_count)
@@ -1154,7 +1186,8 @@ struct system::implementation {
                                        vk::PipelineStageFlagBits::eComputeShader):
                 vk::PipelineStageFlags(vk::PipelineStageFlagBits::eTopOfPipe),
             vk::PipelineStageFlagBits::eComputeShader,{},{},{},{barrier});
-        cache_pipeline.dispatch(cmd,32,32,1,{cache_sets.set()});
+        cache_pipeline.dispatch(cmd,card_columns*8u,card_columns*8u,1,
+                                {cache_sets.set()});
         barrier.oldLayout=vk::ImageLayout::eGeneral;
         barrier.newLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
         barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
@@ -1235,12 +1268,17 @@ struct system::implementation {
         }
         // One 128x128 lit card per frame amortizes four-sample soft shadowing and
         // indirect radiosity. Both atlases remain resident between frames.
-        const light_constants push{
-            std::uint32_t(current.index%16u),
-            radiance_initialized?1u:0u,0u,0u
-        };
-        lighting_pipeline.dispatch(cmd,16,16,1,{lighting_sets.set()},
-                                   &push,sizeof(push));
+        const std::uint32_t updates=std::clamp(
+            options.surface_updates_per_frame,1u,8u);
+        for(std::uint32_t i=0;i<updates && i<face_count;i++)
+        {
+            const light_constants push{
+                std::uint32_t((current.index*updates+i)%face_count),
+                radiance_initialized?1u:0u,0u,0u
+            };
+            lighting_pipeline.dispatch(cmd,16,16,1,{lighting_sets.set()},
+                                       &push,sizeof(push));
+        }
         for(auto& barrier:images)
         {
             barrier.oldLayout=vk::ImageLayout::eGeneral;
