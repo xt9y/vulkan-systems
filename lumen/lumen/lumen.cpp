@@ -134,9 +134,13 @@ std::array<face,16> make_faces(const std::vector<vertex>& vertices) {
         const auto pack=[](point p)->std::array<float,4> {
             return {p[0],p[1],p[2],0};
         };
+        // Keep diffuse RGB untouched; albedo.w stores roughness for the
+        // demo's low-cost, radiance-cache-based rough reflections.
+        auto material=pack(a.albedo);
+        material[3]=i==0?0.68f:(i>=5 && i<15?0.56f:0.92f);
         result[i]={
             pack(a.position),pack(u),pack(v),pack(a.normal),
-            pack(a.albedo),pack(a.emission),
+            material,pack(a.emission),
             {vv/det,-uv/det,uu/det,std::sqrt(dot(cross(u,v),cross(u,v)))}
         };
     }
@@ -263,6 +267,7 @@ struct system::implementation {
     gpu::buffer radiance_probes;
     gpu::image color,depth,surface_cache,surface_lighting,direct_lighting;
     gpu::image screen_light,screen_meta,screen_gather,screen_filtered;
+    gpu::image screen_specular,screen_specular_filtered;
     render::target target;
     render::pipeline geometry_pipeline,composite_pipeline;
     gpu::compute cache_pipeline,lighting_pipeline,radiance_pipeline,screen_pipeline;
@@ -332,6 +337,8 @@ struct system::implementation {
             screen_meta.reset();
             screen_gather.reset();
             screen_filtered.reset();
+            screen_specular.reset();
+            screen_specular_filtered.reset();
             screen_initialized=false;
             filter_initialized=false;
             radiance_probes.reset();
@@ -456,6 +463,14 @@ struct system::implementation {
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eColor);
+        make_image(screen_specular,screen_extent,color_format,
+            vk::ImageUsageFlagBits::eStorage |
+            vk::ImageUsageFlagBits::eSampled,
+            vk::ImageAspectFlagBits::eColor);
+        make_image(screen_specular_filtered,screen_extent,color_format,
+            vk::ImageUsageFlagBits::eStorage |
+            vk::ImageUsageFlagBits::eSampled,
+            vk::ImageAspectFlagBits::eColor);
         make_image(surface_lighting,vk::Extent2D{512,512},color_format,
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled |
@@ -567,7 +582,7 @@ struct system::implementation {
         image_binding.descriptorType=vk::DescriptorType::eCombinedImageSampler;
         image_binding.descriptorCount=1;
         image_binding.stageFlags=vk::ShaderStageFlagBits::eFragment;
-        std::vector<vk::DescriptorSetLayoutBinding> composite_bindings(4);
+        std::vector<vk::DescriptorSetLayoutBinding> composite_bindings(5);
         for(std::uint32_t i=0;i<4;i++)
         {
             composite_bindings[i]=image_binding;
@@ -575,7 +590,7 @@ struct system::implementation {
         }
         composite_sets.create(composite_bindings);
 
-        std::vector<vk::DescriptorSetLayoutBinding> screen_bindings(11);
+        std::vector<vk::DescriptorSetLayoutBinding> screen_bindings(12);
         for(std::uint32_t i=0;i<11;i++)
         {
             auto& binding=screen_bindings[i];
@@ -584,19 +599,20 @@ struct system::implementation {
             binding.stageFlags=vk::ShaderStageFlagBits::eCompute;
             binding.descriptorType=(i==3 || i==5 || i==6 || i==9)?
                 vk::DescriptorType::eCombinedImageSampler:
-                ((i==7 || i==8 || i==10)?
+                ((i==7 || i==8 || i==10 || i==11)?
                     vk::DescriptorType::eStorageImage:
                     vk::DescriptorType::eStorageBuffer);
         }
         screen_sets.create(screen_bindings);
-        std::array<vk::DescriptorSetLayoutBinding,3> filter_bindings{};
+        std::array<vk::DescriptorSetLayoutBinding,5> filter_bindings{};
         for(std::uint32_t i=0;i<filter_bindings.size();i++)
         {
             auto& binding=filter_bindings[i];
             binding.binding=i;
             binding.descriptorCount=1;
             binding.stageFlags=vk::ShaderStageFlagBits::eCompute;
-            binding.descriptorType=i==2?vk::DescriptorType::eStorageImage:
+            binding.descriptorType=(i==2 || i==4)?
+                vk::DescriptorType::eStorageImage:
                 vk::DescriptorType::eCombinedImageSampler;
         }
         screen_filter_sets.create(
@@ -671,6 +687,7 @@ struct system::implementation {
         };
         screen_read(screen_filtered,2);
         screen_read(screen_meta,3);
+        screen_read(screen_specular_filtered,4);
 
         const auto filter_read=[&](const gpu::image& image,
                                    std::uint32_t binding)
@@ -683,10 +700,15 @@ struct system::implementation {
         };
         filter_read(screen_gather,0);
         filter_read(screen_meta,1);
+        filter_read(screen_specular,3);
         vk::DescriptorImageInfo filtered_write{};
         filtered_write.imageView=screen_filtered.view();
         filtered_write.imageLayout=vk::ImageLayout::eGeneral;
         screen_filter_sets.write_image(0,2,filtered_write);
+        vk::DescriptorImageInfo specular_filtered_write{};
+        specular_filtered_write.imageView=screen_specular_filtered.view();
+        specular_filtered_write.imageLayout=vk::ImageLayout::eGeneral;
+        screen_filter_sets.write_image(0,4,specular_filtered_write);
 
         const auto screen_write=[&](const gpu::image& image,
                                     std::uint32_t binding)
@@ -699,6 +721,7 @@ struct system::implementation {
         screen_write(screen_light,7);
         screen_write(screen_meta,8);
         screen_write(screen_gather,10);
+        screen_write(screen_specular,11);
 
         cache_spv=compile("cards","comp",shaders::cards_comp);
         cache_pipeline.create(cache_spv,{cache_sets.layout()});
@@ -806,6 +829,7 @@ struct system::implementation {
                  <<" | screen probes="<<screen_extent.width<<"x"<<screen_extent.height
                  <<" spacing=8px"
                  <<" directions=8x8"
+                 <<" | rough specular=screen radiance reuse"
                  <<" | geometry-aware probe filter=3x3"
                  <<" trace=8 steps+"<<options.screen_trace_distance<<"m BVH fallback"
                  <<" | scene render="<<render_extent.width<<"x"<<render_extent.height
@@ -1058,9 +1082,10 @@ struct system::implementation {
 
     void update_screen_probes(vk::CommandBuffer cmd,const frame& current)
     {
-        std::array<vk::ImageMemoryBarrier,3> barriers{};
-        const std::array<vk::Image,3> images{
-            screen_light.handle(),screen_meta.handle(),screen_gather.handle()
+        std::array<vk::ImageMemoryBarrier,4> barriers{};
+        const std::array<vk::Image,4> images{
+            screen_light.handle(),screen_meta.handle(),screen_gather.handle(),
+            screen_specular.handle()
         };
         for(std::size_t i=0;i<barriers.size();i++)
         {
@@ -1114,34 +1139,44 @@ struct system::implementation {
         // The directional pass has already transitioned gather/meta into
         // shader-read layout. Filter on the smaller screen-probe grid before
         // the full-resolution composite, respecting face and world depth.
-        vk::ImageMemoryBarrier barrier{};
-        barrier.oldLayout=filter_initialized?
-            vk::ImageLayout::eShaderReadOnlyOptimal:vk::ImageLayout::eUndefined;
-        barrier.newLayout=vk::ImageLayout::eGeneral;
-        barrier.srcAccessMask=filter_initialized?
-            vk::AccessFlags(vk::AccessFlagBits::eShaderRead):vk::AccessFlags{};
-        barrier.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
-        barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
-        barrier.image=screen_filtered.handle();
-        barrier.subresourceRange={
-            vk::ImageAspectFlagBits::eColor,0,1,0,1
+        std::array<vk::ImageMemoryBarrier,2> barriers{};
+        const std::array<vk::Image,2> targets{
+            screen_filtered.handle(),screen_specular_filtered.handle()
         };
+        for(std::size_t i=0;i<barriers.size();i++)
+        {
+            auto& barrier=barriers[i];
+            barrier.oldLayout=filter_initialized?
+                vk::ImageLayout::eShaderReadOnlyOptimal:vk::ImageLayout::eUndefined;
+            barrier.newLayout=vk::ImageLayout::eGeneral;
+            barrier.srcAccessMask=filter_initialized?
+                vk::AccessFlags(vk::AccessFlagBits::eShaderRead):vk::AccessFlags{};
+            barrier.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
+            barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            barrier.image=targets[i];
+            barrier.subresourceRange={
+                vk::ImageAspectFlagBits::eColor,0,1,0,1
+            };
+        }
         cmd.pipelineBarrier(filter_initialized?
                 vk::PipelineStageFlags(vk::PipelineStageFlagBits::eFragmentShader):
                 vk::PipelineStageFlags(vk::PipelineStageFlagBits::eTopOfPipe),
             vk::PipelineStageFlagBits::eComputeShader,
-            {},{},{},{barrier});
+            {},{},{},barriers);
         screen_filter_pipeline.dispatch(cmd,(screen_extent.width+7u)/8u,
                                         (screen_extent.height+7u)/8u,1,
                                         {screen_filter_sets.set()});
-        barrier.oldLayout=vk::ImageLayout::eGeneral;
-        barrier.newLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
-        barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
-        barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+        for(auto& barrier:barriers)
+        {
+            barrier.oldLayout=vk::ImageLayout::eGeneral;
+            barrier.newLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+            barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+            barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+        }
         cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
                             vk::PipelineStageFlagBits::eFragmentShader,
-                            {},{},{},{barrier});
+                            {},{},{},barriers);
         filter_initialized=true;
     }
 
@@ -1301,7 +1336,7 @@ bool system::implemented() const noexcept {
 }
 const char* system::status() const noexcept {
     return implemented()?
-        "lit cards + confidence-weighted, filtered directional screen radiance":
+        "lit cards + filtered diffuse GI and rough specular from screen radiance":
         "not initialized";
 }
 void system::reset() noexcept {impl_.reset();}

@@ -1,4 +1,4 @@
-VulkanLumen — Cornell prototype with stabilized directional GI
+VulkanLumen — Cornell prototype with directional GI and cached rough specular
 
 Architecture
   1. Raster HDR + depth + face ID
@@ -136,3 +136,19 @@ Direct/indirect decomposition:
     cache update cadence, and render resolutions are unchanged.
   - Expect substantially lower scene GPU cost than 90ms, but confirm
     total GPU time and shadow appearance on the M2/MoltenVK target.
+
+2026-11-08 next milestone: rough specular from existing directional screen radiance
+  - Per-Cornell-face material roughness is packed into albedo.w (RGB unchanged).
+    Floor and box faces have broad, dielectric reflection lobes. Walls remain
+    mostly matte. This is a demo material convention, not a general PBR API.
+  - The existing 64-bin screen-direction cache now provides both Lambertian
+    indirect light and a view-dependent rough specular estimate. It traces
+    NO extra BVH rays; directional samples and world-probe prior are reused.
+  - A separate 160x90 specular image follows the same face/depth-aware 3x3
+    filtering and composite upsampling, using two new low-resolution images.
+  - This is approximate one-bounce rough specular; it is NOT accurate mirror
+    tracing, does not resolve the emissive panel's direct specular highlight,
+    and is not yet generalized to external mesh material buffers.
+  - The working diffuse/60-FPS renderer is preserved on branch
+    lumen-diffuse-stable-60fps-20261108. Benchmark the GPU screen and total
+    times on the M2 before further reflection refinements.

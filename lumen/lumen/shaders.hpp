@@ -648,6 +648,7 @@ layout(set=0,binding=6) uniform sampler2D scene_depth;
 layout(rgba16f,set=0,binding=7) uniform image2D screen_directions;
 layout(rgba16f,set=0,binding=8) uniform image2D screen_meta;
 layout(rgba16f,set=0,binding=10) uniform image2D screen_gather;
+layout(rgba16f,set=0,binding=11) writeonly uniform image2D screen_specular;
 layout(push_constant) uniform Camera {
     vec4 eye,right,up,projection;
     vec4 trace_parameters; // range, reserved, history valid, frame index
@@ -812,6 +813,7 @@ void main()
     {
         imageStore(screen_meta,tile,vec4(0));
         imageStore(screen_gather,tile,vec4(0));
+        imageStore(screen_specular,tile,vec4(0));
         return;
     }
     float view_z=linear_depth(z);
@@ -837,6 +839,23 @@ void main()
     uint frame=uint(camera.trace_parameters.w);
     vec3 integrated=vec3(0);
     float total_weight=0.0;
+    // Reuse the same directional radiance samples for broad specular.
+    // Smooth mirror reflections require a separate tracing milestone.
+    float roughness=clamp(faces[id-1u].albedo.w,.4,.95);
+    bool glossy=roughness<.90;
+    vec3 reflected=vec3(0.0);
+    float fresnel=0.0;
+    if(glossy)
+    {
+        vec3 V=normalize(camera.eye.xyz-position);
+        float ndv=max(dot(normal,V),0.0);
+        reflected=reflect(-V,normal);
+        float one_minus=1.0-ndv;
+        float p2=one_minus*one_minus;
+        fresnel=.04+.96*p2*p2*one_minus;
+    }
+    vec3 specular_sum=vec3(0.0);
+    float specular_weight=0.0;
     int rays=int(clamp(camera.trace_parameters.y,1.0,8.0));
     int start=(int(frame)*rays)%64;
     for(int i=0;i<64;i++)
@@ -880,14 +899,28 @@ void main()
         float weight=cosine*jacobian;
         integrated+=Li*weight;
         total_weight+=weight;
+        if(glossy)
+        {
+            float r=max(dot(reflected,direction),0.0);
+            float r2=r*r;
+            float r4=r2*r2;
+            float r8=r4*r4;
+            float sharp=clamp((.90-roughness)/.45,0.0,1.0);
+            float lobe=mix(r4,r8,sharp)*jacobian;
+            specular_sum+=Li*lobe;
+            specular_weight+=lobe;
+        }
     }
     // Nonnegative irradiance is the sole indirect contribution. The world
     // cache supplies a prior until the traced directions have converged;
     // it is never subtracted from an independently evaluated raster term.
     vec3 incoming=total_weight>0.0?integrated/total_weight:vec3(0.0);
     vec3 indirect=max(incoming,vec3(0.0))*cached_albedo(position,id-1u);
+    vec3 specular=specular_weight>1.e-5?
+        max(specular_sum/specular_weight,vec3(0.0))*fresnel:vec3(0.0);
     imageStore(screen_meta,tile,vec4(history_anchor,view_z));
     imageStore(screen_gather,tile,vec4(indirect,float(id)));
+    imageStore(screen_specular,tile,vec4(specular,float(id)));
 }
 )glsl";
 
@@ -897,6 +930,8 @@ layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
 layout(set=0,binding=0) uniform sampler2D raw_gather;
 layout(set=0,binding=1) uniform sampler2D screen_meta;
 layout(rgba16f,set=0,binding=2) writeonly uniform image2D filtered_gather;
+layout(set=0,binding=3) uniform sampler2D raw_specular;
+layout(rgba16f,set=0,binding=4) writeonly uniform image2D filtered_specular;
 void main()
 {
     ivec2 tile=ivec2(gl_GlobalInvocationID.xy);
@@ -907,12 +942,14 @@ void main()
     if(center.a<.5)
     {
         imageStore(filtered_gather,tile,vec4(0));
+        imageStore(filtered_specular,tile,vec4(0));
         return;
     }
 
     // Filter *lighting probes* before full-resolution reconstruction,
     // respecting material identity and world-space hit distance.
     vec3 color=vec3(0.0);
+    vec3 specular=vec3(0.0);
     float sum=0.0;
     float radius=max(.22,.085*geometry.w);
     for(int y=-1;y<=1;y++)
@@ -930,10 +967,13 @@ void main()
         float geometric=exp(-dist*dist/(2.0*radius*radius));
         float w=spatial*geometric;
         color+=l.rgb*w;
+        specular+=texelFetch(raw_specular,neighbor,0).rgb*w;
         sum+=w;
     }
     imageStore(filtered_gather,tile,
                vec4(sum>0.0?color/sum:center.rgb,center.a));
+    imageStore(filtered_specular,tile,
+               vec4(sum>0.0?specular/sum:vec3(0.0),center.a));
 }
 )glsl";
 
@@ -954,6 +994,7 @@ layout(set=0,binding=0) uniform sampler2D color_image;
 layout(set=0,binding=1) uniform sampler2D depth_image;
 layout(set=0,binding=2) uniform sampler2D screen_gather;
 layout(set=0,binding=3) uniform sampler2D screen_meta;
+layout(set=0,binding=4) uniform sampler2D screen_specular;
 layout(push_constant) uniform Display {
     uint manual_gamma;
 } display;
@@ -980,6 +1021,7 @@ void main()
         vec2 fraction=fract(coord);
         ivec2 probe_size=textureSize(screen_gather,0);
         vec3 indirect=vec3(0.0);
+        vec3 specular=vec3(0.0);
         float sum=0.0;
         for(int y=0;y<2;y++)
         for(int x=0;x<2;x++)
@@ -997,10 +1039,11 @@ void main()
                          (y==0?1.0-fraction.y:fraction.y);
             weight*=1.0-smoothstep(0.0,tolerance,difference);
             indirect+=light.rgb*weight;
+            specular+=texelFetch(screen_specular,tile,0).rgb*weight;
             sum+=weight;
         }
         if(sum>.001)
-            hdr+=max(indirect/sum,vec3(0.0));
+            hdr+=max((indirect+specular)/sum,vec3(0.0));
     }
     hdr=max(hdr,vec3(0.0));
     vec3 mapped=hdr/(vec3(1.0)+hdr);
