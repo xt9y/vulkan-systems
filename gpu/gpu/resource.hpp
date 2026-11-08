@@ -3,7 +3,7 @@
 #include <utility>
 
 namespace gpu {
-// Move-only RAII resource compatible with VulkanEngine's resource APIs.
+// Move-only RAII resource compatible with VulkanWrapper's resource APIs.
 // It is intentionally layout-compatible at the base-class level, so it can
 // be passed as vk::buffer::resource& and vk::image::resource& respectively.
 // GPU work referencing these resources must finish before the owner resets.
