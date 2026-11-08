@@ -14,7 +14,7 @@ static void fingerprint_lumen_headers(C_Target* target)
         FILE* file=fopen(paths[i],"rb");
         if(!file)
         {
-            fprintf(stderr,"Missing Lumen header: %s\\n",paths[i]);
+            fprintf(stderr,"Missing Lumen header: %s\n",paths[i]);
             exit(1);
         }
         int byte;
@@ -25,7 +25,7 @@ static void fingerprint_lumen_headers(C_Target* target)
         }
         if(ferror(file))
         {
-            fprintf(stderr,"Failed reading Lumen header: %s\\n",paths[i]);
+            fprintf(stderr,"Failed reading Lumen header: %s\n",paths[i]);
             fclose(file);
             exit(1);
         }
