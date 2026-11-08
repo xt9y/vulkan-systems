@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace lumen {
 
@@ -22,6 +23,7 @@ struct settings {
     // Depth-screen ray tracing, with a geometry-BVH fallback on misses.
     float screen_trace_distance=12.0f;
     std::uint32_t screen_rays_per_probe=4; // 1..8 directional rays/frame
+    std::uint32_t surface_updates_per_frame=1; // 1..8 amortized cards
     bool full_resolution_outputs=false; // optional compute reconstruction
 };
 
@@ -55,16 +57,29 @@ struct lighting {
     std::uint32_t count=0;
 };
 
-// Initial external geometry contract: exactly 16 static planar quads.
-// The first 15 are nonemissive; face 15 is the rectangular area emitter.
-// This preserves the current 4x4 Surface Cache atlas and BVH ray format.
-// The world-probe grid still covers the Cornell room volume.
+// Basic bounded static Surface Cache: 2..64 planar cards, with the last
+// card always a rectangular area emitter. Atlas width adapts from 4 to 8
+// columns, preserving the existing shading and ray-to-card mapping.
+// Triangle cards draw one real triangle and one degenerate placeholder.
+// The input is copied at create(), not borrowed from the caller.
 struct quad {
     std::array<float,3> origin{},u{},v{},normal{},albedo{},emission{};
     float roughness=.92f;
+    bool triangular=false; // triangle is (origin,origin+u,origin+v)
 };
 struct quad_scene {
-    std::array<quad,16> faces{};
+    std::vector<quad> faces;
+};
+
+// One planar card per triangle. The final rectangular light is separate.
+// Max 63 triangles; skinned/instanced meshes are not handled by this API.
+struct triangle {
+    std::array<float,3> a{},b{},c{},albedo{.7f,.7f,.7f};
+    float roughness=.8f;
+};
+struct triangle_scene {
+    std::vector<triangle> triangles;
+    quad emitter{};
 };
 // Reference input for testing the external-geometry path. The caller can
 // modify the returned quads before passing them to create().
@@ -140,6 +155,13 @@ public:
     void create(vk::RenderPass presentation_pass, vk::Format presentation_format,
                 vk::Extent2D extent, const settings& options,
                 const quad_scene& quads);
+    void create(vk::RenderPass presentation_pass, vk::Format presentation_format,
+                vk::Extent2D extent, const settings& options,
+                const triangle_scene& triangles);
+    // Both replacements require an idle Vulkan device. They rebuild caches
+    // and BVH; they are not per-frame animation/update operations.
+    void replace_quads(const quad_scene& quads);
+    void replace_triangles(const triangle_scene& triangles);
     void resize(vk::RenderPass presentation_pass, vk::Format presentation_format,
                 vk::Extent2D extent);
     void set_scene(const scene& geometry);
