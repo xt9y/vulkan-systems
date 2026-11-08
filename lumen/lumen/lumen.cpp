@@ -161,9 +161,9 @@ std::vector<vertex> quad_vertices(const quad_scene& scene)
             for(float component:vector)
                 if(!std::isfinite(component))
                     throw std::invalid_argument("Lumen quad has nonfinite values");
-        if(!std::isfinite(q.roughness) || q.roughness<.4f ||
+        if(!std::isfinite(q.roughness) || q.roughness<.05f ||
            q.roughness>.95f)
-            throw std::invalid_argument("Lumen quad roughness must be 0.4..0.95");
+            throw std::invalid_argument("Lumen quad roughness must be 0.05..0.95");
         if(dot(q.u,q.u)<1.e-5f || dot(q.v,q.v)<1.e-5f ||
            dot(cross(q.u,q.v),cross(q.u,q.v))<1.e-8f ||
            dot(q.normal,q.normal)<1.e-6f)
