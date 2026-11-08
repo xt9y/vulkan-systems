@@ -583,7 +583,7 @@ struct system::implementation {
         image_binding.descriptorCount=1;
         image_binding.stageFlags=vk::ShaderStageFlagBits::eFragment;
         std::vector<vk::DescriptorSetLayoutBinding> composite_bindings(5);
-        for(std::uint32_t i=0;i<4;i++)
+        for(std::uint32_t i=0;i<composite_bindings.size();i++)
         {
             composite_bindings[i]=image_binding;
             composite_bindings[i].binding=i;
@@ -591,7 +591,7 @@ struct system::implementation {
         composite_sets.create(composite_bindings);
 
         std::vector<vk::DescriptorSetLayoutBinding> screen_bindings(12);
-        for(std::uint32_t i=0;i<11;i++)
+        for(std::uint32_t i=0;i<screen_bindings.size();i++)
         {
             auto& binding=screen_bindings[i];
             binding.binding=i;
