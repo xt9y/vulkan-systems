@@ -1585,6 +1585,28 @@ void system::create(vk::RenderPass pass,vk::Format format,
     next->initialize();
     impl_=std::move(next);
 }
+void system::create(vk::RenderPass pass,vk::Format format,
+                    vk::Extent2D extent,const settings& options,
+                    const triangle_scene& triangles) {
+    create(pass,format,extent,options,convert_triangles(triangles));
+}
+void system::replace_quads(const quad_scene& quads) {
+    if(!impl_)throw std::logic_error("VulkanLumen not created");
+    // The caller must have waited for VkDevice idle: current resources can
+    // still be referenced by in-flight command buffers.
+    auto next=std::make_unique<implementation>();
+    next->options=impl_->options;
+    next->options.demo=demo_scene::none;
+    next->presentation_pass=impl_->presentation_pass;
+    next->presentation_format=impl_->presentation_format;
+    next->extent=impl_->extent;
+    next->custom_quads=quads;
+    next->initialize();
+    impl_=std::move(next);
+}
+void system::replace_triangles(const triangle_scene& triangles) {
+    replace_quads(convert_triangles(triangles));
+}
 void system::resize(vk::RenderPass pass,vk::Format format,vk::Extent2D extent) {
     if(!impl_)throw std::logic_error("VulkanLumen not created");
     // Resize requires the caller to have waited for device idle.
