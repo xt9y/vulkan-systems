@@ -268,12 +268,13 @@ struct system::implementation {
     gpu::image color,depth,surface_cache,surface_lighting,direct_lighting;
     gpu::image screen_light,screen_meta,screen_gather,screen_filtered;
     gpu::image screen_specular,screen_specular_filtered;
+    gpu::image full_diffuse,full_specular;
     render::target target;
     render::pipeline geometry_pipeline,composite_pipeline;
     gpu::compute cache_pipeline,lighting_pipeline,radiance_pipeline,screen_pipeline;
-    gpu::compute screen_filter_pipeline;
+    gpu::compute screen_filter_pipeline,full_output_pipeline;
     gpu::descriptors geometry_sets,composite_sets,cache_sets,lighting_sets;
-    gpu::descriptors radiance_sets,screen_sets,screen_filter_sets;
+    gpu::descriptors radiance_sets,screen_sets,screen_filter_sets,full_output_sets;
     vk::PipelineLayout geometry_layout{},composite_layout{};
     vk::Sampler sampler{},depth_sampler{};
     render::mesh box_mesh,fullscreen;
@@ -288,10 +289,10 @@ struct system::implementation {
     bool cache_valid=false,cache_dirty=true;
     bool lighting_initialized=false;
     bool radiance_initialized=false;
-    bool screen_initialized=false,filter_initialized=false;
+    bool screen_initialized=false,filter_initialized=false,full_output_initialized=false;
     std::string geometry_vertex_spv,geometry_fragment_spv;
     std::string composite_vertex_spv,composite_fragment_spv,cache_spv;
-    std::string lighting_spv,radiance_spv,screen_spv,filter_spv;
+    std::string lighting_spv,radiance_spv,screen_spv,filter_spv,full_output_spv;
 
     ~implementation(){release();}
 
@@ -311,6 +312,7 @@ struct system::implementation {
             radiance_pipeline.reset();
             screen_pipeline.reset();
             screen_filter_pipeline.reset();
+            full_output_pipeline.reset();
             if(geometry_layout)vk::pipeline_layout::destroy(geometry_layout);
             if(composite_layout)vk::pipeline_layout::destroy(composite_layout);
             geometry_layout=vk::PipelineLayout{};
@@ -322,6 +324,7 @@ struct system::implementation {
             radiance_sets.reset();
             screen_sets.reset();
             screen_filter_sets.reset();
+            full_output_sets.reset();
             if(sampler)vk::device::get()->handle.destroySampler(sampler);
             if(depth_sampler)vk::device::get()->handle.destroySampler(depth_sampler);
             sampler=vk::Sampler{};
@@ -339,6 +342,9 @@ struct system::implementation {
             screen_filtered.reset();
             screen_specular.reset();
             screen_specular_filtered.reset();
+            full_diffuse.reset();
+            full_specular.reset();
+            full_output_initialized=false;
             screen_initialized=false;
             filter_initialized=false;
             radiance_probes.reset();
@@ -471,6 +477,15 @@ struct system::implementation {
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eColor);
+        if(options.full_resolution_outputs)
+        {
+            const auto usage=vk::ImageUsageFlagBits::eStorage |
+                             vk::ImageUsageFlagBits::eSampled;
+            make_image(full_diffuse,render_extent,color_format,usage,
+                       vk::ImageAspectFlagBits::eColor);
+            make_image(full_specular,render_extent,color_format,usage,
+                       vk::ImageAspectFlagBits::eColor);
+        }
         make_image(surface_lighting,vk::Extent2D{512,512},color_format,
             vk::ImageUsageFlagBits::eStorage |
             vk::ImageUsageFlagBits::eSampled |
@@ -618,6 +633,21 @@ struct system::implementation {
         screen_filter_sets.create(
             std::vector<vk::DescriptorSetLayoutBinding>(
                 filter_bindings.begin(),filter_bindings.end()));
+        if(options.full_resolution_outputs)
+        {
+            std::vector<vk::DescriptorSetLayoutBinding> outputs(7);
+            for(std::uint32_t i=0;i<outputs.size();i++)
+            {
+                auto& binding=outputs[i];
+                binding.binding=i;
+                binding.descriptorCount=1;
+                binding.stageFlags=vk::ShaderStageFlagBits::eCompute;
+                binding.descriptorType=i<5?
+                    vk::DescriptorType::eCombinedImageSampler:
+                    vk::DescriptorType::eStorageImage;
+            }
+            full_output_sets.create(outputs);
+        }
         screen_sets.write_buffer(0,0,faces_buffer.descriptor());
         screen_sets.write_buffer(0,1,trace_nodes.descriptor());
         screen_sets.write_buffer(0,2,trace_triangles.descriptor());
@@ -724,6 +754,35 @@ struct system::implementation {
         screen_write(screen_gather,10);
         screen_write(screen_specular,11);
 
+        if(options.full_resolution_outputs)
+        {
+            const auto read=[&](const gpu::image& image,
+                                std::uint32_t binding,bool depth_image=false)
+            {
+                vk::DescriptorImageInfo d{};
+                d.sampler=depth_sampler;
+                d.imageView=image.view();
+                d.imageLayout=depth_image?
+                    vk::ImageLayout::eDepthStencilReadOnlyOptimal:
+                    vk::ImageLayout::eShaderReadOnlyOptimal;
+                full_output_sets.write_image(0,binding,d);
+            };
+            const auto write=[&](const gpu::image& image,
+                                 std::uint32_t binding)
+            {
+                vk::DescriptorImageInfo d{};
+                d.imageView=image.view();
+                d.imageLayout=vk::ImageLayout::eGeneral;
+                full_output_sets.write_image(0,binding,d);
+            };
+            read(color,0);
+            read(depth,1,true);
+            read(screen_filtered,2);
+            read(screen_specular_filtered,3);
+            read(screen_meta,4);
+            write(full_diffuse,5);
+            write(full_specular,6);
+        }
         cache_spv=compile("cards","comp",shaders::cards_comp);
         cache_pipeline.create(cache_spv,{cache_sets.layout()});
         const std::string lighting_source=with_tracing(shaders::lighting_comp);
@@ -740,6 +799,13 @@ struct system::implementation {
                                sizeof(screen_constants));
         filter_spv=compile("screen_filter","comp",shaders::screen_filter_comp);
         screen_filter_pipeline.create(filter_spv,{screen_filter_sets.layout()});
+        if(options.full_resolution_outputs)
+        {
+            full_output_spv=compile("lighting_output","comp",
+                                    shaders::output_upsample_comp);
+            full_output_pipeline.create(full_output_spv,
+                                        {full_output_sets.layout()});
+        }
         geometry_vertex_spv=compile("geometry","vert",shaders::geometry_vert);
         const std::string fragment_source=with_tracing(shaders::geometry_frag);
         geometry_fragment_spv=compile("geometry","frag",fragment_source.c_str());
@@ -1161,7 +1227,8 @@ struct system::implementation {
             };
         }
         cmd.pipelineBarrier(filter_initialized?
-                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eFragmentShader):
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eFragmentShader |
+                                       vk::PipelineStageFlagBits::eComputeShader):
                 vk::PipelineStageFlags(vk::PipelineStageFlagBits::eTopOfPipe),
             vk::PipelineStageFlagBits::eComputeShader,
             {},{},{},barriers);
@@ -1179,6 +1246,50 @@ struct system::implementation {
                             vk::PipelineStageFlagBits::eFragmentShader,
                             {},{},{},barriers);
         filter_initialized=true;
+    }
+
+    void reconstruct_full_outputs(vk::CommandBuffer cmd)
+    {
+        if(!options.full_resolution_outputs)return;
+        std::array<vk::ImageMemoryBarrier,2> barriers{};
+        const std::array<vk::Image,2> targets{
+            full_diffuse.handle(),full_specular.handle()
+        };
+        for(std::size_t i=0;i<barriers.size();i++)
+        {
+            auto& b=barriers[i];
+            b.oldLayout=full_output_initialized?
+                vk::ImageLayout::eShaderReadOnlyOptimal:vk::ImageLayout::eUndefined;
+            b.newLayout=vk::ImageLayout::eGeneral;
+            b.srcAccessMask=full_output_initialized?
+                vk::AccessFlags(vk::AccessFlagBits::eShaderRead):vk::AccessFlags{};
+            b.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
+            b.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            b.image=targets[i];
+            b.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
+        }
+        cmd.pipelineBarrier(full_output_initialized?
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eComputeShader |
+                                       vk::PipelineStageFlagBits::eFragmentShader):
+                vk::PipelineStageFlags(vk::PipelineStageFlagBits::eTopOfPipe),
+            vk::PipelineStageFlagBits::eComputeShader,
+            {},{},{},barriers);
+        full_output_pipeline.dispatch(cmd,(render_extent.width+7u)/8u,
+                                     (render_extent.height+7u)/8u,1,
+                                     {full_output_sets.set()});
+        for(auto& b:barriers)
+        {
+            b.oldLayout=vk::ImageLayout::eGeneral;
+            b.newLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+            b.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+            b.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+        }
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                            vk::PipelineStageFlagBits::eComputeShader |
+                            vk::PipelineStageFlagBits::eFragmentShader,
+                            {},{},{},barriers);
+        full_output_initialized=true;
     }
 
     void update_radiance_cache(vk::CommandBuffer cmd,const frame& current)
@@ -1320,6 +1431,7 @@ void system::record(vk::CommandBuffer cmd,const frame& current) {
     impl_->stamp(cmd,3);
     impl_->update_screen_probes(cmd,current);
     impl_->filter_screen_probes(cmd);
+    impl_->reconstruct_full_outputs(cmd);
     impl_->stamp(cmd,4);
 }
 void system::compose(vk::CommandBuffer cmd) {
@@ -1331,18 +1443,26 @@ void system::compose(vk::CommandBuffer cmd) {
 outputs system::result() const noexcept {
     outputs value{};
     if(!impl_ || !impl_->ready || !impl_->filter_initialized)return value;
-    value.diffuse=impl_->screen_filtered.handle();
-    value.reflections=impl_->screen_specular_filtered.handle();
+    const bool full=impl_->options.full_resolution_outputs &&
+                    impl_->full_output_initialized;
+    value.diffuse=full?impl_->full_diffuse.handle():
+                       impl_->screen_filtered.handle();
+    value.reflections=full?impl_->full_specular.handle():
+                           impl_->screen_specular_filtered.handle();
     value.metadata=impl_->screen_meta.handle();
     value.scene_color=impl_->color.handle();
     value.scene_depth=impl_->depth.handle();
-    value.diffuse_view=impl_->screen_filtered.view();
-    value.reflections_view=impl_->screen_specular_filtered.view();
+    value.diffuse_view=full?impl_->full_diffuse.view():
+                            impl_->screen_filtered.view();
+    value.reflections_view=full?impl_->full_specular.view():
+                                impl_->screen_specular_filtered.view();
     value.metadata_view=impl_->screen_meta.view();
     value.scene_color_view=impl_->color.view();
     value.scene_depth_view=impl_->depth.view();
     value.probe_extent=impl_->screen_extent;
     value.scene_extent=impl_->render_extent;
+    value.lighting_extent=full?impl_->render_extent:impl_->screen_extent;
+    value.full_resolution=full;
     value.radiance_format=impl_->screen_filtered.format();
     value.depth_format=impl_->depth.format();
     value.color_layout=vk::ImageLayout::eShaderReadOnlyOptimal;

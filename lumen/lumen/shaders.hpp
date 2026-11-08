@@ -1040,6 +1040,71 @@ void main()
 }
 )glsl";
 
+
+inline constexpr const char* output_upsample_comp=R"glsl(#version 450
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+layout(set=0,binding=0) uniform sampler2D scene_color;
+layout(set=0,binding=1) uniform sampler2D scene_depth;
+layout(set=0,binding=2) uniform sampler2D probe_diffuse;
+layout(set=0,binding=3) uniform sampler2D probe_reflections;
+layout(set=0,binding=4) uniform sampler2D probe_meta;
+layout(rgba16f,set=0,binding=5) writeonly uniform image2D diffuse_out;
+layout(rgba16f,set=0,binding=6) writeonly uniform image2D reflections_out;
+
+float linear_depth(float z)
+{
+    const float n=.05,f=200.0;
+    return n*f/max(f-z*(f-n),.00001);
+}
+void main()
+{
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size=imageSize(diffuse_out);
+    if(any(greaterThanEqual(pixel,size)))return;
+    float id=texelFetch(scene_color,pixel,0).a;
+    float z=texelFetch(scene_depth,pixel,0).r;
+    if(id<=.5 || z>=.99999)
+    {
+        imageStore(diffuse_out,pixel,vec4(0.0));
+        imageStore(reflections_out,pixel,vec4(0.0));
+        return;
+    }
+    float depth=linear_depth(z);
+    vec2 coord=(vec2(pixel)-vec2(4.0))/8.0;
+    ivec2 origin=ivec2(floor(coord));
+    vec2 fraction=fract(coord);
+    ivec2 extent=textureSize(probe_diffuse,0);
+    vec3 diffuse=vec3(0.0),specular=vec3(0.0);
+    float sum=0.0;
+    for(int y=0;y<2;y++)
+    for(int x=0;x<2;x++)
+    {
+        ivec2 cell=origin+ivec2(x,y);
+        if(any(lessThan(cell,ivec2(0))) ||
+           any(greaterThanEqual(cell,extent)))continue;
+        vec4 light=texelFetch(probe_diffuse,cell,0);
+        if(abs(light.a-id)>.1)continue;
+        vec4 meta=texelFetch(probe_meta,cell,0);
+        float delta=abs(meta.a-depth);
+        float tolerance=max(.10,.04*depth);
+        if(delta>tolerance)continue;
+        float weight=(x==0?1.0-fraction.x:fraction.x)*
+                     (y==0?1.0-fraction.y:fraction.y);
+        weight*=1.0-smoothstep(0.0,tolerance,delta);
+        diffuse+=light.rgb*weight;
+        specular+=texelFetch(probe_reflections,cell,0).rgb*weight;
+        sum+=weight;
+    }
+    if(sum>.001)
+    {
+        diffuse=max(diffuse/sum,vec3(0.0));
+        specular=max(specular/sum,vec3(0.0));
+    }
+    imageStore(diffuse_out,pixel,vec4(diffuse,id));
+    imageStore(reflections_out,pixel,vec4(specular,id));
+}
+)glsl";
+
 inline constexpr const char* composite_vert=R"glsl(#version 450
 layout(location=0) out vec2 uv;
 void main()

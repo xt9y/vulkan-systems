@@ -184,3 +184,13 @@ Direct/indirect decomposition:
     reconstruction remain separate future milestones.
   - The Cornell shading, shadow rays, world probes and screen passes are
     untouched. No GPU passes or per-frame work are added by result().
+
+2026-11-08 optional full-resolution output reconstruction
+  - Set settings::full_resolution_outputs=true to obtain separate
+    depth/face-aware diffuse and rough-reflection images at the internal
+    raster resolution. Default remains false: no additional GPU work.
+  - Reconstruction uses the composite's same 2x2 depth and face-ID aware
+    weights and does not add any tracing or surface-cache updates.
+  - Output lighting_extent/full_resolution identify the image dimensions;
+    metadata always remains at probe_extent. Results are borrowed resources.
+  - Native M2 shader compilation and 60 FPS performance are not verified.

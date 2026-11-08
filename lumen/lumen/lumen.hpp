@@ -21,6 +21,7 @@ struct settings {
     // Depth-screen ray tracing, with a geometry-BVH fallback on misses.
     float screen_trace_distance=12.0f;
     std::uint32_t screen_rays_per_probe=4; // 1..8 directional rays/frame
+    bool full_resolution_outputs=false; // optional compute reconstruction
 };
 
 struct camera {
@@ -76,12 +77,15 @@ struct gbuffer {
 // recorded GPU work before sampling the images on another queue.
 // Lighting images are in eShaderReadOnlyOptimal after record(); scene_depth
 // is in eDepthStencilReadOnlyOptimal. No full-resolution lighting output is
-// implied by this API: use probe_extent and scene_extent explicitly.
+// implied by this API unless full_resolution_outputs is enabled. In that
+// case diffuse/reflection are at scene_extent; metadata remains at
+// probe_extent. Use lighting_extent to distinguish the returned size.
 struct outputs {
     vk::Image diffuse{},reflections{},metadata{},scene_color{},scene_depth{};
     vk::ImageView diffuse_view{},reflections_view{},metadata_view{};
     vk::ImageView scene_color_view{},scene_depth_view{};
-    vk::Extent2D probe_extent{},scene_extent{};
+    vk::Extent2D probe_extent{},scene_extent{},lighting_extent{};
+    bool full_resolution=false;
     vk::Format radiance_format=vk::Format::eUndefined;
     vk::Format depth_format=vk::Format::eUndefined;
     vk::ImageLayout color_layout=vk::ImageLayout::eUndefined;
