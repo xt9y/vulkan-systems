@@ -230,8 +230,10 @@ std::vector<face> make_faces(const std::vector<vertex>& vertices,
     return result;
 }
 
-// No shader files or shader compilation code are needed in vulkan-experiment.
-// The runtime compiler only runs at create()/resize(), never per frame.
+// Embedded GLSL templates are compiled from shaders.hpp at C++ build time.
+// The Lumen build configurations fingerprint the header in their compile
+// flags to invalidate caches whenever shader source is changed.
+// The runtime compiler runs at create()/resize(), never per frame.
 std::string compile(const char* name,const char* stage,const char* source) {
     namespace fs=std::filesystem;
     const fs::path dir=fs::path("build")/"shaders";
