@@ -21,6 +21,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -127,6 +129,7 @@ quad_scene default_quads()
 {
     const auto vertices=cornell_box();
     quad_scene value{};
+    value.faces.resize(16);
     for(std::size_t i=0;i<value.faces.size();i++)
     {
         const auto& v=vertices[i*6];
@@ -144,6 +147,8 @@ quad_scene default_quads()
 
 std::vector<vertex> quad_vertices(const quad_scene& scene)
 {
+    if(scene.faces.size()<2 || scene.faces.size()>64)
+        throw std::invalid_argument("Lumen requires 2..64 cards with emitter last");
     std::vector<vertex> vertices;
     vertices.reserve(scene.faces.size()*6);
     for(std::size_t i=0;i<scene.faces.size();i++)
@@ -175,19 +180,29 @@ std::vector<vertex> quad_vertices(const quad_scene& scene)
                 throw std::invalid_argument("Lumen negative emission");
             emits|=emission>0.f;
         }
-        if(emits!=(i==15))
+        if(emits!=(i+1==scene.faces.size()) || (emits && q.triangular))
             throw std::invalid_argument(
-                "Lumen currently requires emitter only in quad 15");
-        add_face(vertices,q.origin,q.u,q.v,N,q.albedo,q.emission);
+                "Lumen requires one rectangular emitter at the last card");
+        if(q.triangular)
+        {
+            // Pair a real triangle with a zero-area placeholder to keep
+            // BVH primitive/2 mapped to the correct surface-card index.
+            const point a=q.origin,b=add(a,q.u),c=add(a,q.v);
+            for(const point pos:std::array<point,6>{a,b,c,a,c,c})
+                vertices.push_back({pos,N,q.albedo,q.emission});
+        }
+        else add_face(vertices,q.origin,q.u,q.v,N,q.albedo,q.emission);
     }
     for(std::size_t i=0;i<vertices.size();i++)
         vertices[i].face_index=std::uint32_t(i/6);
     return vertices;
 }
 
-std::array<face,16> make_faces(const std::vector<vertex>& vertices,
-                               const quad_scene* custom=nullptr) {
-    std::array<face,16> result{};
+std::vector<face> make_faces(const std::vector<vertex>& vertices,
+                             const quad_scene* custom=nullptr) {
+    if(vertices.empty() || vertices.size()%6u!=0u)
+        throw std::invalid_argument("invalid face-card vertex count");
+    std::vector<face> result(vertices.size()/6);
     for(std::size_t i=0;i<result.size();i++) {
         const auto& a=vertices[i*6];
         const point u=sub(vertices[i*6+1].position,a.position);
@@ -318,6 +333,30 @@ vk::PipelineLayout make_layout(vk::DescriptorSetLayout descriptor,
 } // namespace
 
 quad_scene cornell_quads() {return default_quads();}
+
+namespace {
+quad_scene convert_triangles(const triangle_scene& input)
+{
+    if(input.triangles.empty() || input.triangles.size()>63u)
+        throw std::invalid_argument("Lumen expects 1..63 planar triangles");
+    quad_scene result{};
+    result.faces.reserve(input.triangles.size()+1);
+    for(const auto& tri:input.triangles)
+    {
+        quad q{};
+        q.origin=tri.a;
+        q.u=sub(tri.b,tri.a);
+        q.v=sub(tri.c,tri.a);
+        q.normal=normalized(cross(q.u,q.v));
+        q.albedo=tri.albedo;
+        q.roughness=tri.roughness;
+        q.triangular=true;
+        result.faces.push_back(q);
+    }
+    result.faces.push_back(input.emitter);
+    return result;
+}
+}
 
 struct system::implementation {
     settings options{};
