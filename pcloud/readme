@@ -39,15 +39,31 @@ pc_build_paths paths={
 };
 pc_build_targets pc_targets=pc_build_register(b,wrapper,paths);
 pc_build_include_paths(client,paths);
-c_link_target(client,pc_targets.pcloud);
+pc_build_link(client,pc_targets,wrapper);
 if(pc_build_compile_shaders(paths,"build/shaders")!=0)exit(1);
 ```
 
 This compiles the local VulkanGPU, VulkanRender, VulkanBVH, VulkanSpatial,
 VulkanJobs and VulkanPCloud targets against the **same existing wrapper**,
-without fetching or compiling a second VulkanWrapper. If your host has
-already registered those systems targets, link PCloud to the existing
-targets instead of registering duplicate target names. The compiler
+without fetching or compiling a second VulkanWrapper. If your host already owns those systems targets, attach PCloud to
+them directly instead of registering duplicates:
+
+```c
+pc_build_targets pc_targets={0};
+pc_targets.gpu=gpu;         // Existing C_Target* from your renderer.
+pc_targets.render=render;
+pc_targets.bvh=bvh;
+pc_targets.spatial=spatial;
+pc_targets.jobs=jobs;
+pc_targets=pc_build_attach(b,wrapper,paths,pc_targets);
+pc_build_include_paths(client,paths);
+pc_build_link(client,pc_targets,wrapper);
+if(pc_build_compile_shaders(paths,"build/shaders")!=0)exit(1);
+```
+
+Both paths build exactly one PCloud module and reuse the host
+VulkanWrapper instance. The `pc_build_link` helper explicitly links
+static dependencies in consumer-to-provider order. The compiler
 requires `glslangValidator` on PATH; the shader helper creates and updates
 the six SPIR-V files incrementally.
 
