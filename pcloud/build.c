@@ -1,10 +1,16 @@
 #include <cbuild.h>
 #include <stdio.h>
+#include "integration.h"
 
 // Standalone build of pc:: inside vulkan-systems. The game uses the same
 // source directly through its checked-in Git submodule instead.
 void build(C_Build* b)
 {
+    // Standalone development also compiles shaders from the same source
+    // used by VulkanWrapper consumers using pc_build_compile_shaders().
+    const pc_build_paths paths={"..",NULL,NULL,NULL};
+    if(pc_build_compile_shaders(paths,"build/shaders")!=0)exit(1);
+
     C_Dependency* wrapper=c_git(b,"VulkanWrapper",
         "https://github.com/xt9y/vulkan-wrapper.git",
         "69bae1717dbcb5df838f4fc6de78de50507ed4ac");
