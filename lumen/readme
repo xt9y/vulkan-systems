@@ -214,3 +214,24 @@ Direct/indirect decomposition:
     world volume; fully generic meshes, dynamic BVHs and multiple lights
     are later milestones.
   - No additional GPU passes, probes or BVH rays in the default path.
+
+2026-11-08 bounded static-scene Lumen implementation
+  - Basic renderer scope and remaining limitations: lumen/basic-renderer.md
+  - Stable pre-rewrite branch: lumen-baseline-perfect-20261108
+  - Static quad scenes now accept 2..256 cards; 4/8/16 column atlases
+    are allocated automatically to match the scene.
+  - Static triangle_scene converts up to 255 mesh triangles to per-triangle
+    planar cards plus one rectangular emitter. The raster and BVH use one
+    real triangle plus one degenerate placeholder for card indexing.
+  - A scene may have 1..4 final rectangular emitter quads. Material colors,
+    emission and roughness are taken from the host-provided scene.
+  - Sky/environment radiance is configurable and defaults to black.
+  - Surface-card lighting updates are configurable (1..8 cards/frame).
+    World probe bounds adapt to the supplied static geometry at create-time.
+  - Low-roughness surfaces (<0.4) use one dedicated reflection BVH ray per
+    screen probe, with a blend into existing rough-reflection radiance.
+  - Explicit replace_quads()/replace_triangles() rebuild resources after
+    the calling application has waited for Vulkan device idle.
+  - The original Cornell input and defaults are retained; the M2 60 FPS
+    baseline is preserved independently, but this branch is not yet
+    native-compiled or performance-verified on MoltenVK.
