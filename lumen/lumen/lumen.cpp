@@ -805,6 +805,7 @@ struct system::implementation {
                  <<" rays/update="<<std::clamp(options.rays_per_probe,1u,16u)
                  <<" | screen probes="<<screen_extent.width<<"x"<<screen_extent.height
                  <<" directions=8x8"
+                 <<" | geometry-aware probe filter=3x3"
                  <<" trace=8 steps+"<<options.screen_trace_distance<<"m BVH fallback"
                  <<" | scene render="<<render_extent.width<<"x"<<render_extent.height
                  <<" (swapchain "<<extent.width<<"x"<<extent.height<<")"
@@ -1299,7 +1300,7 @@ bool system::implemented() const noexcept {
 }
 const char* system::status() const noexcept {
     return implemented()?
-        "lit surface cards + directional screen radiance cache":
+        "lit cards + confidence-weighted, filtered directional screen radiance":
         "not initialized";
 }
 void system::reset() noexcept {impl_.reset();}
