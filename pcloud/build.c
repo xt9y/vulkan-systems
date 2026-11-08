@@ -8,7 +8,8 @@ void build(C_Build* b)
     C_Dependency* wrapper=c_git(b,"VulkanWrapper",
         "https://github.com/xt9y/vulkan-wrapper.git",
         "69bae1717dbcb5df838f4fc6de78de50507ed4ac");
-    c_dep_cbuild(wrapper,"VulkanWrapper");
+    c_dep_cbuild(wrapper,"VulkanWrapper",C_TARGET_STATIC_LIBRARY);
+    c_dep_include(wrapper,".");
 
     C_Target* gpu=c_static_library(b,"VulkanGPU");
     c_sources(gpu,"../gpu/gpu/*.cpp");
