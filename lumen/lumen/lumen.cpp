@@ -1242,7 +1242,9 @@ struct system::implementation {
             barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
             barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
         }
+        // The optional full-resolution pass reads these images in compute.
         cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                            vk::PipelineStageFlagBits::eComputeShader |
                             vk::PipelineStageFlagBits::eFragmentShader,
                             {},{},{},barriers);
         filter_initialized=true;
