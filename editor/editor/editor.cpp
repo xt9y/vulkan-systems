@@ -12,11 +12,10 @@ namespace editor
         // Menu uses g_menuLocation=(76,460), margins=(16,20) and 200px width.
         // Game host controls all object types/labels/properties.
         constexpr int virtual_width=960,virtual_height=540;
-        constexpr int menu_width=200,menu_height=245;
+        constexpr int menu_width=184,menu_height=222;
         constexpr int margin_x=16,margin_y=20;
         constexpr int line_height=16;
-        constexpr int row_start=122;
-        constexpr color white{1,1,1,1};
+                constexpr color white{0.80f,0.80f,0.83f,1};
         constexpr color teal{0.26f,0.46f,0.44f,1};
         constexpr color red{0.55f,0.12f,0.15f,1};
 
