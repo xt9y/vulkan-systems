@@ -25,7 +25,7 @@ uses GPU-managed images. Link users before providers (render, gpu, engine).
 For a Lumen harness, additionally fetch the lumen subdirectory and link
 VulkanLumen; it currently exports no-op create/set_scene/set_gbuffer/
 set_lighting/invalidate/resize/record/compose/result/reset entry points.
-The modules' VulkanEngine dependencies are defined by their own build.c files.
+The modules' VulkanWrapper dependencies are defined by their own build.c files.
 
 No game-specific scene serialization, weapons, networking policy, or world
 authority belongs in VulkanGPU, VulkanRender, VulkanBVH, or VulkanLumen.
