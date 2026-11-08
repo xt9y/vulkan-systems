@@ -113,3 +113,14 @@ Direct/indirect decomposition:
     sharp shadow boundary. Lit/material cards and world/screen GI remain
     unchanged, avoiding a blanket 4x cache-size/work increase.
   - GPU time is device-dependent; validate the raster pass and 60 FPS.
+
+2026-11-08 pixelated-shadow follow-up
+  - The previous absolute fwidth gate missed dark shadow contours even
+    where the 128x128 direct-light atlas had visibly stair-stepped edges.
+  - At rasterization, read nine direct-card texels around the surface hit
+    and detect local luminance contrast, including nearly black texels.
+  - Only edge pixels integrate 64 deterministic 8x8 light samples, using
+    a different subpixel receiver position for each sample to integrate
+    the screen-pixel footprint. Fully lit and fully dark interiors remain
+    cached. The diffuse GI pipeline and cache allocation are unchanged.
+  - GPU performance and shadow appearance must be verified on MoltenVK.
