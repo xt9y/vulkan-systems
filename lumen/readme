@@ -72,3 +72,17 @@ Known issues still to address as separate evidence-based milestones:
 
 The known working older renderer is preserved in
 xt9y/vulkan-systems branch lumen-stage7-bak.
+
+2026-11-08 follow-up: final gather composition and probe visibility
+  - Raster HDR now stores emissive and direct Surface Cache lighting only.
+    The screen-probe pass adds the sole indirect diffuse term, avoiding
+    signed corrections that could create black halos near the emitter.
+  - Each screen probe gathers positive incoming radiance with world-SH
+    fallback while its 8x8 directional history accumulates.
+  - World probes used by screen gathering are normal-facing and BVH-visible
+    from the receiving surface, reducing bleeding through boxes.
+  - World radiance updates now use deterministic 32-visit interleaved
+    directions rather than independent random angles, reducing variance.
+  - Expect somewhat higher Screen Probe GPU time because of occlusion rays,
+    partly offset by removing world-irradiance sampling from raster fragments.
+  - Actual MoltenVK visual and GPU-time validation remains required.

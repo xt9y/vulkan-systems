@@ -360,9 +360,11 @@ void main()
     }
     vec3 normal=normalize(surface_normal);
     vec3 albedo=cached_albedo(world_position,surface_index);
+    // The final Screen Probe Gather evaluates indirect radiance once.
+    // Rendering world-cache GI here and adding a signed probe delta later
+    // could subtract more light than the surface received.
     vec3 direct=cached_direct(world_position,surface_index);
-    vec3 indirect=albedo*indirect_irradiance(world_position,normal);
-    hdr_color=vec4(max(direct+indirect,vec3(0.0)),float(surface_index+1u));
+    hdr_color=vec4(max(direct,vec3(0.0)),float(surface_index+1u));
 }
 )glsl";
 
@@ -524,16 +526,20 @@ void main()
         return;
     }
 
-    uint seed=(id+1u)*747796405u ^ (params.frame_number+1u)*2891336453u;
-    random_bits(seed);
+    // Interleave 32 low-discrepancy strata over successive visits to each
+    // probe. Eight directions cover the sphere every visit, while 32
+    // visits cover distinct directions instead of repeating random clusters.
+    uint visit=(params.frame_number*updates+thread)/PROBE_COUNT;
+    uint hash=(id+1u)*747796405u;
+    random_bits(hash);
+    float spin=2.0*PI*float(hash>>8)*(1.0/16777216.0);
     vec3 l0=vec3(0.0),lx=vec3(0.0),ly=vec3(0.0),lz=vec3(0.0);
-    float spin=2.0*PI*random01(seed);
     int samples=int(clamp(params.rays_per_probe,1u,16u));
     for(int ray=0;ray<samples;ray++)
     {
-        // Uniform-sphere stratification with per-update rotation.
-        float z=1.0-2.0*(float(ray)+random01(seed))/float(samples);
-        float a=spin+2.3999632*float(ray)+6.2831853*random01(seed);
+        uint sample_id=uint(ray)*32u+(visit%32u);
+        float z=1.0-2.0*(float(sample_id)+.5)/float(samples*32);
+        float a=spin+2.0*PI*fract(float(sample_id)*.61803398875);
         float radial=sqrt(max(0.0,1.0-z*z));
         vec3 direction=vec3(cos(a)*radial,sin(a)*radial,z);
         RayHit hit=trace_scene(origin,direction,20.0,false);
@@ -613,13 +619,14 @@ vec3 oct_decode(vec2 e)
 struct WorldSample {
     vec3 l0,lx,ly,lz;
 };
-WorldSample sample_world(vec3 position)
+WorldSample sample_world(vec3 position,vec3 normal)
 {
-    // Fetch and interpolate just ONCE per screen probe. All 64 directional
-    // bins reuse these SH coefficients instead of performing 8 world-probe
-    // buffer reads per bin.
+    // Interpolate only valid, visible world probes on the receiving side
+    // of the surface. Without this, probes behind the blocks/light leak
+    // into the foreground and the ceiling.
+    vec3 biased=position+normal*.075;
     vec3 coordinate=clamp(
-        (position-GRID_MIN)/(GRID_MAX-GRID_MIN)*vec3(PROBE_GRID-1),
+        (biased-GRID_MIN)/(GRID_MAX-GRID_MIN)*vec3(PROBE_GRID-1),
         vec3(0.0),vec3(PROBE_GRID-1)-vec3(.001));
     ivec3 base=ivec3(floor(coordinate));
     vec3 fraction=fract(coordinate);
@@ -627,6 +634,7 @@ WorldSample sample_world(vec3 position)
     value.l0=vec3(0);value.lx=vec3(0);
     value.ly=vec3(0);value.lz=vec3(0);
     float sum=0.0;
+    vec3 ray_origin=position+normal*.018;
     for(int z=0;z<2;z++)
     for(int y=0;y<2;y++)
     for(int x=0;x<2;x++)
@@ -634,9 +642,21 @@ WorldSample sample_world(vec3 position)
         ivec3 cell=base+ivec3(x,y,z);
         Probe p=probes[cell.x+12*cell.y+96*cell.z];
         if(p.l0.w<.5)continue;
+        vec3 probe_pos=mix(GRID_MIN,GRID_MAX,
+                            vec3(cell)/vec3(PROBE_GRID-1));
+        vec3 to_probe=probe_pos-ray_origin;
+        float length_to_probe=length(to_probe);
+        if(length_to_probe<.02)continue;
+        float facing=clamp((dot(normal,to_probe)/length_to_probe+.15)*2.0,
+                           0.0,1.0);
+        if(facing<=0.0)continue;
         float w=(x==0?1.0-fraction.x:fraction.x)*
                 (y==0?1.0-fraction.y:fraction.y)*
-                (z==0?1.0-fraction.z:fraction.z);
+                (z==0?1.0-fraction.z:fraction.z)*
+                facing*facing;
+        if(w<1.e-5)continue;
+        if(blocked(ray_origin,to_probe/length_to_probe,
+                   max(.001,length_to_probe-.02)))continue;
         value.l0+=p.l0.rgb*w;
         value.lx+=p.lx.rgb*w;
         value.ly+=p.ly.rgb*w;
@@ -645,7 +665,8 @@ WorldSample sample_world(vec3 position)
     }
     if(sum>1.e-5)
     {
-        value.l0/=sum;value.lx/=sum;value.ly/=sum;value.lz/=sum;
+        value.l0/=sum;value.lx/=sum;
+        value.ly/=sum;value.lz/=sum;
     }
     return value;
 }
@@ -748,7 +769,7 @@ void main()
         (forward+camera.right.xyz*ndc.x*camera.projection.x*
          camera.projection.y-camera.up.xyz*ndc.y*camera.projection.x)*view_z;
     vec3 normal=normalize(faces[id-1u].normal.xyz);
-    WorldSample world=sample_world(position);
+    WorldSample world=sample_world(position,normal);
     bool reuse=false;
     vec3 history_anchor=position;
     if(camera.trace_parameters.z>.5)
@@ -763,7 +784,6 @@ void main()
     }
     uint frame=uint(camera.trace_parameters.w);
     vec3 integrated=vec3(0);
-    vec3 integrated_prior=vec3(0);
     float total_weight=0.0;
     int rays=int(clamp(camera.trace_parameters.y,1.0,8.0));
     int start=(int(frame)*rays)%64;
@@ -807,17 +827,15 @@ void main()
         float jacobian=pow(abs(direction.x)+abs(direction.y)+abs(direction.z),3.0);
         float weight=cosine*jacobian;
         integrated+=Li*weight;
-        integrated_prior+=prior*weight;
         total_weight+=weight;
     }
-    // Compare equal directional quadratures: the SH irradiance baseline
-    // uses a different estimator and caused nonzero correction on uniform
-    // radiance. The confidence weight is already part of Li.
-    vec3 delta=total_weight>0.0?
-        (integrated-integrated_prior)/total_weight*
-        cached_albedo(position,id-1u):vec3(0.0);
+    // Nonnegative irradiance is the sole indirect contribution. The world
+    // cache supplies a prior until the traced directions have converged;
+    // it is never subtracted from an independently evaluated raster term.
+    vec3 incoming=total_weight>0.0?integrated/total_weight:vec3(0.0);
+    vec3 indirect=max(incoming,vec3(0.0))*cached_albedo(position,id-1u);
     imageStore(screen_meta,tile,vec4(history_anchor,view_z));
-    imageStore(screen_gather,tile,vec4(delta,float(id)));
+    imageStore(screen_gather,tile,vec4(indirect,float(id)));
 }
 )glsl";
 
@@ -909,7 +927,7 @@ void main()
         ivec2 origin=ivec2(floor(coord));
         vec2 fraction=fract(coord);
         ivec2 probe_size=textureSize(screen_gather,0);
-        vec3 correction=vec3(0.0);
+        vec3 indirect=vec3(0.0);
         float sum=0.0;
         for(int y=0;y<2;y++)
         for(int x=0;x<2;x++)
@@ -926,11 +944,11 @@ void main()
             float weight=(x==0?1.0-fraction.x:fraction.x)*
                          (y==0?1.0-fraction.y:fraction.y);
             weight*=1.0-smoothstep(0.0,tolerance,difference);
-            correction+=light.rgb*weight;
+            indirect+=light.rgb*weight;
             sum+=weight;
         }
         if(sum>.001)
-            hdr+=correction/sum;
+            hdr+=max(indirect/sum,vec3(0.0));
     }
     hdr=max(hdr,vec3(0.0));
     vec3 mapped=hdr/(vec3(1.0)+hdr);
