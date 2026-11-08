@@ -1,101 +1,74 @@
-VulkanLumen — evidence-based Lumen scene-lighting and final-gather rewrite
+VulkanLumen — Cornell prototype with stabilized directional GI
 
-This module follows the public Lumen architecture described in:
-  Epic SIGGRAPH 2022 Lumen presentation (Daniel Wright et al.)
-  https://advances.realtimerendering.com/s2022/SIGGRAPH2022-Advances-Lumen-Wright%20et%20al.pdf
-  Epic Lumen Technical Details and Performance Guide (UE 5.8)
-  https://dev.epicgames.com/documentation/en-us/unreal-engine/lumen-performance-guide-for-unreal-engine
+Architecture
+  1. Raster HDR + depth + face ID
+  2. 16 planar material cards (RGBA8, 64x64)
+  3. Direct/total Surface Cache radiance atlases (RGBA16F)
+  4. 12x8x12 directional world radiance cache
+  5. 8x8 directional radiance per 16x16 screen probe
+  6. Geometry-aware 3x3 screen-probe-space filter
+  7. Depth/face-validated full-resolution indirect composition
 
-The shared VulkanLumen public API and vulkan-experiment's frame loop are
-unchanged. No new system/module was introduced outside lumen/.
+This is a Cornell-specific prototype inspired by Epic's Lumen documentation.
+It is NOT the complete Unreal Engine Lumen Scene, Screen Probe Gather, or
+reflections implementation. The Cornell BVH has 32 triangles including the
+ceiling light; external meshes/lights/G-buffers remain unsupported.
 
-IMPLEMENTED for the self-contained Cornell demonstration
-  1. Primary visibility: existing raster HDR color, material face IDs, depth.
-  2. Scene ray queries: 32 triangles / 63 BVH nodes, now INCLUDING the
-     emissive ceiling panel. Shadow rays shorten their endpoint so the lamp
-     does not self-occlude. BVH built on CPU and traversed on GPU.
-  3. Surface material capture: 16 planar UV cards in a 256x256 RGBA8 atlas.
-     For the Cornell room each surface is planar with uniform albedo; material
-     normals and emission are read from the exact analytic face data.
-  4. Surface lighting: TWO separate RGBA16F 256x256 card atlases:
-       - direct lighting (emission + 2x2 visibility-tested area-light samples)
-       - total cached radiance (emission/direct + previous world-cache bounce)
-     One 64x64 card is refreshed per frame to amortize ray tracing.
-     The primary raster uses bilinear DIRECT lighting from the card atlas;
-     secondary rays sample TOTAL lit card radiance. No per-pixel shadow rays.
-  5. World radiance probes: 12x8x12 first-order directional coefficients,
-     updated with a configurable bounded budget and GPU any/closest-hit rays.
-     Probe hits now fetch surface emission or total cached surface radiance,
-     enabling amortized multibounce feedback across consecutive frames.
-  6. Screen radiance probes: one probe per 16x16 internal pixels. Each owns
-     an 8x8 octahedral DIRECTIONAL radiance atlas; update a default four
-     directions per probe per frame, accumulating to 24 observations per bin.
-     Screen-depth trace first, scene BVH fallback second, world-cache distant
-     radiance on miss. Probe history is reused only for matching face/position.
-  7. Final gather: integrate the 64 directional radiance bins with a cosine
-     Lambertian kernel and octahedral solid-angle weighting. Compare it with
-     the WORLD probe's hemispherical irradiance estimate (both E/pi units),
-     then write their difference times surface albedo to screen_gather.
-     Full-resolution composition interpolates only same-face, same-depth
-     correction. When validation fails, original world-cache GI remains.
-     The old single-ray arbitrary .12-clamped correction has been REMOVED.
-  8. GPU timestamps: cards (material capture + direct/total surface lighting),
-     world GI, primary raster, screen gather, composite and combined total.
+Visual-quality correction following the first lit-card/directional-probe test:
+  - Secondary rays used nearest-neighbor Surface Cache radiance texels,
+    yielding discontinuities on large planar faces. Now manually bilinear
+    within each face card to avoid bleeding across adjacent atlas cards.
+  - Screen-probe fallback used the single nearest world-space irradiance
+    probe, producing abrupt lighting changes at grid cell boundaries.
+    Now trilinearly interpolate the SH coefficients of eight valid probes
+    ONCE per screen tile, then reuse across all 64 angular bins.
+  - Each angular bin formerly retraced the exact same direction, making
+    "accumulation" incapable of improving angular aliasing. Directional
+    ray samples now jitter *within* their octahedral bin every update;
+    history averages genuinely distinct directions in probe space.
+  - A one-sample ray result formerly overrode the world radiance estimate
+    immediately, creating bright/dark 16x16 blocks. Screen directional
+    samples now have a finite sample count and confidence weighting against
+    the world-cache prior. The final indirect correction grows with
+    directional coverage instead of instantly flashing on first contact.
+  - A small 3x3 spatial filter operates on SCREEN PROBES, not on the
+    final HDR image. It only mixes the same face with nearby world-space
+    hit positions, maintaining material/geometry edges.
+  - Fixed compute/fragment barriers: directional gather and metadata must
+    be available to the downstream probe-filter compute pass before the
+    result is read by the fullscreen composite.
 
-FRAME PASS ORDER
-  material cards (only when dirty)
-  update one directly/indirectly lit surface card
-  update bounded world-space radiance probes from lit card cache
-  raster scene: cached direct lighting + world-space diffuse GI
-  directional screen ray gather -> integrated same-unit irradiance correction
-  final composition (tonemap)
+Runtime
+  - Material cards update when dirty; one 64x64 direct/total lighting card
+    updated per frame to amortize area-light shadow rays.
+  - World radiance cache updates 64 probes x 4 rays/frame by default.
+  - Screen probes trace 4 of 64 directional bins/frame by default.
+  - World cache and screen-probe temporal convergence takes several seconds.
+  - There is no full-screen denoiser, TAA, or neural reconstruction.
+  - The screen filter is included in the existing GPU 'screen' timing.
+  - Default internal raster remains capped at 1280 pixels wide on Retina.
 
-PERFORMANCE AND INITIAL CONVERGENCE
-  - Internal render size capped at 1280 pixels width on a Retina swapchain.
-  - One 64x64 card refresh each frame. All 16 cards require at least 16 frames
-    after startup or invalidation to populate. More frames accumulate radiance
-    history and multibounce information.
-  - Default screen rays = 4 of 64 directional bins per probe per frame;
-    available in settings.screen_rays_per_probe, clamped to 1..8.
-  - World updates remain 64 probes x 4 rays by default.
-  - No full-screen pixel denoiser, neural reconstruction, or TAA.
-  - These are first measurements to be made on M1; the previous 60 FPS
-    Stage 7 timing is NOT evidence that this refactor also reaches 60 FPS.
-  - The direct cache improves shadow softness by using four actual
-    visibility-tested emitter samples PER CACHED SURFACE TEXEL, not one
-    hard cutoff toward the light center per pixel.
-
-IMPORTANT INCOMPLETE FEATURES (do not confuse with working Epic Lumen)
-  - The Cornell demo uses analytic flat cards. Automatic mesh-card placement,
-    coverage, streaming and capture for arbitrary mesh materials are not done.
-  - set_scene()/set_lighting()/set_gbuffer() reject nonempty external inputs
-    rather than silently pretending to use them. Their binary contracts and
-    game-scene integration must be implemented in a later scoped milestone.
-  - BVH remains a CPU-built static Cornell tree; no GPU BLAS/TLAS update,
-    global SDF hierarchy or dynamic mesh transforms.
-  - World probes still use a fixed room grid, first-order SH, and simple
-    normal-biased interpolation: no reliable per-probe depth visibility,
-    relocation or camera-centered clipmaps. Light leaking can still occur.
-  - Screen probes have a limited depth march and 4-direction/frame sampling;
-    no adaptive placement or screen-probe reprojection into camera motion.
-  - No separate dynamic-light update system, complete surface-space radiosity
-    scheduling, physically based multilobe materials or specular reflections.
-  - results().diffuse/reflections are not ready as reusable standalone images;
-    the Cornell demo composites its indirect lighting internally.
-  - Not equivalent to Epic's complete Lumen renderer or its quality modes.
-
-TEST (from vulkan-experiment/)
+Build / test from vulkan-experiment:
   git pull --ff-only
   rm -f c.lock
   c build run vulkan-experiment
 
-Expected shader output: lumen_cards.comp, lumen_surface_lighting.comp,
-lumen_radiance.comp, lumen_screen.comp, lumen_geometry.{vert,frag},
-lumen_composite.{vert,frag}. The startup banner should report
-"Lit Surface Cache + directional Screen Radiance Cache" and 32 triangles.
-Allow 5-10 seconds stationary convergence. Report screenshot and GPU
-cards/GI/scene/screen/composite/total timings; compare against Stage 7.
+Look for the new shader:
+  build/shaders/lumen_screen_filter.comp
 
-All changes in this refactor remain inside vulkan-systems/lumen/. The next
-request for a new reusable system or general-scene backend should be scoped
-and reviewed separately before implementation.
+The module startup banner now reports "geometry-aware probe filter=3x3".
+Compare the previous red/green blockiness and striping on the Cornell walls.
+Send a screenshot and GPU cards/GI/scene/screen/composite/total times.
+Native MoltenVK shader compilation and M1 visual/performance tests have not
+been performed in this environment.
+
+Known issues still to address as separate evidence-based milestones:
+  - General mesh-card capture/lighting, not only Cornell planar UVs
+  - Robust directional visibility and placement of world probes
+  - Screen-space motion-vector reprojection and adaptive probe sampling
+  - Dynamic BLAS/TLAS/lighting invalidation, full multibounce scheduling
+  - Physically-based materials, rough/smooth specular reflections
+  - Public standalone GI/reflection outputs instead of Cornell-only compose
+
+The known working older renderer is preserved in
+xt9y/vulkan-systems branch lumen-stage7-bak.
