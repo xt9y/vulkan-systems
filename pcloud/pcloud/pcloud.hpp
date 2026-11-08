@@ -20,6 +20,12 @@ namespace pc
     };
     struct camera_frame {vec3 eye{};float yaw=0.f,pitch=0.f,fov=1.0471976f;};
     using gbuffer=std::array<vk::ImageView,4>;
+    struct presentation_target
+    {
+        std::vector<vk::Image> images; // Externally owned swapchain images.
+        vk::Format format=vk::Format::eUndefined;
+        vk::Extent2D extent{};
+    };
     struct configuration
     {
         std::string cloud_shader="build/shaders/pcloud_cloud.comp.spv";
@@ -31,7 +37,8 @@ namespace pc
     };
     struct targets {vk::Image grid{};vk::Buffer points{};vk::Image hdr{},ldr{};};
     using overlay_callback=std::function<void(vk::CommandBuffer,vk::Extent2D)>;
-    void create(const configuration&,const std::vector<gbuffer>&);
+    void create(const configuration&,const std::vector<gbuffer>&,
+                const presentation_target&);
     void set_scene(std::shared_ptr<const world>);
     void synchronize_scene();
     void updated(std::uint32_t);

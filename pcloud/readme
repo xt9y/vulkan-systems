@@ -20,8 +20,9 @@ VulkanWrapper, VulkanGPU, VulkanRender, VulkanBVH, VulkanSpatial, VulkanJobs.
 
 ```cpp
 pc::configuration shaders{};
-pc::create(shaders,gbuffer_views); // after Vulkan swapchain and G-buffer
-pc::set_scene(world_ptr);          // shared_ptr<const pc::world>
+pc::presentation_target surface{swapchain_images,swapchain_format,extent};
+pc::create(shaders,gbuffer_views,surface); // after device and G-buffer
+pc::set_scene(world_ptr);                // shared_ptr<const pc::world>
 pc::synchronize_scene();           // only when previous GPU frames are idle
 const pc::targets img=pc::images(image_index);
 // Schedule pc::cloud, pc::gi, pc::lighting, pc::tonemap, pc::present
@@ -37,8 +38,10 @@ generic inputs. To compile the shader files, use `glslangValidator -V` and
 pass each output path in `pc::configuration`. No shaders or point-cloud
 algorithms need to live in the host's source tree.
 
-The implementation maintains one active Vulkan context, uses the host
-swapchain and assumes its four G-buffer formats / material packing match
+The implementation maintains one active Vulkan context. It accepts the
+host's presentation images, format and extent explicitly (no global
+`vk::swapchain::get()` dependency), and assumes the four G-buffer formats
+and material packing match
 the bundled GLSL shaders. Adapting to Metal, D3D12, or different G-buffer
 contracts requires a new backend/shader variation; it is **not** automatically
 cross-API. Exact visual equivalence depends on the host's G-buffer,

@@ -59,6 +59,7 @@ namespace pc
             std::shared_ptr<const world> snapshot;
             std::shared_ptr<const world> incoming;
             configuration shader_paths{};
+            presentation_target output{};
             std::uint32_t light_count=0, point_count=0, vertex_count=0, node_count=0;
             std::uint32_t tile_columns=0, tile_rows=0;
             vk::util::math::vec3 grid_origin{};
@@ -182,7 +183,7 @@ namespace pc
         void compute(vk::CommandBuffer command,const gpu::compute& program,
                      vk::DescriptorSet set,const camera_frame& frame)
         {
-            const auto extent=vk::swapchain::get()->extent;
+            const auto extent=get().output.extent;
             const auto& view=frame;
             const float sy=std::sin(view.yaw),cy=std::cos(view.yaw);
             const float sp=std::sin(view.pitch),cp=std::cos(view.pitch);
@@ -225,12 +226,16 @@ namespace pc
     }
 
     void create(const configuration& shaders,
-                const std::vector<gbuffer>& gbuffers)
+                const std::vector<gbuffer>& gbuffers,
+                const presentation_target& output)
     {
         auto& data = get();
         data.shader_paths=shaders;
-        if(gbuffers.size()!=vk::swapchain::get()->images.size())
-            throw std::invalid_argument("pc G-buffer frame count mismatch");
+        if(output.images.empty() || output.format==vk::Format::eUndefined ||
+           !output.extent.width || !output.extent.height ||
+           gbuffers.size()!=output.images.size())
+            throw std::invalid_argument("pc presentation/G-buffer mismatch");
+        data.output=output;
         const auto device = vk::device::get()->handle;
         try
         {
@@ -243,15 +248,15 @@ namespace pc
             sampler.addressModeW = vk::SamplerAddressMode::eClampToEdge;
             data.sampler = device.createSampler(sampler);
 
-            const auto count=static_cast<std::uint32_t>(vk::swapchain::get()->images.size());
-            const auto extent=vk::swapchain::get()->extent;
+            const auto count=static_cast<std::uint32_t>(get().output.images.size());
+            const auto extent=get().output.extent;
             data.tile_columns=(extent.width+tile_size-1u)/tile_size;
             data.tile_rows=(extent.height+tile_size-1u)/tile_size;
             data.targets=std::make_unique<::render::postprocess_targets>();
-            data.targets->create(count,vk::swapchain::get()->extent);
+            data.targets->create(count,get().output.extent);
             data.presentation=std::make_unique<::render::presentation_targets>();
-            data.presentation->create(vk::swapchain::get()->images,
-                vk::swapchain::get()->format,vk::swapchain::get()->extent);
+            data.presentation->create(get().output.images,
+                get().output.format,get().output.extent);
             data.cloud_sets=std::make_unique<gpu::descriptors>();
             data.cloud_sets->create(bindings(0,0,vk::ShaderStageFlagBits::eCompute,4),count);
             data.gi_sets=std::make_unique<gpu::descriptors>();
@@ -824,7 +829,7 @@ namespace pc
         if(data.snapshot)
         {
             using namespace vk::util::math;
-            const auto extent=vk::swapchain::get()->extent;
+            const auto extent=get().output.extent;
             const float sy=std::sin(frame.yaw),cy=std::cos(frame.yaw);
             const float sp=std::sin(frame.pitch),cp=std::cos(frame.pitch);
             const vec3 forward{sy*cp,sp,-cy*cp};
@@ -896,7 +901,7 @@ namespace pc
     void present(vk::CommandBuffer command, std::uint32_t image,
                  const overlay_callback& overlay)
     {
-        const auto extent = vk::swapchain::get()->extent;
+        const auto extent = get().output.extent;
         vk::ClearValue clear{};
         clear.color = vk::ClearColorValue(std::array<float, 4>{0, 0, 0, 1});
         vk::RenderPassBeginInfo info{};
