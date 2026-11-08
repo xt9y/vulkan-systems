@@ -1,1 +1,1 @@
-VulkanSpatial: reusable CPU AABB BVH with append, overlap, frustum and bulk-range queries. Depends on VulkanEngine math types. No simulation-specific state.\n
+VulkanSpatial: reusable CPU AABB BVH with append, overlap, frustum and bulk-range queries. Depends on VulkanWrapper math types. No simulation-specific state.\n
