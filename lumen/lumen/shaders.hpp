@@ -29,10 +29,23 @@ vec3 cached_lighting(vec3 position,uint face_id)
     vec2 q=vec2(dot(d,face.u.xyz),dot(d,face.v.xyz));
     vec2 uv=vec2(q.x*face.metric.x+q.y*face.metric.y,
                   q.x*face.metric.y+q.y*face.metric.z);
-    ivec2 card=ivec2(int(face_id%4u),int(face_id/4u));
-    ivec2 pixel=card*CARD_SIZE+
-        ivec2(clamp(uv,vec2(0.0),vec2(.9999))*float(CARD_SIZE));
-    return max(texelFetch(lit_cards,pixel,0).rgb,vec3(0.0));
+    // Bilinear reconstruction INSIDE the 64x64 card. Nearest texel fetches
+    // produced discontinuous reflected radiance across visible surfaces.
+    vec2 texel=clamp(uv*float(CARD_SIZE)-.5,
+                     vec2(0.0),vec2(float(CARD_SIZE-1)));
+    ivec2 base=ivec2(floor(texel));
+    vec2 fraction=fract(texel);
+    ivec2 origin=ivec2(int(face_id%4u),int(face_id/4u))*CARD_SIZE;
+    vec3 result=vec3(0.0);
+    for(int y=0;y<2;y++)
+    for(int x=0;x<2;x++)
+    {
+        ivec2 xy=clamp(base+ivec2(x,y),ivec2(0),ivec2(CARD_SIZE-1));
+        float w=(x==0?1.0-fraction.x:fraction.x)*
+                (y==0?1.0-fraction.y:fraction.y);
+        result+=max(texelFetch(lit_cards,origin+xy,0).rgb,vec3(0.0))*w;
+    }
+    return result;
 }
 #endif
 
@@ -599,14 +612,31 @@ vec3 oct_decode(vec2 e)
 }
 vec3 distant_radiance(vec3 position,vec3 direction)
 {
+    // Trilinear lookup in world space. Nearest-probe lookup caused
+    // abrupt RGB jumps at each 3D grid-cell boundary.
     vec3 coordinate=clamp(
         (position-GRID_MIN)/(GRID_MAX-GRID_MIN)*vec3(PROBE_GRID-1),
-        vec3(0),vec3(PROBE_GRID-1));
-    ivec3 cell=ivec3(round(coordinate));
-    Probe p=probes[cell.x+12*cell.y+96*cell.z];
-    if(p.l0.w<.5)return vec3(0);
-    return max(p.l0.rgb+p.lx.rgb*direction.x+
-               p.ly.rgb*direction.y+p.lz.rgb*direction.z,vec3(0));
+        vec3(0.0),vec3(PROBE_GRID-1)-vec3(.001));
+    ivec3 base=ivec3(floor(coordinate));
+    vec3 fraction=fract(coordinate);
+    vec3 value=vec3(0.0);
+    float sum=0.0;
+    for(int z=0;z<2;z++)
+    for(int y=0;y<2;y++)
+    for(int x=0;x<2;x++)
+    {
+        ivec3 cell=base+ivec3(x,y,z);
+        Probe p=probes[cell.x+12*cell.y+96*cell.z];
+        if(p.l0.w<.5)continue;
+        float w=(x==0?1.0-fraction.x:fraction.x)*
+                (y==0?1.0-fraction.y:fraction.y)*
+                (z==0?1.0-fraction.z:fraction.z);
+        value+=max(p.l0.rgb+p.lx.rgb*direction.x+
+                   p.ly.rgb*direction.y+p.lz.rgb*direction.z,
+                   vec3(0.0))*w;
+        sum+=w;
+    }
+    return sum>1.e-5?value/sum:vec3(0.0);
 }
 bool screen_hit(vec3 origin,vec3 direction,float limit,
                 uint receiver,out vec3 radiance)
@@ -697,6 +727,9 @@ void main()
     uint frame=uint(camera.trace_parameters.w);
     vec3 integrated=vec3(0);
     float total_weight=0.0;
+    float confidence_sum=0.0;
+    int rays=int(clamp(camera.trace_parameters.y,1.0,8.0));
+    int start=(int(frame)*rays)%64;
     for(int i=0;i<64;i++)
     {
         ivec2 octant=ivec2(i%8,i/8);
@@ -705,34 +738,96 @@ void main()
         vec3 direction=oct_decode(uv);
         float cosine=max(dot(normal,direction),0.0);
         if(cosine<=0.0)continue;
-        vec4 old=vec4(0);
-        if(reuse)old=imageLoad(screen_directions,atlas_pixel);
-        vec3 Li=old.a>.5?old.rgb:distant_radiance(position,direction);
+        vec4 old=reuse?imageLoad(screen_directions,atlas_pixel):vec4(0);
         float count=old.a;
-        int rays=int(clamp(camera.trace_parameters.y,1.0,8.0));
-        int start=(int(frame)*rays)%64;
+        vec3 mean=old.rgb;
         if(((i-start+64)%64)<rays)
         {
+            // Jitter *inside* each octahedral bin. Previously each frame
+            // retraced exactly the same direction, so history never
+            // reduced angular aliasing or high-energy emitter fireflies.
+            uint h=uint(tile.x)*1664525u ^ uint(tile.y)*1013904223u ^
+                   uint(i)*747796405u ^ frame*2891336453u;
+            h^=h>>16; h*=2246822519u; h^=h>>13;
+            float rx=float(h&65535u)/65536.0;
+            float ry=float((h>>16)&65535u)/65536.0;
+            vec2 jitter=(vec2(rx,ry)-.5)*(.23);
+            vec3 sample_direction=oct_decode(clamp(uv+jitter,vec2(-.999),vec2(.999)));
             vec3 fresh=directional_radiance(position+normal*.012,
-                         direction,clamp(camera.trace_parameters.x,.5,8.0),id);
+                         sample_direction,clamp(camera.trace_parameters.x,.5,8.0),id);
+            // Reprojected directional samples are accumulated in probe space,
+            // not in full-resolution screen pixels.
             count=min(count+1.0,24.0);
-            Li=mix(Li,fresh,1.0/count);
+            mean+= (fresh-mean)/count;
         }
-        imageStore(screen_directions,atlas_pixel,vec4(Li,count));
-        // Octahedral solid-angle Jacobian and cosine Lambertian weighting.
-        float area=pow(abs(direction.x)+abs(direction.y)+abs(direction.z),3.0);
-        float weight=cosine*area;
+        imageStore(screen_directions,atlas_pixel,vec4(mean,count));
+
+        // Treat low-sample bins as low-confidence observations. World
+        // radiance acts as a prior until enough ray samples arrive.
+        vec3 prior=distant_radiance(position,direction);
+        float confidence=count/(count+8.0);
+        vec3 Li=mix(prior,mean,confidence);
+        float jacobian=pow(abs(direction.x)+abs(direction.y)+abs(direction.z),3.0);
+        float weight=cosine*jacobian;
         integrated+=Li*weight;
         total_weight+=weight;
+        confidence_sum+=confidence*weight;
     }
     vec3 incoming=total_weight>0.0?integrated/total_weight:vec3(0);
     vec3 base=indirect_irradiance(position,normal);
     vec3 albedo=cached_albedo(position,id-1u);
-    // Both terms are hemispherically integrated incoming radiance (E/pi),
-    // unlike the former arbitrary one-ray radiance minus irradiance.
-    vec3 delta=(incoming-base)*albedo;
+    // Correct the cached irradiance only as directional coverage becomes
+    // established; newly exposed surface probes don't flash at full gain.
+    float coverage=total_weight>0.0?confidence_sum/total_weight:0.0;
+    vec3 delta=(incoming-base)*albedo*coverage;
     imageStore(screen_meta,tile,vec4(position,view_z));
     imageStore(screen_gather,tile,vec4(delta,float(id)));
+}
+)glsl";
+
+
+inline constexpr const char* screen_filter_comp=R"glsl(#version 450
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+layout(set=0,binding=0) uniform sampler2D raw_gather;
+layout(set=0,binding=1) uniform sampler2D screen_meta;
+layout(rgba16f,set=0,binding=2) writeonly uniform image2D filtered_gather;
+void main()
+{
+    ivec2 tile=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size=imageSize(filtered_gather);
+    if(any(greaterThanEqual(tile,size)))return;
+    vec4 center=texelFetch(raw_gather,tile,0);
+    vec4 geometry=texelFetch(screen_meta,tile,0);
+    if(center.a<.5)
+    {
+        imageStore(filtered_gather,tile,vec4(0));
+        return;
+    }
+
+    // Filter *lighting probes* before full-resolution reconstruction,
+    // respecting material identity and world-space hit distance.
+    vec3 color=vec3(0.0);
+    float sum=0.0;
+    float radius=max(.22,.085*geometry.w);
+    for(int y=-1;y<=1;y++)
+    for(int x=-1;x<=1;x++)
+    {
+        ivec2 neighbor=tile+ivec2(x,y);
+        if(any(lessThan(neighbor,ivec2(0))) ||
+           any(greaterThanEqual(neighbor,size)))continue;
+        vec4 l=texelFetch(raw_gather,neighbor,0);
+        if(abs(l.a-center.a)>.1)continue;
+        vec4 g=texelFetch(screen_meta,neighbor,0);
+        float dist=distance(g.xyz,geometry.xyz);
+        if(dist>radius*2.0)continue;
+        float spatial=exp(-float(x*x+y*y)*.5);
+        float geometric=exp(-dist*dist/(2.0*radius*radius));
+        float w=spatial*geometric;
+        color+=l.rgb*w;
+        sum+=w;
+    }
+    imageStore(filtered_gather,tile,
+               vec4(sum>0.0?color/sum:center.rgb,center.a));
 }
 )glsl";
 
