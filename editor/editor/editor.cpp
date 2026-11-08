@@ -195,9 +195,10 @@ namespace editor
 
         if(menu_==menu::insert)
         {
-            if(events.up)selected_row_=std::max(0,selected_row_-1);
+            const int jump=events.shift?10:1;
+            if(events.up)selected_row_=std::max(0,selected_row_-jump);
             if(events.down)selected_row_=std::min(
-                std::max(0,int(catalog_.size())-1),selected_row_+1);
+                std::max(0,int(catalog_.size())-1),selected_row_+jump);
             if(events.enter && !catalog_.empty())
             {
                 pending_.push_back({action_kind::insert,
@@ -213,9 +214,10 @@ namespace editor
                 int(it->second.size()):0;
             // The Delete field is always the last inspector entry. It is
             // built into VulkanEditor, not part of host property schemas.
-            if(events.up)selected_row_=std::max(0,selected_row_-1);
+            const int jump=events.shift?10:1;
+            if(events.up)selected_row_=std::max(0,selected_row_-jump);
             if(events.down)selected_row_=std::min(
-                property_count,selected_row_+1);
+                property_count,selected_row_+jump);
             if(events.left || events.right)
             {
                 if(selected_row_==property_count)
