@@ -15,6 +15,7 @@ namespace editor
     {
         bool question=false,tab=false,enter=false,escape=false;
         bool up=false,down=false,left=false,right=false,click=false;
+        bool mouse_down=false; // Held button for dragging floating panels
         int mouse_x=0,mouse_y=0;
         int viewport_width=0,viewport_height=0; // Framebuffer pixel coordinates
     };
@@ -57,9 +58,11 @@ namespace editor
     struct color { float r=1,g=1,b=1,a=1; };
     struct draw_command
     {
-        enum class type { rectangle,text } kind=type::rectangle;
+        // Geometry matches Hell2024's 960x540 PRESENT_WIDTH/HEIGHT canvas.
+        enum class type { rectangle,text,image } kind=type::rectangle;
+        enum class texture { menu_bg,border_horizontal,border_vertical,corner_tl,corner_tr,corner_bl,corner_br,light_icon } image=texture::menu_bg;
         enum class alignment { left,center,right } text_alignment=alignment::left;
-        int x=0,y=0,width=0,height=0,scale=2;
+        int x=0,y=0,width=0,height=0,scale=1;
         color tint{};
         std::string text;
     };
@@ -77,6 +80,8 @@ namespace editor
         void handle(const input& events);
         // Host reports CPU frame presentation interval (not GPU pass time).
         void set_frame_time(double milliseconds);
+        // Original TextBlitter character advances, supplied once by asset loader.
+        void set_font_metrics(std::array<int,128> widths,int line_height=16);
         std::vector<action> take_actions();
         draw_list paint(int width,int height) const;
         bool visible() const;
@@ -90,6 +95,11 @@ namespace editor
         int selected_row_=0;
         mutable int scroll_first_=0;
         double frame_time_ms_=0;
+        std::array<int,128> font_widths_{};
+        int line_height_=16;
+        int menu_x_=60,menu_y_=60;
+        bool dragging_menu_=false;
+        int drag_x_=0,drag_y_=0;
 
         std::uint64_t selected_object_=0;
         std::vector<object_type> catalog_;
