@@ -92,7 +92,7 @@ public:
     system(system&&) noexcept;
     system& operator=(system&&) noexcept;
 
-    // Call after VulkanEngine device/swapchain setup. Compatible with host pass.
+    // Call after VulkanWrapper device/swapchain setup. Compatible with host pass.
     void create(vk::RenderPass presentation_pass, vk::Format presentation_format,
                 vk::Extent2D extent, const settings& options={});
     void resize(vk::RenderPass presentation_pass, vk::Format presentation_format,
