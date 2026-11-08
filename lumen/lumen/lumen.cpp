@@ -1102,6 +1102,7 @@ struct system::implementation {
             barrier.newLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
         }
         cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                            vk::PipelineStageFlagBits::eComputeShader |
                             vk::PipelineStageFlagBits::eFragmentShader,
                             {},{},{},barriers);
         screen_initialized=true;
