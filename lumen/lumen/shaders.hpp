@@ -197,38 +197,37 @@ vec3 area_light_sample(Face lamp,vec3 position,vec3 normal,vec2 uv,
 
 vec3 direct_area_light(vec3 position,vec3 normal,vec3 albedo)
 {
-    Face lamp=faces[FACE_COUNT-1];
-    vec3 radiance=vec3(0.0);
-    int valid_count=0;
-    int visible_count=0;
-
-    // Four rays suffice in fully illuminated or fully shadowed regions.
-    for(int y=0;y<2;y++)
-    for(int x=0;x<2;x++)
+    vec3 total=vec3(0.0);
+    for(int emitter=FACE_COUNT-EMITTER_COUNT;emitter<FACE_COUNT;emitter++)
     {
-        bool valid,visible;
-        vec2 uv=(vec2(x,y)+vec2(.5))*.5;
-        radiance+=area_light_sample(lamp,position,normal,uv,valid,visible);
-        if(valid)valid_count++;
-        if(visible)visible_count++;
-    }
-
-    float sample_count=4.0;
-    if(visible_count>0 && visible_count<valid_count)
-    {
-        // Re-evaluate the penumbra with sixteen fixed stratified emitter
-        // samples. This is deterministic and adds no temporal noise.
-        radiance=vec3(0.0);
-        for(int y=0;y<4;y++)
-        for(int x=0;x<4;x++)
+        Face lamp=faces[emitter];
+        vec3 radiance=vec3(0.0);
+        int valid_count=0,visible_count=0;
+        for(int y=0;y<2;y++)
+        for(int x=0;x<2;x++)
         {
             bool valid,visible;
-            vec2 uv=(vec2(x,y)+vec2(.5))*.25;
-            radiance+=area_light_sample(lamp,position,normal,uv,valid,visible);
+            radiance+=area_light_sample(lamp,position,normal,
+                                        (vec2(x,y)+vec2(.5))*.5,valid,visible);
+            if(valid)valid_count++;
+            if(visible)visible_count++;
         }
-        sample_count=16.0;
+        float samples=4.0;
+        if(visible_count>0 && visible_count<valid_count)
+        {
+            radiance=vec3(0.0);
+            for(int y=0;y<4;y++)
+            for(int x=0;x<4;x++)
+            {
+                bool valid,visible;
+                radiance+=area_light_sample(lamp,position,normal,
+                                            (vec2(x,y)+vec2(.5))*.25,valid,visible);
+            }
+            samples=16.0;
+        }
+        total+=albedo*(radiance/(samples*PI));
     }
-    return albedo*(radiance/(sample_count*PI));
+    return total;
 }
 
 )glsl";
@@ -345,6 +344,7 @@ layout(std430,set=0,binding=0) readonly buffer CornellFaces {
 const float PI=3.14159265358979323846;
 const float EPSILON=0.0015;
 const int FACE_COUNT=16;
+const int EMITTER_COUNT=1;
 const int CARD_SIZE=64;
 const int LIT_CARD_SIZE=128;
 const int CARD_COLUMNS=4;
@@ -422,6 +422,7 @@ layout(std430,set=0,binding=0) readonly buffer CornellFaces {
 };
 layout(rgba8,set=0,binding=1) writeonly uniform image2D cards;
 const int FACE_COUNT=16;
+const int EMITTER_COUNT=1;
 const int CARD_SIZE=64;
 const int CARD_COLUMNS=4;
 
@@ -451,9 +452,11 @@ layout(set=0,binding=3) uniform sampler2D surface_cards;
 const float PI=3.14159265358979323846;
 const float EPSILON=.0015;
 const int FACE_COUNT=16;
+const int EMITTER_COUNT=1;
 const int CARD_SIZE=64;
 const int LIT_CARD_SIZE=128;
 const int CARD_COLUMNS=4;
+const vec3 ENVIRONMENT_RADIANCE=vec3(0.0);
 /* LUMEN_SHARED_TRACING */
 /* LUMEN_SHARED_IRRADIANCE */
 layout(rgba16f,set=0,binding=10) writeonly uniform image2D next_lighting;
@@ -501,9 +504,11 @@ layout(set=0,binding=3) uniform sampler2D surface_cards;
 const float PI=3.14159265358979323846;
 const float EPSILON=0.0015;
 const int FACE_COUNT=16;
+const int EMITTER_COUNT=1;
 const int CARD_SIZE=64;
 const int LIT_CARD_SIZE=128;
 const int CARD_COLUMNS=4;
+const vec3 ENVIRONMENT_RADIANCE=vec3(0.0);
 
 #define LUMEN_LIT_TEXTURE
 /* LUMEN_SHARED_TRACING */
@@ -602,7 +607,8 @@ void main()
         float radial=sqrt(max(0.0,1.0-z*z));
         vec3 direction=vec3(cos(a)*radial,sin(a)*radial,z);
         RayHit hit=trace_scene(origin,direction,20.0,false);
-        vec3 incident=vec3(0.0);
+        vec3 incident=hit.primitive==INVALID && !hit.overflow?
+            ENVIRONMENT_RADIANCE:vec3(0.0);
         if(hit.primitive!=INVALID)
         {
             uint face_id=hit.primitive/2u;
@@ -653,9 +659,11 @@ layout(set=0,binding=3) uniform sampler2D surface_cards;
 const float PI=3.14159265358979323846;
 const float EPSILON=.0015;
 const int FACE_COUNT=16;
+const int EMITTER_COUNT=1;
 const int CARD_SIZE=64;
 const int LIT_CARD_SIZE=128;
 const int CARD_COLUMNS=4;
+const vec3 ENVIRONMENT_RADIANCE=vec3(0.0);
 /* LUMEN_SHARED_TRACING */
 /* LUMEN_SHARED_IRRADIANCE */
 layout(set=0,binding=5) uniform sampler2D scene_color;
@@ -794,10 +802,8 @@ bool screen_hit(vec3 origin,vec3 direction,float limit,
 vec3 scene_radiance(vec3 origin,vec3 direction,float max_distance)
 {
     RayHit hit=trace_scene(origin,direction,max_distance,false);
-    // This demo has no external illumination. Rays escaping the open front
-    // must not receive unrelated local probe radiance.
     if(hit.primitive==INVALID || hit.overflow)
-        return vec3(0.0);
+        return hit.overflow?vec3(0.0):ENVIRONMENT_RADIANCE;
     uint face_id=hit.primitive/2u;
     Face face=faces[face_id];
     if(dot(face.normal.xyz,-direction)<=0.0 ||
@@ -833,13 +839,15 @@ vec3 area_specular(vec3 position,vec3 N,vec3 V,
     vec2 atlas_uv=(vec2(float(face_id%uint(CARD_COLUMNS)),
                         float(face_id/uint(CARD_COLUMNS)))+uv)/float(CARD_COLUMNS);
     vec3 cached=max(textureLod(direct_cards,atlas_uv,0.0).rgb,vec3(0.0));
-    Face lamp=faces[FACE_COUNT-1];
     float a=max(roughness*roughness,.04);
     float a2=a*a;
     float k=(roughness+1.0)*(roughness+1.0)*.125;
     float gv=ndv/max(ndv*(1.0-k)+k,.0001);
     vec3 unshadowed=vec3(0.0);
     vec3 highlight=vec3(0.0);
+    for(int emitter=FACE_COUNT-EMITTER_COUNT;emitter<FACE_COUNT;emitter++)
+    {
+    Face lamp=faces[emitter];
     for(int y=0;y<3;y++)
     for(int x=0;x<3;x++)
     {
@@ -863,6 +871,7 @@ vec3 area_specular(vec3 position,vec3 N,vec3 V,
         float F=.04+.96*pow(1.0-vdh,5.0);
         float brdf=D*gv*gl*F/max(4.0*ndv*ndl,.0001);
         highlight+=energy*brdf;
+    }
     }
     const vec3 luma=vec3(.2126,.7152,.0722);
     float reference=dot(unshadowed,luma);
