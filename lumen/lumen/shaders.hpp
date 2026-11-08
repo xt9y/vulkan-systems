@@ -939,10 +939,10 @@ void main()
     vec3 integrated=vec3(0);
     float total_weight=0.0;
     // Reuse the same directional radiance samples for broad specular.
-    // Smooth mirror reflections require a separate tracing milestone.
+    // Broad specular reuses cache bins; smooth surfaces use one BVH probe ray.
     float roughness=clamp(faces[id-1u].albedo.w,.05,.95);
     bool glossy=roughness<.90;
-    bool smooth=roughness<.40;
+    bool smooth_surface=roughness<.40;
     vec3 reflected=vec3(0.0);
     float fresnel=0.0;
     if(glossy)
@@ -1021,7 +1021,7 @@ void main()
     if(glossy)
     {
         vec3 V=normalize(camera.eye.xyz-position);
-        if(smooth)
+        if(smooth_surface)
         {
             vec3 smooth_li=smooth_reflection(position,normal,reflected,
                                              clamp(camera.trace_parameters.x,.5,16.0));
