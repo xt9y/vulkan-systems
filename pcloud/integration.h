@@ -71,15 +71,14 @@ static C_Target* pc_build_module(C_Build* b,const char* name,
 {
     C_Target* target=c_static_library(b,name);
     char source[1024],base[1024];
-    if(pc_build_join(base,sizeof(base),paths.systems,dir) ||
-       pc_build_join(source,sizeof(source),base,"*.cpp"))
+    if(pc_build_join(base,sizeof(base),paths.systems,dir))
     {
         fprintf(stderr,"pc: systems path too long\n");
         exit(1);
     }
     // e.g. third-party/vulkan-systems/gpu/gpu/*.cpp
-    if(snprintf(source,sizeof(source),"%s/%s/*.cpp",base,dir) >=
-       (int)sizeof(source))exit(1);
+    const int written=snprintf(source,sizeof(source),"%s/%s/*.cpp",base,dir);
+    if(written<0 || (size_t)written>=sizeof(source))exit(1);
     c_sources(target,source);
     pc_build_include_paths(target,paths);
     c_flag(target,"-std=c++17");
