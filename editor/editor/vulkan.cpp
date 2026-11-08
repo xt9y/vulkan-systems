@@ -242,6 +242,11 @@ namespace editor::vulkan
         if(!atlas.ready)
             throw std::logic_error(
                 "VulkanEditor::initialize_font must run before rendering");
+        // The original editor renders at 960x540 and scales its entire UI
+        // to the presentation framebuffer. The old one-pixel implementation
+        // bypassed this transformation and made all text microscopic.
+        const double scale_x=double(extent.width)/960.0;
+        const double scale_y=double(extent.height)/540.0;
         std::vector<vk::ClearRect> batch;
         batch.reserve(1024);
         color current{};
@@ -259,16 +264,18 @@ namespace editor::vulkan
                 1,&attachment,static_cast<std::uint32_t>(batch.size()),batch.data());
             batch.clear();
         };
-        const auto rectangle=[&](int x,int y,int w,int h,color tint)
+        const auto rectangle=[&](double x,double y,double w,double h,color tint)
         {
             if(w<=0 || h<=0)return;
-            const std::int64_t right=std::int64_t(x)+w;
-            const std::int64_t bottom=std::int64_t(y)+h;
-            const int x0=std::max(0,x),y0=std::max(0,y);
-            const int x1=static_cast<int>(std::min<std::int64_t>(
-                extent.width,right));
-            const int y1=static_cast<int>(std::min<std::int64_t>(
-                extent.height,bottom));
+            const auto clip=[&](double v,int limit)
+            {
+                return static_cast<int>(std::clamp(std::lround(v),
+                    0L,static_cast<long>(limit)));
+            };
+            const int x0=clip(x*scale_x,int(extent.width));
+            const int y0=clip(y*scale_y,int(extent.height));
+            const int x1=clip((x+w)*scale_x,int(extent.width));
+            const int y1=clip((y+h)*scale_y,int(extent.height));
             if(x1<=x0 || y1<=y0)return;
             if(!has_color || !same(current,tint))
             {
@@ -293,13 +300,35 @@ namespace editor::vulkan
                 rectangle(item.x,item.y,item.width,item.height,item.tint);
                 continue;
             }
+            if(item.kind==draw_command::type::image)
+            {
+                const auto index=static_cast<std::size_t>(item.image);
+                if(index>=atlas.sprites.size())continue;
+                const auto& sprite=atlas.sprites[index];
+                if(sprite.width<=0 || sprite.height<=0)continue;
+                const double image_x=double(item.width)/sprite.width;
+                const double image_y=double(item.height)/sprite.height;
+                for(const auto& span:sprite.runs)
+                {
+                    const auto rgb=span.rgb;
+                    color tint{
+                        float((rgb>>16)&255u)/255.0f,
+                        float((rgb>>8)&255u)/255.0f,
+                        float(rgb&255u)/255.0f,1.0f};
+                    rectangle(item.x+span.x*image_x,
+                              item.y+span.y*image_y,
+                              span.length*image_x,image_y,tint);
+                }
+                continue;
+            }
+            const int scale=std::clamp(item.scale,1,6);
             int advance=0;
             for(unsigned char letter:item.text)
             {
                 if(letter=='\n')break;
-                if(letter==' '){advance+=6;continue;}
+                if(letter==' '){advance+=6*scale;continue;}
                 const auto& entry=atlas.glyphs[letter<128?letter:0];
-                if(entry.present)advance+=entry.width;
+                if(entry.present)advance+=entry.width*scale;
             }
             int start_x=item.x;
             if(item.text_alignment==draw_command::alignment::center)
@@ -313,21 +342,21 @@ namespace editor::vulkan
                 if(letter=='\n')
                 {
                     pen_x=start_x;
-                    pen_y+=24;
+                    pen_y+=16*scale;
                     continue;
                 }
                 if(letter==' ')
                 {
-                    pen_x+=6;
+                    pen_x+=6*scale;
                     continue;
                 }
                 // Only original font glyphs; no geometric fallback.
                 const auto& entry=atlas.glyphs[letter<128?letter:0];
                 if(!entry.present)continue;
                 for(const auto& span:entry.spans)
-                    rectangle(pen_x+span.x,pen_y+span.y,
-                              span.length,1,item.tint);
-                pen_x+=entry.width;
+                    rectangle(pen_x+span.x*scale,pen_y+span.y*scale,
+                              span.length*scale,scale,item.tint);
+                pen_x+=entry.width*scale;
             }
         }
         flush();
