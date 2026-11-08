@@ -3,6 +3,7 @@
 #include <render/pipeline.hpp>
 #include <gpu/compute.hpp>
 #include <gpu/descriptors.hpp>
+#include <gpu/graph.hpp>
 #include <gpu/resource.hpp>
 #include <bvh/stackless.hpp>
 #include <spatial/bricks.hpp>
@@ -49,6 +50,7 @@ namespace pc
 
         struct state {
             std::vector<frame> frames;
+            std::vector<gpu::graph> frame_graphs;
             vk::Sampler sampler{};
             gpu::owned_buffer lights;
             gpu::owned_buffer triangles;
@@ -225,6 +227,17 @@ namespace pc
         exposure_value.store(std::max(0.0f, exposure), std::memory_order_relaxed);
     }
 
+    void create(const std::vector<gbuffer>& gbuffers,
+                const configuration& shaders)
+    {
+        const auto* swapchain=vk::swapchain::get();
+        if(!swapchain)
+            throw std::logic_error("pc::create requires an initialized VulkanWrapper swapchain");
+        create(shaders,gbuffers,
+               presentation_target{swapchain->images,swapchain->format,
+                                   swapchain->extent});
+    }
+
     void create(const configuration& shaders,
                 const std::vector<gbuffer>& gbuffers,
                 const presentation_target& output)
@@ -312,6 +325,7 @@ namespace pc
             data.neighborhood_indices=gpu::create_buffer(sizeof(std::uint32_t),storage,memory);
 
             data.frames.reserve(count);
+            data.frame_graphs.resize(count);
             for(std::uint32_t i=0;i<count;++i)
             {
                 data.frames.emplace_back();
@@ -731,6 +745,9 @@ namespace pc
             data.lighting_sets->write_buffer(i,8,vk::buffer::descriptor(data.nodes));
         }
         data.snapshot=source;
+        // The scene update can replace grid images and point buffers.
+        // The caller already guaranteed all old GPU submissions are idle.
+        for(auto& graph:data.frame_graphs)graph.clear_states();
         for(auto& frame:data.frames)frame.dirty=true;
     }
 
@@ -744,6 +761,7 @@ namespace pc
             frame.grid_view=vk::ImageView{};
         }
         data.frames.clear();
+        data.frame_graphs.clear();
         data.cloud_program.reset();
         data.gi_program.reset();
         data.lighting_program.reset();
@@ -905,5 +923,68 @@ namespace pc
         graphics.draw(triangle, surface);
         if(overlay)overlay(command,extent);
         graphics.end_pass();
+    }
+
+    void record(vk::CommandBuffer command,std::uint32_t image,
+                const camera_frame& camera,const overlay_callback& overlay)
+    {
+        auto& state=get();
+        if(!command || image>=state.frame_graphs.size())
+            throw std::invalid_argument("pc::record invalid command or image index");
+
+        const auto resources=images(image);
+        const vk::ImageSubresourceRange color{
+            vk::ImageAspectFlagBits::eColor,0,1,0,1
+        };
+        const auto compute_stage=vk::PipelineStageFlagBits::eComputeShader;
+        const auto shader_read=vk::AccessFlagBits::eShaderRead;
+        const auto shader_write=vk::AccessFlagBits::eShaderWrite;
+        auto& graph=state.frame_graphs[image];
+        graph.clear_passes();
+        try
+        {
+            graph.add("pc.cloud",{
+                gpu::access::for_buffer(resources.points,compute_stage,
+                                        shader_write,true)},
+                [image](vk::CommandBuffer cmd){cloud(cmd,image);});
+            graph.add("pc.gi",{
+                gpu::access::for_buffer(resources.points,compute_stage,
+                                        shader_read,false),
+                gpu::access::for_image(resources.grid,color,
+                    vk::ImageLayout::eGeneral,compute_stage,shader_write,true)},
+                [image](vk::CommandBuffer cmd){gi(cmd,image);});
+            graph.add("pc.lighting",{
+                gpu::access::for_image(resources.grid,color,
+                    vk::ImageLayout::eGeneral,compute_stage,shader_read,false),
+                gpu::access::for_image(resources.hdr,color,
+                    vk::ImageLayout::eGeneral,compute_stage,shader_write,true)},
+                [image,camera](vk::CommandBuffer cmd){
+                    lighting(cmd,image,camera);
+                });
+            graph.add("pc.tonemap",{
+                gpu::access::for_image(resources.hdr,color,
+                    vk::ImageLayout::eGeneral,compute_stage,shader_read,false),
+                gpu::access::for_image(resources.ldr,color,
+                    vk::ImageLayout::eGeneral,compute_stage,shader_write,true)},
+                [image,camera](vk::CommandBuffer cmd){
+                    tonemap(cmd,image,camera);
+                });
+            graph.add("pc.present",{
+                gpu::access::for_image(resources.ldr,color,
+                    vk::ImageLayout::eGeneral,
+                    vk::PipelineStageFlagBits::eFragmentShader,
+                    shader_read,false)},
+                [image,&overlay](vk::CommandBuffer cmd){
+                    present(cmd,image,overlay);
+                });
+            graph.execute(command);
+        }
+        catch(...)
+        {
+            graph.clear_passes();
+            graph.clear_states();
+            throw;
+        }
+        graph.clear_passes();
     }
 }
