@@ -1,0 +1,15 @@
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set=0,binding=0) uniform sampler2D hdr;
+layout(rgba8, set=0,binding=1) writeonly uniform image2D ldr;
+layout(push_constant) uniform Controls { float exposure; } pc;
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, imageSize(ldr)))) return;
+    vec3 color = max(texelFetch(hdr, p, 0).rgb * pc.exposure, vec3(0.0));
+    // Stable monotonic mapping in linear light; swapchain handles sRGB output.
+    color = color / (1.0 + color);
+    imageStore(ldr, p, vec4(clamp(color, 0.0, 1.0), 1.0));
+}

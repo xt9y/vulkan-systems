@@ -1,0 +1,143 @@
+#version 450
+layout(local_size_x=4,local_size_y=4,local_size_z=4) in;
+
+// Port of Rogue's propogate_light.comp: radiance from visible surface
+// points, stored on the same 0.2-unit uniform 3D probe lattice.
+layout(rgba16f,set=0,binding=0) writeonly uniform image3D grid;
+struct CloudPoint {
+    vec4 position;
+    vec4 normal;
+    vec4 radiance;
+};
+layout(std430,set=0,binding=1) readonly buffer Points { CloudPoint points[]; };
+layout(std430,set=0,binding=2) readonly buffer Geometry { vec4 vertices[]; };
+// Matches VulkanBVH's tightly packed 32-byte std430 node.
+struct ShadowNode {
+    vec3 minimum;
+    uint next;
+    vec3 maximum;
+    uint first_and_count; // high 28 bits: triangle start; low 4: count
+};
+layout(std430,set=0,binding=3) readonly buffer ShadowTree { ShadowNode nodes[]; };
+struct Light {
+    vec4 position_range;
+    vec4 color_intensity;
+};
+layout(std430,set=0,binding=4) readonly buffer Lights { Light lights[]; };
+// Per-brick candidate lists supplied by VulkanSpatial. Each source ID appears
+// in its original order; a sentinel enables the exact full-scan fallback.
+layout(std430,set=0,binding=5) readonly buffer BrickOffsets { uint offsets[]; };
+layout(std430,set=0,binding=6) readonly buffer BrickIndices { uint candidates[]; };
+layout(push_constant) uniform Settings {
+    uint point_count;
+    uint vertex_count;
+    uint node_count;
+    uint light_count;
+    vec4 grid_origin_spacing;
+} pc;
+
+bool triangle_hit(vec3 origin,vec3 ray,float far_distance,vec3 a,vec3 e1,vec3 e2)
+{
+    vec3 p=cross(ray,e2);
+    float det=dot(e1,p);
+    if(det<=0.00001)return false; // Legacy: ignore back faces.
+    float inverse=1.0/det;
+    vec3 t=origin-a;
+    float u=dot(t,p)*inverse;
+    if(u<0.0 || u>1.0)return false;
+    vec3 q=cross(t,e1);
+    float v=dot(ray,q)*inverse;
+    if(v<0.0 || u+v>1.0)return false;
+    float distance=dot(e2,q)*inverse;
+    return distance>0.001 && distance<far_distance;
+}
+bool shadow_box(vec3 origin,vec3 inverse_direction,float distance,ShadowNode node)
+{
+    vec3 p=(node.minimum-origin)*inverse_direction;
+    vec3 q=(node.maximum-origin)*inverse_direction;
+    vec3 lo=min(p,q),hi=max(p,q);
+    float t0=max(max(lo.x,lo.y),max(lo.z,0.0));
+    float t1=min(min(hi.x,hi.y),min(hi.z,distance));
+    return t0<=t1;
+}
+
+bool any_hit(vec3 origin,vec3 ray,float distance)
+{
+    uint total=min(pc.node_count,uint(nodes.length()));
+    uint vertex_count=min(pc.vertex_count,uint(vertices.length()));
+    if(total==0u || vertex_count==0u || distance<=0.001)return false;
+    vec3 safe=vec3(
+        abs(ray.x)<1e-7?(ray.x<0.0?-1e-7:1e-7):ray.x,
+        abs(ray.y)<1e-7?(ray.y<0.0?-1e-7:1e-7):ray.y,
+        abs(ray.z)<1e-7?(ray.z<0.0?-1e-7:1e-7):ray.z);
+    vec3 inverse_direction=1.0/safe;
+    uint index=0u;
+    while(index<total)
+    {
+        ShadowNode node=nodes[index];
+        if(!shadow_box(origin,inverse_direction,distance,node))
+        {
+            index=max(node.next,index+1u);
+            continue;
+        }
+        if((node.first_and_count & 15u)>0u)
+        {
+            uint first=(node.first_and_count >> 4u), end=min(first+(node.first_and_count & 15u),vertex_count/3u);
+            for(uint i=first;i<end;++i)
+            {
+                uint v=i*3u;
+                if(triangle_hit(origin,ray,distance,
+                    vertices[v].xyz,vertices[v+1u].xyz,vertices[v+2u].xyz))
+                    return true;
+            }
+        }
+        ++index;
+    }
+    return false;
+}
+void main()
+{
+    ivec3 cell=ivec3(gl_GlobalInvocationID.xyz);
+    if(any(greaterThanEqual(cell,imageSize(grid))))return;
+    vec3 position=pc.grid_origin_spacing.xyz+
+                  vec3(cell)*pc.grid_origin_spacing.w;
+    const float max_distance=2.6; // Rogue's original probe range
+    bool near_light=false;
+    for(uint i=0u;i<min(pc.light_count,uint(lights.length()));++i)
+    {
+        float reach=lights[i].position_range.w+max_distance;
+        if(lights[i].color_intensity.w>0.0 &&
+           dot(position-lights[i].position_range.xyz,
+               position-lights[i].position_range.xyz)<=reach*reach)
+        {
+            near_light=true;
+            break;
+        }
+    }
+    if(!near_light)
+    {
+        imageStore(grid,cell,vec4(0.0));
+        return;
+    }
+    vec3 indirect=vec3(0.0);
+    const bool indexed=offsets[0]!=0xffffffffu;
+    ivec3 brick=cell/4;
+    ivec3 brick_dims=(imageSize(grid)+3)/4;
+    uint brick_index=uint((brick.z*brick_dims.y+brick.y)*brick_dims.x+brick.x);
+    uint first=indexed?offsets[brick_index]:0u;
+    uint last=indexed?offsets[brick_index+1u]:pc.point_count;
+    for(uint candidate=first;candidate<last;++candidate)
+    {
+        uint i=indexed?candidates[candidate]:candidate;
+        vec3 value=points[i].radiance.rgb;
+        if(dot(value,value)<=0.0)continue;
+        vec3 delta=position-points[i].position.xyz;
+        float distance=length(delta);
+        if(distance<=0.02 || distance>=max_distance)continue;
+        vec3 ray=delta/distance;
+        if(dot(points[i].normal.xyz,ray)<=0.0)continue;
+        if(!any_hit(points[i].position.xyz+ray*0.003,ray,distance-0.006))
+            indirect+=value/distance;
+    }
+    imageStore(grid,cell,vec4(indirect/40.0,1.0));
+}

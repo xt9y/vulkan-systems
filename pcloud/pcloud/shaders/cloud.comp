@@ -1,0 +1,115 @@
+#version 450
+layout(local_size_x=64) in;
+
+// Port of Rogue's point_cloud.comp: surface samples and triangle visibility.
+struct CloudPoint {
+    vec4 position;
+    vec4 normal;
+    vec4 radiance;
+};
+struct Light {
+    vec4 position_range;
+    vec4 color_intensity;
+};
+layout(std430,set=0,binding=0) buffer Points { CloudPoint points[]; };
+layout(std430,set=0,binding=1) readonly buffer Geometry { vec4 vertices[]; };
+layout(std430,set=0,binding=2) readonly buffer Lights { Light lights[]; };
+// Matches VulkanBVH's tightly packed 32-byte std430 node.
+struct ShadowNode {
+    vec3 minimum;
+    uint next;
+    vec3 maximum;
+    uint first_and_count; // high 28 bits: triangle start; low 4: count
+};
+layout(std430,set=0,binding=3) readonly buffer ShadowTree { ShadowNode nodes[]; };
+layout(push_constant) uniform Counts {
+    uint point_count;
+    uint vertex_count;
+    uint light_count;
+    uint node_count;
+} pc;
+
+bool triangle_hit(vec3 origin,vec3 ray,float far_distance,vec3 a,vec3 e1,vec3 e2)
+{
+    vec3 p=cross(ray,e2);
+    float det=dot(e1,p);
+    if(abs(det)<0.00001)return false;
+    float inverse=1.0/det;
+    vec3 t=origin-a;
+    float u=dot(t,p)*inverse;
+    if(u<0.0 || u>1.0)return false;
+    vec3 q=cross(t,e1);
+    float v=dot(ray,q)*inverse;
+    if(v<0.0 || u+v>1.0)return false;
+    float distance=dot(e2,q)*inverse;
+    return distance>0.001 && distance<far_distance;
+}
+
+bool shadow_box(vec3 origin,vec3 inverse_direction,float distance,ShadowNode node)
+{
+    vec3 p=(node.minimum-origin)*inverse_direction;
+    vec3 q=(node.maximum-origin)*inverse_direction;
+    vec3 lo=min(p,q),hi=max(p,q);
+    float t0=max(max(lo.x,lo.y),max(lo.z,0.0));
+    float t1=min(min(hi.x,hi.y),min(hi.z,distance));
+    return t0<=t1;
+}
+
+bool any_hit(vec3 origin,vec3 ray,float distance)
+{
+    uint total=min(pc.node_count,uint(nodes.length()));
+    uint vertex_count=min(pc.vertex_count,uint(vertices.length()));
+    if(total==0u || vertex_count==0u || distance<=0.001)return false;
+    vec3 safe=vec3(
+        abs(ray.x)<1e-7?(ray.x<0.0?-1e-7:1e-7):ray.x,
+        abs(ray.y)<1e-7?(ray.y<0.0?-1e-7:1e-7):ray.y,
+        abs(ray.z)<1e-7?(ray.z<0.0?-1e-7:1e-7):ray.z);
+    vec3 inverse_direction=1.0/safe;
+    uint index=0u;
+    while(index<total)
+    {
+        ShadowNode node=nodes[index];
+        if(!shadow_box(origin,inverse_direction,distance,node))
+        {
+            index=max(node.next,index+1u);
+            continue;
+        }
+        if((node.first_and_count & 15u)>0u)
+        {
+            uint first=(node.first_and_count >> 4u), end=min(first+(node.first_and_count & 15u),vertex_count/3u);
+            for(uint i=first;i<end;++i)
+            {
+                uint v=i*3u;
+                if(triangle_hit(origin,ray,distance,
+                    vertices[v].xyz,vertices[v+1u].xyz,vertices[v+2u].xyz))
+                    return true;
+            }
+        }
+        ++index;
+    }
+    return false;
+}
+void main()
+{
+    uint id=gl_GlobalInvocationID.x;
+    if(id>=pc.point_count)return;
+    vec3 origin=points[id].position.xyz;
+    vec3 normal=normalize(points[id].normal.xyz);
+    vec3 color=vec3(0.0);
+    for(uint i=0u;i<pc.light_count;++i)
+    {
+        vec3 to_light=lights[i].position_range.xyz-origin;
+        float distance=length(to_light);
+        float radius=lights[i].position_range.w;
+        if(distance<0.002 || distance>=radius)continue;
+        vec3 direction=to_light/distance;
+        float ndotl=max(dot(normal,direction),0.0);
+        if(ndotl<=0.0)continue;
+        float q=clamp(distance/radius,0.0,1.0);
+        float attenuation=1.0-q*q*(3.0-2.0*q);
+        if(!any_hit(origin+normal*0.004,direction,distance-0.008))
+            color+=lights[i].color_intensity.rgb*
+                   lights[i].color_intensity.w*attenuation*ndotl;
+    }
+    points[id].radiance=vec4(color,1.0);
+}
