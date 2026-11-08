@@ -610,16 +610,22 @@ vec3 oct_decode(vec2 e)
         v.xy=(1.0-abs(v.yx))*sign(v.xy);
     return normalize(v);
 }
-vec3 distant_radiance(vec3 position,vec3 direction)
+struct WorldSample {
+    vec3 l0,lx,ly,lz;
+};
+WorldSample sample_world(vec3 position)
 {
-    // Trilinear lookup in world space. Nearest-probe lookup caused
-    // abrupt RGB jumps at each 3D grid-cell boundary.
+    // Fetch and interpolate just ONCE per screen probe. All 64 directional
+    // bins reuse these SH coefficients instead of performing 8 world-probe
+    // buffer reads per bin.
     vec3 coordinate=clamp(
         (position-GRID_MIN)/(GRID_MAX-GRID_MIN)*vec3(PROBE_GRID-1),
         vec3(0.0),vec3(PROBE_GRID-1)-vec3(.001));
     ivec3 base=ivec3(floor(coordinate));
     vec3 fraction=fract(coordinate);
-    vec3 value=vec3(0.0);
+    WorldSample value;
+    value.l0=vec3(0);value.lx=vec3(0);
+    value.ly=vec3(0);value.lz=vec3(0);
     float sum=0.0;
     for(int z=0;z<2;z++)
     for(int y=0;y<2;y++)
@@ -631,12 +637,22 @@ vec3 distant_radiance(vec3 position,vec3 direction)
         float w=(x==0?1.0-fraction.x:fraction.x)*
                 (y==0?1.0-fraction.y:fraction.y)*
                 (z==0?1.0-fraction.z:fraction.z);
-        value+=max(p.l0.rgb+p.lx.rgb*direction.x+
-                   p.ly.rgb*direction.y+p.lz.rgb*direction.z,
-                   vec3(0.0))*w;
+        value.l0+=p.l0.rgb*w;
+        value.lx+=p.lx.rgb*w;
+        value.ly+=p.ly.rgb*w;
+        value.lz+=p.lz.rgb*w;
         sum+=w;
     }
-    return sum>1.e-5?value/sum:vec3(0.0);
+    if(sum>1.e-5)
+    {
+        value.l0/=sum;value.lx/=sum;value.ly/=sum;value.lz/=sum;
+    }
+    return value;
+}
+vec3 distant_radiance(WorldSample world,vec3 direction)
+{
+    return max(world.l0+world.lx*direction.x+
+               world.ly*direction.y+world.lz*direction.z,vec3(0.0));
 }
 bool screen_hit(vec3 origin,vec3 direction,float limit,
                 uint receiver,out vec3 radiance)
@@ -673,23 +689,25 @@ bool screen_hit(vec3 origin,vec3 direction,float limit,
     }
     return false;
 }
-vec3 scene_radiance(vec3 origin,vec3 direction,float max_distance)
+vec3 scene_radiance(vec3 origin,vec3 direction,float max_distance,
+                    WorldSample world)
 {
     RayHit hit=trace_scene(origin,direction,max_distance,false);
     if(hit.primitive==INVALID || hit.overflow)
-        return distant_radiance(origin,direction);
+        return distant_radiance(world,direction);
     uint face_id=hit.primitive/2u;
     Face face=faces[face_id];
     if(dot(face.normal.xyz,-direction)<=0.0)return vec3(0);
     return cached_lighting(origin+direction*hit.distance,face_id);
 }
 vec3 directional_radiance(vec3 origin,vec3 direction,
-                          float max_distance,uint face_id)
+                          float max_distance,uint face_id,
+                          WorldSample world)
 {
     vec3 result=vec3(0);
     if(screen_hit(origin,direction,max_distance,face_id,result))
         return result;
-    return scene_radiance(origin,direction,max_distance);
+    return scene_radiance(origin,direction,max_distance,world);
 }
 void main()
 {
@@ -716,6 +734,7 @@ void main()
         (forward+camera.right.xyz*ndc.x*camera.projection.x*
          camera.projection.y-camera.up.xyz*ndc.y*camera.projection.x)*view_z;
     vec3 normal=normalize(faces[id-1u].normal.xyz);
+    WorldSample world=sample_world(position);
     bool reuse=false;
     if(camera.trace_parameters.z>.5)
     {
@@ -754,7 +773,7 @@ void main()
             vec2 jitter=(vec2(rx,ry)-.5)*(.23);
             vec3 sample_direction=oct_decode(clamp(uv+jitter,vec2(-.999),vec2(.999)));
             vec3 fresh=directional_radiance(position+normal*.012,
-                         sample_direction,clamp(camera.trace_parameters.x,.5,8.0),id);
+                         sample_direction,clamp(camera.trace_parameters.x,.5,8.0),id,world);
             // Reprojected directional samples are accumulated in probe space,
             // not in full-resolution screen pixels.
             count=min(count+1.0,24.0);
@@ -764,7 +783,7 @@ void main()
 
         // Treat low-sample bins as low-confidence observations. World
         // radiance acts as a prior until enough ray samples arrive.
-        vec3 prior=distant_radiance(position,direction);
+        vec3 prior=distant_radiance(world,direction);
         float confidence=count/(count+8.0);
         vec3 Li=mix(prior,mean,confidence);
         float jacobian=pow(abs(direction.x)+abs(direction.y)+abs(direction.z),3.0);
