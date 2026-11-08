@@ -391,7 +391,7 @@ namespace editor
             const bool selected=i==selected_row_;
             std::string value;
             if(menu_==menu::insert)
-                value=(selected?"> ":"  ")+
+                value=(selected?"  >":"   ")+
                     catalog_[std::size_t(i)].name;
             else
             {
@@ -404,7 +404,7 @@ namespace editor
                 line_height);
         }
 
-        const int start_y=area.y+68;
+        const int start_y=area.y+56;
         const int bottom=area.y+area.h-margin_y;
         int first=std::clamp(scroll_first_,0,rows-1);
         if(selected_row_<first)first=selected_row_;
