@@ -1,110 +1,68 @@
-# VulkanEditor (foundation)
+# VulkanEditor — Hell2024-style editor shell
 
-A reusable, optional level-editor shell. No CSG, no scene ownership, no
-GLFW/SDL dependency, no shaders, no ImGui, no game-specific object types.
+Renderer-independent UI and input state, optional Vulkan sprite rasterizer. No CSG, scene, game objects or render lighting are owned by the editor.
 
-## Visual layout and original HellEngine font
+## Original source
 
-The editor uses one hardcoded dark full-height 464px-wide panel, with a
-centered heading and generous padding. Idle, Insert, and selected-object
-inspector panels share identical geometry. Content wraps to new lines and
-the current selection scrolls into view on Up/Down. Key legends are not
-drawn. The upper-right corner shows FPS and frame time while editor mode is
-visible; the host calls `session::set_frame_time(milliseconds)`.
+The canonical UI is from [Hell2025 commit 7362a3a](https://github.com/livinamuk/Hell2025/tree/7362a3a86cc254ecffdf498c9febae10eefa120b), in its `Hell2024/Hell2024/` folder. Specifically:
 
-The original font in `xt9y/hellengine-bak` consists of 90 separate PNG
-textures under `Rogue/Rogue/res/textures/font/char_*.png`, mapped using
-`Rogue/Rogue/src/Core/TextBlitting.cpp`. The Vulkan overlay can decode those
-files on the CPU with stb_image and rasterize opaque glyph pixels using
-`vkCmdClearAttachments` without shaders, textures, descriptors, or a
-font-atlas pipeline. The exact glyph outlines are retained, but translucent
-edges are thresholded to opaque pixels by this shader-free adapter.
+- `src/Editor/Editor.cpp`: menu row formatting, background, border/corners, selection, drag logic
+- `src/Renderer/TextBlitting.cpp`: original bitmap-font advances, 16px lines, byte-indexed character sheet
+- `res/textures/font/char_1.png` through `char_90.png`: the original bitmap font
+- `res/textures/ui/MenuBG.png`, `MenuBorder*.png`, and `Icon_Light.jpg`: the original menu and world-label images
 
-A host may specify an existing font directory before initializing the font:
+The original UI uses a 960×540 presentation canvas. The Vulkan adapter scales its output to the swapchain framebuffer. There is no permanent sidebar. `?` reveals world labels, while the framed floating menu only appears on Insert or object selection.
 
-```cpp
-editor::vulkan::set_font_directory("assets/hellengine/font");
-```
+Floating menus use the original 200px logical width and 16px row spacing, a centered dashed heading, selection markers (`>` for items, `<value>` for properties), and the actual original textures. The menu height is held to 245 logical pixels in both modes, with selection scrolling, per the host game's requirements.
 
-The `vulkan-game` build script uses a filtered sparse Git checkout
-to fetch only the font directory from the private pinned backup revision into
-`build/editor-font-repository/Rogue/Rogue/res/textures/font`. The local
-GitHub credentials must have access to `xt9y/hellengine-bak`.
+## Controls
 
-The original bitmap font is **mandatory**; there is no built-in font fallback.
-Call `editor::vulkan::initialize_font()` on the initialization thread,
-**before** starting the render thread. It loads and validates all 90 PNG
-files and converts their opaque glyph pixels to cached horizontal spans.
-`record()` only reads those in-memory spans and never touches the filesystem
-or decodes images. Missing or invalid assets cause a clear startup error.
-Set `VULKAN_EDITOR_FONT_SKIP_DOWNLOAD=1` only when the font assets
-already exist or you have configured another directory with
-`editor::vulkan::set_font_directory(...)`.
+- `?`: toggle editor mode; show host-projected world object labels
+- `Tab`: always toggle free/captured cursor
+- `Enter`: open the Insert menu or confirm a selected host-defined item
+- `Up`/`Down`: navigate and scroll menu entries
+- `Left`/`Right`: edit selected object's host-defined property
+- `Escape`: close the current menu without leaving editor mode
+- Left-click a projected label while cursor is free: open its properties
+- Drag menu header with the released mouse cursor to reposition the panel
 
-## Built-in controls
+## Host integration
 
-- **?**: toggle editor/debug mode (host must send the typed question mark,
-  not a layout-dependent physical slash key)
-- **Tab**: toggle cursor freedom globally, even when editor mode is off
-- **Enter**: in editor mode, open Insert; in Insert, emit selected insert request
-- **Up/Down**: select Insert entries or inspector properties
-- **Left/Right**: decrease/increase the highlighted property
-- **Escape**: close the active menu, without leaving editor mode
-- **Left mouse click** while cursor is free: select a projected world label,
-  opening the object's inspector
-
-No types or properties are included by default. The host supplies everything
-that depends on its scene:
+The host supplies all object types, names, labels, property definitions and the handlers for insert/edit commands. These are not hardcoded. For example:
 
 ```cpp
-editor::session& e=editor::instance();
-e.set_catalog({{"light","Light","Lighting"},{"door","Door","Architecture"}});
-e.set_labels({{42,"LIGHT",650,310,true}});
-e.set_properties(42,{
-    {"x","Pos X",editor::property_kind::real,11.49,-1000,1000,0.1},
-    {"radius","Radius",editor::property_kind::real,4.0,0,100,0.25},
-    {"strength","Strength",editor::property_kind::real,1.0,0,100,0.1}
+auto& ui=editor::instance();
+ui.set_catalog({{"light","Light"},{"door","Door"}});
+ui.set_labels({{42,"LIGHT",screen_x,screen_y,true}});
+ui.set_properties(42,{
+    {"radius","Radius",editor::property_kind::real,4.0,0.0,100.0,0.25},
+    {"strength","Strength",editor::property_kind::real,1.0,0.0,100.0,0.1}
 });
-
-// On the UI/main thread, translate platform key-down *edges* and the typed
-// question-mark character into editor::input, including framebuffer pixels:
-e.handle(events);
-for(const auto& command:e.take_actions())
-{
-    // Host maps Insert to create, or Edit to its authoritative property setter.
-    // No scene objects are created by the editor framework itself.
-}
+ui.handle(input_frame);
+for(const auto& change:ui.take_actions()) { /* host updates its scene */ }
 ```
 
-Project 3D entity positions into framebuffer **pixel coordinates** before
-`set_labels`. Hide labels behind the camera/depth if required; object picking
-uses the same 2D label rectangles that the overlay renders. The editor does
-not know what a camera, object transform, light, or material is.
+Label coordinates are framebuffer pixels, converted into the original 960×540 editor canvas by the UI. The host must mark invisible or behind-camera objects as hidden.
 
-To draw, include `<editor/vulkan.hpp>` and call
+## Bitmap font and UI assets
+
+The game build fetches the **exact user-selected Hell2025 revision** by filtered sparse Git checkout, restricted to the font and UI texture directories. Assets live in `build/editor-hell2024/Hell2024/Hell2024/res/textures/`. The original font and all eight UI textures are mandatory; no synthetic fallback font or menu texture is included.
+
+Initialize once on the startup thread, before Vulkan rendering begins:
 
 ```cpp
-editor::vulkan::record(command, e.paint(extent.width,extent.height),extent);
+editor::vulkan::initialize_font();
+editor::instance().set_font_metrics(editor::vulkan::font_metrics(),16);
 ```
 
-**Only call inside an active Vulkan graphics render pass with a color attachment,**
-after the scene has been drawn and before `endRenderPass`. A typical overlay
-pass uses a swapchain render pass that loads its existing color attachment.
-The Vulkan adapter uses `vkCmdClearAttachments` on rectangular glyph pixel
-runs; it has no pipeline/shader/descriptor/texture allocation and is unaffected
-by scene HDR, PBR or postprocessing. The overlay is intentionally **opaque**
-(no alpha blending); it requires a color format that supports ordinary color
-attachment operations. A textured/font-atlas or alpha-composited renderer can
-be added later without changing `editor::session` or `draw_list`.
+This decodes all font and UI textures and caches drawing spans. Neither PNG decoding nor filesystem access occurs during an editor frame. Missing assets cause an explicit startup error.
 
-The host is responsible for cursor capture and gameplay input suppression,
-draining the edit commands, scene synchronization, lifecycle and appropriate
-Vulkan command-buffer/framebuffer ownership. Build independently:
+Draw in the existing presentation render pass, after the scene is tonemapped:
 
-```sh
-cd editor
-c build
+```cpp
+editor::vulkan::record(cmd,ui.paint(extent.width,extent.height),extent);
 ```
 
-`editor::session` and `draw_list` can be used without Vulkan. The packaged
-`VulkanEditor` target includes the optional adapter.
+The default backend uses `vkCmdClearAttachments`, avoiding any dependency on scene shaders, GI, PBR, or render targets. This reproduces the original layout and samples from the actual original textures, but **does not provide the original alpha blending or filtering**. Semi-transparent texture pixels are approximated; a specialized alpha-blended Vulkan backend could later replace only this adapter without rewriting the editor session.
+
+The host remains responsible for input event translation, cursor capture, scene changes, viewport projection and Vulkan synchronization.
