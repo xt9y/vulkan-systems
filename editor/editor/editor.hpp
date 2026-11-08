@@ -43,6 +43,7 @@ namespace editor
         property_kind kind=property_kind::real;
         double value=0,minimum=0,maximum=100,step=1;
         std::vector<std::string> choices;
+        int precision=2; // Exact Hell2024-style numeric precision, host-defined.
     };
 
     enum class action_kind { insert,edit };
