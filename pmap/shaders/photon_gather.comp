@@ -141,7 +141,7 @@ void main()
     vec2 uv=(vec2(pixel)+pm_taa_jitter(uint(camera.eye.w)))/
              vec2(size)*2.0-1.0;
     uv.y=-uv.y;
-    const float FOV=max(camera.up.w,0.001);
+    float FOV=max(camera.up.w,0.001);
     vec3 forward=cross(camera.up.xyz,camera.right.xyz);
     vec3 rd=normalize(forward+camera.right.xyz*uv.x*FOV*
                        (float(size.x)/float(size.y))+
