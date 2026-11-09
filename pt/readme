@@ -1,0 +1,10 @@
+VulkanPT (pt::)
+
+Reusable VulkanWrapper diffuse path tracer with area-light next-event
+sampling, R2 low-discrepancy light rays, multi-bounce transport, Russian
+roulette, jittered rays, FP32 progressive history, geometry-validated
+reprojection, and display-only spatial denoising.
+Public API: pt/pt.hpp. Shader sources: shaders/.
+Accepts independent triangle/quad surfaces, one selected emissive area
+light, camera position/orientation/FOV and render resolution.
+Host owns Vulkan device, commands, presentation and synchronization.
