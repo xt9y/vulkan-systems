@@ -129,7 +129,8 @@ static int pm_build_compile_shaders(pm_build_paths paths,const char* output_dir)
         "photon_clear.comp","photon_emit.comp","photon_bin.comp",
         "photon_prefix.comp","photon_scatter.comp","photon_cache.comp",
         "photon_direct.comp","photon_direct_filter.comp","photon_gather.comp",
-        "photon_temporal.comp","photon_denoise.comp"
+        "photon_temporal.comp","photon_denoise.comp",
+        "fullscreen.vert","present.frag"
     };
     char directory[1024],include_file[1024];
     if(!output_dir || !paths.systems || pm_mkdirs(output_dir) ||
