@@ -70,7 +70,8 @@ bool pm_intersect_face(vec3 ro,vec3 rd,Face f,float limit,
                        float min_t,out float distance)
 {
     float denom=dot(f.normal.xyz,rd);
-    if(denom>=-0.000001)return false;
+    bool optical=f.albedo.w>0.0 || f.emission.w<0.0;
+    if(optical ? abs(denom)<0.000001 : denom>=-0.000001)return false;
     float t=dot(f.origin.xyz-ro,f.normal.xyz)/denom;
     if(t<=min_t || t>=limit)return false;
     vec3 d=ro+rd*t-f.origin.xyz;
