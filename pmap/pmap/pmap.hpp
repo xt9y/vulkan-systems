@@ -91,6 +91,7 @@ namespace pm
         // before recording another frame through the same mapper.
         image_output record(vk::CommandBuffer,const view&);
         image_output output() const;
+        image_output surface_positions() const;
         progress status() const;
         const scene& current_scene() const;
         void destroy();
