@@ -77,7 +77,7 @@ namespace pm
         mapper& operator=(const mapper&)=delete;
 
         // Caller waits for GPU idle before create/resize/set_scene/destroy.
-        void create(const scene&,vk::Extent2D,const configuration&={});
+        void create(const scene&,vk::Extent2D,const configuration& config={});
         void resize(vk::Extent2D);
         void set_scene(const scene&);
         // Reset convergence and camera history without recreating pipelines.
