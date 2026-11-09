@@ -284,11 +284,39 @@ namespace editor::vulkan
             if(batch.size()>=2048)flush();
         };
 
+        const std::array<std::uint64_t,22> light_sign{{
+0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,
+0x001ff7de3e1e1e00ull,0x0013938c630c0c00ull,0x0003838c418c0c00ull,0x0003838c018c0c00ull,0x000383fc018c0c00ull,
+0x0003838c718c0c00ull,0x0003838c618c0c00ull,0x0003838c630c8c00ull,0x0007c7de3e1ffe00ull,0x0000000000000000ull,
+0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull
+        }};
+        const std::array<std::uint64_t,22> cube_sign{{
+0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,
+0x0001fc7ff3e7c000ull,0x000018e6218c6000ull,0x000018c621883000ull,0x000018e621803000ull,0x0000f87e21803000ull,
+0x000018e621803000ull,0x000018c621883000ull,0x000218e623846000ull,0x0003fc7f1f03c000ull,0x0000000000000000ull,
+0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull,0x0000000000000000ull
+        }};
+
         for(const auto& item:commands)
         {
             if(item.kind==draw_command::type::rectangle)
             {
                 rectangle(item.x,item.y,item.width,item.height,item.tint);
+                continue;
+            }
+            if(item.kind==draw_command::type::sign_text) {
+                const auto& rows=item.text=="CUBE"?cube_sign:light_sign;
+                const float sx=float(item.width)/62.f,sy=float(item.height)/22.f;
+                for(int y=0;y<22;++y) {
+                    const auto mask=rows[std::size_t(y)];
+                    for(int x=0;x<62;) {
+                        if(!(mask&(std::uint64_t(1)<<x))){++x;continue;}
+                        const int first=x;
+                        while(x<62&&(mask&(std::uint64_t(1)<<x)))++x;
+                        rectangle(item.x+first*sx,item.y+y*sy,
+                                  (x-first)*sx,sy,item.tint);
+                    }
+                }
                 continue;
             }
             if(item.kind==draw_command::type::image)
@@ -316,6 +344,14 @@ namespace editor::vulkan
                         tint={0.078f+0.22f*luma,
                               0.069f+0.22f*luma,
                               0.104f+0.24f*luma,1.0f};
+                    }
+                    else if(item.image==draw_command::texture::light_icon &&
+                            (item.tint.g<0.99f || item.tint.b<0.99f)) {
+                        const float luminance=0.2126f*tint.r+
+                            0.7152f*tint.g+0.0722f*tint.b;
+                        tint={0.18f+0.62f*luminance,
+                              0.025f+0.12f*luminance,
+                              0.035f+0.14f*luminance,1.f};
                     }
                     else if(item.image!=draw_command::texture::light_icon)
                     {
