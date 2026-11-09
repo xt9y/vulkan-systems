@@ -232,8 +232,8 @@ namespace pm
             cfg=std::move(config);
             world=std::move(input);
             extent=dimensions;
-            atlas={accel.parameters.description[2]*cfg.atlas_tile,
-                   accel.parameters.description[3]*cfg.atlas_tile};
+            atlas.width=accel.parameters.description[2]*cfg.atlas_tile;
+            atlas.height=accel.parameters.description[3]*cfg.atlas_tile;
             photon_capacity=cfg.photons*cfg.bounces;
             node_count=std::uint32_t(accel.nodes.size());
             const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
@@ -265,7 +265,9 @@ namespace pm
             vk::ImageCreateInfo desc{};
             desc.imageType=vk::ImageType::e2D;
             desc.format=vk::Format::eR16G16B16A16Sfloat;
-            desc.extent={extent.width,extent.height,1};
+            desc.extent.width=extent.width;
+            desc.extent.height=extent.height;
+            desc.extent.depth=1;
             desc.mipLevels=desc.arrayLayers=1;
             desc.samples=vk::SampleCountFlagBits::e1;
             desc.tiling=vk::ImageTiling::eOptimal;
@@ -286,7 +288,8 @@ namespace pm
             make_image(temporal);
             make_image(scratch);
             desc.format=vk::Format::eR32G32B32A32Sfloat;
-            desc.extent={atlas.width,atlas.height,1};
+            desc.extent.width=atlas.width;
+            desc.extent.height=atlas.height;
             view.format=desc.format;
             make_image(indirect);
             make_image(direct);
