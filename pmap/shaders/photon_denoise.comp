@@ -1,0 +1,72 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "photon_scene.glsl"
+// Two 3x3, à-trous-inspired bilateral passes with a variance-dependent
+// luminance kernel. Respect first-hit material/normal/position boundaries.
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+layout(rgba16f,set=0,binding=0) uniform writeonly image2D history;
+layout(rgba16f,set=0,binding=12) uniform readonly image2D position_now;
+layout(rgba16f,set=0,binding=17) uniform readonly image2D temporal;
+layout(rgba16f,set=0,binding=18) uniform image2D scratch;
+float luminance(vec3 x) {return dot(x,vec3(.2126,.7152,.0722));}
+vec3 surface_normal(vec4 surface)
+{
+    int id=int(surface.w+0.5)-1;
+    if(id<0)return vec3(0);
+    if(id<int(scene_desc.x))return faces[id].normal.xyz;
+    return normalize(surface.xyz-camera.sphere.xyz);
+}
+vec4 sample_color(ivec2 p,bool second)
+{
+    return second?imageLoad(scratch,p):imageLoad(temporal,p);
+}
+void main()
+{
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size=imageSize(temporal);
+    if(any(greaterThanEqual(p,size)))return;
+    bool second=camera.settings.w>1.5 && camera.settings.w<3.5;
+    bool single=camera.settings.w>3.5;
+    int step_size=second?2:1;
+    vec4 original=sample_color(p,second);
+    vec4 world=imageLoad(position_now,p);
+    if(world.w<0.5)
+    {
+        if(second || single)imageStore(history,p,original);
+        else imageStore(scratch,p,original);
+        return;
+    }
+    vec3 normal=surface_normal(world);
+    float pixel_world=2.0*max(camera.up.w,0.001)*
+                       max(distance(world.xyz,camera.eye.xyz),0.1)/
+                       float(size.y);
+    float sigma_world=max(0.02,pixel_world*float(step_size)*3.0);
+    float sigma_color=max(0.025,sqrt(max(original.a,0.00001))*3.0);
+    vec3 weighted=vec3(0);
+    float sum=0.0;
+    // Separable-style weights (1,2,1) each axis, strong edge rejection.
+    for(int dy=-1;dy<=1;++dy)
+    for(int dx=-1;dx<=1;++dx)
+    {
+        ivec2 q=clamp(p+ivec2(dx,dy)*step_size,ivec2(0),size-1);
+        vec4 neighbor_position=imageLoad(position_now,q);
+        if(abs(neighbor_position.w-world.w)>0.25)continue;
+        vec3 n=surface_normal(neighbor_position);
+        float ndot=max(dot(normal,n),0.0);
+        if(ndot<0.75)continue;
+        vec4 sample_value=sample_color(q,second);
+        float spatial=exp(-distance(world.xyz,neighbor_position.xyz)/
+                           sigma_world);
+        float edge=pow(ndot,24.0);
+        float photometric=exp(-abs(luminance(original.rgb)-
+                                    luminance(sample_value.rgb))/sigma_color);
+        float base=float(dx==0?2:1)*float(dy==0?2:1);
+        float weight=base*spatial*edge*photometric;
+        weighted+=sample_value.rgb*weight;
+        sum+=weight;
+    }
+    vec3 filtered=sum>0.0?weighted/sum:original.rgb;
+    vec4 result=vec4(filtered,original.a);
+    if(second || single)imageStore(history,p,result);
+    else imageStore(scratch,p,result);
+}
