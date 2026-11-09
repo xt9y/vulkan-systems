@@ -1,9 +1,9 @@
 VulkanPMap (pm::)
 
-GPU photon emission, compact-grid indexing, multi-bounce indirect GI,
-glass transport, caustics and progressive irradiance.
-Direct area-light shadows use an adaptive surface atlas; contact edges
-can be refined with progressive per-pixel rays. Edge-aware filtering
-does not contaminate temporal accumulation.
+Progressive GPU photon mapping: diffuse GI, caustics, dielectric sphere,
+compact photon grid, surface irradiance atlas and temporal reconstruction.
+Direct area-light shadows trace per-pixel rays by default; the older
+filtered surface-space shadow cache remains an optional faster mode.
+Geometry-aware HDR output and first-hit positions are returned to the host.
 Public API: pmap/pmap.hpp; shaders: shaders/.
-Host owns VulkanWrapper, command buffers and presentation.
+The host owns VulkanWrapper, command buffers and presentation.
