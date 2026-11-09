@@ -162,19 +162,19 @@ vec3 pm_surface_dielectric(vec3 direction,Hit hit,Face face,inout uint seed)
     float cosine=clamp(dot(-direction,hit.normal),0.0,1.0);
     float r0=(ior-1.0)/(ior+1.0);
     float fresnel=r0*r0+(1.0-r0*r0)*pow(1.0-cosine,5.0);
-    vec3 output=eta*eta*(1.0-cosine*cosine)>1.0 ||
+    vec3 specular_direction=eta*eta*(1.0-cosine*cosine)>1.0 ||
         pm_random(seed)<fresnel ? reflect(direction,hit.normal) :
         refract(direction,hit.normal,eta);
     // Matte transmission spreads specular energy into a small cone.
     float mattness=clamp(face.metric.w,0.0,1.0);
-    return normalize(mix(output,pm_hemisphere(normalize(output),seed),
+    return normalize(mix(specular_direction,pm_hemisphere(normalize(specular_direction),seed),
                          mattness*mattness));
 }
 vec3 pm_surface_conductor(vec3 direction,Hit hit,Face face,inout uint seed)
 {
-    vec3 output=reflect(direction,hit.normal);
+    vec3 specular_direction=reflect(direction,hit.normal);
     float mattness=clamp(face.metric.w,0.0,1.0);
-    return normalize(mix(output,pm_hemisphere(normalize(output),seed),
+    return normalize(mix(specular_direction,pm_hemisphere(normalize(specular_direction),seed),
                          mattness*mattness));
 }
 // Occluded diffuse geometry blocks the light completely. The glass
