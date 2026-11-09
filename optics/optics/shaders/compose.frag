@@ -106,20 +106,30 @@ void main()
     float cosine=clamp(dot(-incoming,N),0.0,1.0);
     float fresnel=.04+.96*pow(1.0-cosine,5.0);
     if(mask.a<.75) {
-        // Thin glass: bend one screen-visible camera ray toward the opaque
-        // scene. The opaque image already excludes transparent surfaces.
-        vec3 T=refract(incoming,N,1.0/1.52);
-        vec2 transmit_uv;
-        bool transmitted=length(T)>0.0 &&
-                         trace_screen(P-N*.018,T,transmit_uv);
-        vec3 transmission=transmitted ?
-            sample_rough(transmit_uv,mattness)*mix(vec3(1),tint.rgb,.25) :
-            texture(lit_image,uv).rgb;
-        color=vec4(mix(transmission+caustic,reflection,fresnel),
-                   clamp(tint.a,0.0,1.0));
+        // A thin dielectric samples the rasterized opaque background in
+        // screen space. This is the primary transmission path, not an
+        // off-screen fallback; all geometry outside the viewport is omitted.
+        const float ior=1.52;
+        vec3 T=refract(incoming,N,1.0/ior);
+        vec4 refracted_clip=camera.vp*vec4(P+T*.30,1.0);
+        vec2 transmit_uv=refracted_clip.xy/max(refracted_clip.w,.00001)*.5+.5;
+        bool transmitted=refracted_clip.w>0.0 &&
+            all(greaterThanEqual(transmit_uv,vec2(0.0))) &&
+            all(lessThan(transmit_uv,vec2(1.0))) &&
+            dot(T,T)>.01;
+        vec3 background=transmitted ?
+            sample_rough(transmit_uv,mattness)+
+                sample_caustic(ivec2(transmit_uv*vec2(textureSize(lit_image,0)))) :
+            vec3(0.0);
+        // At zero pass-through show opaque tinted glass, not an invisible
+        // hole. At one show the refracted image, including receiver caustics.
+        float transmission=clamp(tint.a,0.0,1.0);
+        vec3 glass=mix(tint.rgb,background*mix(vec3(1.0),tint.rgb,.20),
+                       transmission);
+        color=vec4(mix(glass,reflection,fresnel),1.0);
     } else {
-        // Reflective has no environmental fallback. The strength slider
-        // blends only the result of an actual on-screen reflection query.
-        color=vec4(reflection*tint.rgb,clamp(tint.a,0.0,1.0));
+        // Mirrors only show traced on-screen hits, never probes/cubemaps.
+        float strength=clamp(tint.a,0.0,1.0);
+        color=vec4(reflection*tint.rgb,strength);
     }
 }
