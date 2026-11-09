@@ -80,6 +80,10 @@ namespace pm
         void create(const scene&,vk::Extent2D,const configuration& config={});
         void resize(vk::Extent2D);
         void set_scene(const scene&);
+        // Update without rebuilding GPU pipelines. The host must not
+        // change GPU-visible data while its prior submission is in flight.
+        void set_glass(const glass_sphere&);
+        void set_emission(std::uint32_t surface_index,vec3 emission);
         // Reset convergence and camera history without recreating pipelines.
         void invalidate();
         // Records compute only, into the host's active command buffer.
