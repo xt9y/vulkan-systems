@@ -107,6 +107,6 @@ void caustics::reset() noexcept
     if(sampler_)vk::device::get()->handle.destroySampler(sampler_);
     sampler_=nullptr;
     source_={};
-    extent_={};
+    extent_=vk::Extent2D{};
 }
 }
