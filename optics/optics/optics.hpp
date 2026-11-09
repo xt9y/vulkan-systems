@@ -12,6 +12,7 @@ namespace optics {
 struct input {
     vk::ImageView lit{}, opaque_depth{};
     vk::ImageView normal{}, tint{}, material{}, material_depth{};
+    vk::Buffer caustics{};
 };
 struct camera {
     vk::util::math::mat4 view_projection;

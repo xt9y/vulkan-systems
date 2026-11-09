@@ -9,6 +9,9 @@ layout(set=0,binding=2) uniform sampler2D optic_normal;
 layout(set=0,binding=3) uniform sampler2D optic_tint;
 layout(set=0,binding=4) uniform sampler2D optic_material;
 layout(set=0,binding=5) uniform sampler2D optic_depth;
+layout(std430,set=0,binding=6) readonly buffer CausticRadiance {
+    uint caustic_values[];
+};
 layout(push_constant) uniform View {
     mat4 vp;
     vec4 eye, right, up, forward;
@@ -65,11 +68,24 @@ vec3 sample_rough(vec2 coord,float mattness)
 void main()
 {
     vec2 uv=gl_FragCoord.xy/vec2(textureSize(lit_image,0));
+    ivec2 pixel=ivec2(gl_FragCoord.xy);
+    uint offset=uint(pixel.x+pixel.y*textureSize(lit_image,0).x)*3u;
+    vec3 caustic=vec3(caustic_values[offset],
+                       caustic_values[offset+1u],
+                       caustic_values[offset+2u])*(1.0/256.0);
     vec4 mask=texture(optic_normal,uv);
-    if(mask.a<.25)discard;
+    if(mask.a<.25) {
+        if(max(caustic.r,max(caustic.g,caustic.b))<=0.)discard;
+        color=vec4(texture(lit_image,uv).rgb+caustic,1.);
+        return;
+    }
     float surface_depth=texture(optic_depth,uv).r;
     float scene_depth=texture(opaque_depth,uv).r;
-    if(surface_depth>scene_depth+.0003)discard; // occluded by ordinary geometry
+    if(surface_depth>scene_depth+.0003) { // occluded optical material
+        if(max(caustic.r,max(caustic.g,caustic.b))<=0.)discard;
+        color=vec4(texture(lit_image,uv).rgb+caustic,1.);
+        return;
+    }
     vec4 tint=texture(optic_tint,uv);
     float mattness=texture(optic_material,uv).r;
     vec3 N=normalize(mask.rgb*2.0-1.0);

@@ -155,6 +155,7 @@ bool pm_closest(vec3 ro,vec3 rd,float limit,out Hit hit)
 // opaque shadow caster.
 float pm_shadow_visibility(vec3 ro,vec3 rd,float limit)
 {
+    float visibility=1.0;
     uint index=0u;
     for(uint steps=0u;index<camera.config.w && steps<camera.config.w*2u;++steps)
     {
@@ -173,22 +174,31 @@ float pm_shadow_visibility(vec3 ro,vec3 rd,float limit)
             if(face_id>=scene_desc.x)continue;
             float distance;
             if(pm_intersect_face(ro,rd,faces[face_id],limit,
-                                 PM_SHADOW_MIN_T,distance))
-                return 0.0;
+                                 PM_SHADOW_MIN_T,distance)) {
+                Face surface=faces[face_id];
+                if(surface.albedo.w<=0.0)return 0.0;
+                float ior=max(surface.emission.w,1.001);
+                float f0=(ior-1.0)/(ior+1.0);
+                f0*=f0;
+                float c=abs(dot(rd,surface.normal.xyz));
+                float fresnel=f0+(1.0-f0)*pow(1.0-c,5.0);
+                visibility*=surface.albedo.w*(1.0-fresnel);
+                if(visibility<0.0001)return 0.0;
+            }
         }
         index=n.next;
     }
     float radius=camera.sphere.w;
-    if(radius<=0.0)return 1.0;
+    if(radius<=0.0)return visibility;
     vec3 delta=ro-camera.sphere.xyz;
     float b=dot(delta,rd);
     float determinant=b*b-dot(delta,delta)+radius*radius;
-    if(determinant<=0.0)return 1.0;
+    if(determinant<=0.0)return visibility;
     float root=sqrt(determinant);
     float near_t=-b-root,far_t=-b+root;
-    if(far_t<=PM_SHADOW_MIN_T || near_t>=limit)return 1.0;
+    if(far_t<=PM_SHADOW_MIN_T || near_t>=limit)return visibility;
     float thickness=max(0.0,min(far_t,limit)-max(near_t,0.0));
-    if(thickness<=0.0)return 1.0;
+    if(thickness<=0.0)return visibility;
     float cosine=clamp(root/radius,0.0,1.0);
     float ior=max(camera.material.x,1.001);
     float f0=(ior-1.0)/(ior+1.0);
@@ -198,7 +208,7 @@ float pm_shadow_visibility(vec3 ro,vec3 rd,float limit)
     float inside_cosine=sqrt(max(0.0,1.0-eta*eta*
                                  (1.0-cosine*cosine)));
     float leave=f0+(1.0-f0)*pow(1.0-inside_cosine,5.0);
-    return (1.0-enter)*(1.0-leave);
+    return visibility*(1.0-enter)*(1.0-leave);
 }
 vec3 pm_dielectric(vec3 direction,Hit hit,inout uint seed)
 {

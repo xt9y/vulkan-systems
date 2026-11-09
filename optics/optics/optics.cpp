@@ -10,11 +10,12 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
-        std::vector<vk::DescriptorSetLayoutBinding> bindings(6);
-        for(std::uint32_t i=0;i<6;++i) {
+        std::vector<vk::DescriptorSetLayoutBinding> bindings(7);
+        for(std::uint32_t i=0;i<7;++i) {
             bindings[i].binding=i;
             bindings[i].descriptorCount=1;
-            bindings[i].descriptorType=vk::DescriptorType::eCombinedImageSampler;
+            bindings[i].descriptorType=i==6 ? vk::DescriptorType::eStorageBuffer :
+                vk::DescriptorType::eCombinedImageSampler;
             bindings[i].stageFlags=vk::ShaderStageFlagBits::eFragment;
         }
         descriptors_.create(bindings,static_cast<std::uint32_t>(frames.size()));
@@ -62,6 +63,9 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             const std::array<vk::ImageView,6> views{
                 f.lit,f.opaque_depth,f.normal,f.tint,f.material,f.material_depth
             };
+            if(!f.caustics)throw std::invalid_argument("optics: missing caustics buffer");
+            vk::DescriptorBufferInfo irradiance{f.caustics,0,VK_WHOLE_SIZE};
+            descriptors_.write_buffer(i,6,irradiance);
             for(std::uint32_t binding=0;binding<views.size();++binding) {
                 if(!views[binding])throw std::invalid_argument("optics: missing input view");
                 vk::DescriptorImageInfo image{};

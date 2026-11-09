@@ -49,12 +49,17 @@ namespace pm
         std::uint32_t denoise_passes=1,edge_spp=2,screen_spp=2,debug_view=0;
         float photon_radius=.30f;
         bool screen_shadows=true;
+        bool transport_only=false; // avoids fullscreen work and large atlases
     };
     struct progress
     {
         std::uint32_t gi_updates=0,gi_target=0;
         std::uint32_t direct_updates=0,direct_target=0;
         std::uint64_t submitted_frames=0;
+    };
+    struct photon_output {
+        vk::Buffer sorted{},used{};
+        std::uint32_t capacity=0;
     };
     struct image_output
     {
@@ -90,6 +95,10 @@ namespace pm
         // Host submits this buffer exactly once and waits for completion
         // before recording another frame through the same mapper.
         image_output record(vk::CommandBuffer,const view&);
+        // Transport-only: emission, BVH interactions, compact spatial photons.
+        // No camera rays, full-screen gathering, or tonemapping.
+        photon_output record_transport(vk::CommandBuffer);
+        photon_output photon_buffers() const;
         image_output output() const;
         image_output surface_positions() const;
         progress status() const;

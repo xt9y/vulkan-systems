@@ -77,7 +77,10 @@ void main()
         return;
     }
     vec3 radiance=vec3(0);
-    if(!any(greaterThan(face.emission.rgb,vec3(0))))
+    // Dielectrics and conductors transport energy; they are not diffuse
+    // receiver cards in the irradiance atlas.
+    if(face.albedo.w==0.0 && face.emission.w>=0.0 &&
+       !any(greaterThan(face.emission.rgb,vec3(0))))
         radiance=density_estimate(position,face_id,face.albedo.rgb);
     vec3 previous=camera.config.z==0u?
                   vec3(0):imageLoad(atlas,pixel).rgb;
