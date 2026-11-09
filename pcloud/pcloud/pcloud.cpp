@@ -794,6 +794,16 @@ namespace pc
         data = {};
     }
 
+    vk::ImageView ldr_view(std::uint32_t image)
+    {
+        return get().frames.at(image).ldr.view;
+    }
+
+    vk::RenderPass presentation_pass()
+    {
+        return get().presentation->pass();
+    }
+
     targets images(std::uint32_t image)
     {
         const auto& frame = get().frames.at(image);

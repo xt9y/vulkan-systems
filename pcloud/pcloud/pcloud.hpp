@@ -100,6 +100,8 @@ namespace pc
     void set_exposure(float);
     void toggle_probes();
     targets images(std::uint32_t);
+    vk::ImageView ldr_view(std::uint32_t);
+    vk::RenderPass presentation_pass();
     void cloud(vk::CommandBuffer,std::uint32_t);
     void gi(vk::CommandBuffer,std::uint32_t);
     void lighting(vk::CommandBuffer,std::uint32_t,const camera_frame&);

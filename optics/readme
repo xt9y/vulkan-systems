@@ -1,0 +1,17 @@
+VulkanOptics (optics::)
+======================
+
+Reusable Vulkan screen-space material compositor. Draw host-owned
+glass/reflective material targets, then composite inside an active compatible
+presentation render pass. The host owns the rasterizer, masks, G-buffer,
+opaque scene color, and swapchain. No GL/GLFW or Vulkan global scene coupling.
+
+Effects: screen-visible reflection rays, Fresnel glass reflection,
+refraction through the opaque G-buffer, tint, and rough/matte filtering.
+Unresolvable/off-screen reflections produce zero reflection radiance;
+no probe, cubemap, or BVH fallback is used.
+
+Host controls GPU work by skipping the compositor entirely when there are
+no optical materials. Avoid binding the same image as source and destination.
+
+API: optics/optics.hpp; GLSL shader: optics/shaders/compose.frag
