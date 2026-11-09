@@ -37,15 +37,18 @@ void main()
     ivec2 lower=tile_origin,upper=tile_origin+tile-1;
     float uncertainty=sqrt(variance_at(pixel,extent));
     bool penumbra=center.a>.005 && center.a<.995;
-    // Detect contacts/penumbrae from neighbors, even if this particular
-    // texel happened to receive zero or full visibility.
+    float gradient=0.0;
+    // Contact boundaries are discontinuities. Do not smooth a fully
+    // converged occlusion transition as if it were stochastic noise.
     for(int y=-1;y<=1;y++)
     for(int x=-1;x<=1;x++)
     {
         ivec2 q=clamp(pixel+ivec2(x,y),lower,upper);
         vec4 sample_value=imageLoad(direct_atlas,q);
-        if(sample_value.a<0.0 ||
-           abs(sample_value.a-center.a)>.035)penumbra=true;
+        if(sample_value.a<0.0)continue;
+        float contrast=abs(sample_value.a-center.a);
+        gradient=max(gradient,contrast);
+        if(contrast>.035)penumbra=true;
     }
     if(!penumbra && uncertainty<.02)
     {
@@ -58,12 +61,18 @@ void main()
     // This removes stochastic penumbra spikes in surface space, rather
     // than smearing the final camera image across object silhouettes.
     const float taps[5]=float[5](1.0,4.0,6.0,4.0,1.0);
-    float sigma=clamp(.22+3.0*uncertainty,.22,.65);
+    // Reduce the kernel to 3x3 and tighten the visibility threshold at
+    // steep contact edges. A wide 5x5 filter used to visibly enlarge
+    // the dark region beneath Cornell blocks.
+    int radius=gradient>.10?1:2;
+    float sigma=clamp(.13+2.0*uncertainty,.13,.35);
+    if(radius==1)sigma=min(sigma,.18);
     vec3 sum_radiance=vec3(0.0);
     float sum_visibility=0.0,weight_sum=0.0;
     for(int dy=-2;dy<=2;++dy)
     for(int dx=-2;dx<=2;++dx)
     {
+        if(abs(dx)>radius || abs(dy)>radius)continue;
         ivec2 q=clamp(pixel+ivec2(dx,dy),lower,upper);
         vec4 sample_value=imageLoad(direct_atlas,q);
         if(sample_value.a<0.0)continue;
