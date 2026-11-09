@@ -417,7 +417,7 @@ namespace pm
                               camera.up.z-last_up[2]})>1e-10f ||
                  std::abs(half_tan-last_up[3])>1e-6f);
             stable_frames=(moving || !history_valid)?
-                0u:std::min(stable_frames+1u,128u);
+                0u:std::min(stable_frames+1u,512u);
             const std::array<f4,3> previous{
                 previous_valid?last_eye:eye,
                 previous_valid?last_right:right,
@@ -487,7 +487,8 @@ namespace pm
                 filter_shader.settings[3]=2.f;
                 denoise.dispatch(cmd,gx,gy,1,{set},&filter_shader,sizeof(filter_shader));
             }
-            image_barrier(cmd,history[current],
+            gpu::image& display=cfg.denoise_passes==2u?temporal:scratch;
+            image_barrier(cmd,display,
                  vk::PipelineStageFlagBits::eComputeShader,
                  vk::AccessFlagBits::eShaderWrite,
                  vk::PipelineStageFlagBits::eComputeShader |
@@ -503,7 +504,8 @@ namespace pm
         image_output output() const
         {
             if(!have_output)return {};
-            return {history[current].handle(),history[current].view(),
+            const gpu::image& display=cfg.denoise_passes==2u?temporal:scratch;
+            return {display.handle(),display.view(),
                     extent,vk::ImageLayout::eGeneral};
         }
         progress status() const
