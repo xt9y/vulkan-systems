@@ -25,8 +25,9 @@ over a smooth finite footprint and filtered by the compositor. Photon
 emission is cached until the scene/light/material changes; camera movement
 does not rebuild the photon map.
 
-Limitations: off-screen geometry currently uses per-face base color, not
-the source mesh's sampled texture, and supports up to 16 point lights.
+Limitations: off-screen geometry supports base colors and the generated
+world/checker cube patterns, but not arbitrary imported GLB texture sampling.
+Up to 16 point lights can contribute direct reflected illumination.
 Software BVH reflections are workload-dependent and should be profiled
 when mirror coverage is large.
 

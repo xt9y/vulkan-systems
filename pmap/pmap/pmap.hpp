@@ -24,6 +24,8 @@ namespace pm
         float optical_strength=0.f;
         float roughness=0.f;
         float ior=1.52f;
+        // 0 solid, 1 world-space generated floor, 2 face-local cube checker.
+        std::uint32_t pattern=0;
     };
     // Mark receiver texels hidden behind another surface, e.g. a floor
     // covered by a box top, using projection along receiver normal.

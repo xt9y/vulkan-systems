@@ -121,6 +121,22 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
 {
     OpticsFace f=optics_faces[hit.face_id];
     vec3 albedo=max(f.albedo.rgb,vec3(0.0));
+    if(f.emission.w>.1 && f.emission.w<.75) {
+        if(f.emission.w<.375) {
+            // Same 0.5-metre world-space magenta checker as shd/mesh.frag.
+            ivec2 tile=ivec2(floor(hit.position.xz*2.0));
+            albedo=((tile.x+tile.y)&1)!=0 ?
+                   vec3(1.0,0.0,1.0):vec3(0.0);
+        } else {
+            // Cube editor's four local squares across each material face.
+            vec3 d=hit.position-f.origin.xyz;
+            vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
+            vec2 uv=vec2(q.x*f.metric.x+q.y*f.metric.y,
+                          q.x*f.metric.y+q.y*f.metric.z);
+            ivec2 tile=ivec2(floor(uv*4.0));
+            albedo*=((tile.x+tile.y)&1)!=0?1.0:.08;
+        }
+    }
     vec3 radiance=max(f.emission.rgb,vec3(0.0))+
                   optics_photon_radiance(hit,albedo);
     vec3 normal=hit.normal;
