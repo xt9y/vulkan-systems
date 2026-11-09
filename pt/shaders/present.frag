@@ -1,7 +1,7 @@
 #version 450
 layout(location=0) out vec4 out_color;
-layout(rgba16f,set=0,binding=4) uniform readonly image2D display_image;
-layout(rgba16f,set=0,binding=2) uniform readonly image2D hit_position;
+layout(rgba16f,set=0,binding=0) uniform readonly image2D display_image;
+layout(rgba16f,set=0,binding=1) uniform readonly image2D hit_position;
 layout(push_constant) uniform Display {vec4 screen;} view;
 
 ivec2 safe_pixel(ivec2 p)
