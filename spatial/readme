@@ -1,1 +1,5 @@
-VulkanSpatial: reusable CPU AABB BVH with append, overlap, frustum and bulk-range queries. Depends on VulkanWrapper math types. No simulation-specific state.\n
+VulkanSpatial
+
+CPU spatial AABB BVH, range/overlap/frustum queries and bricked
+neighborhood candidate indexes.
+Public headers: spatial/index.hpp, spatial/bricks.hpp.

@@ -1,16 +1,51 @@
 #include <cbuild.h>
 #include <stdio.h>
-#include "integration.h"
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
 
-// Standalone build of pc:: inside vulkan-systems. The game uses the same
-// source directly through its checked-in Git submodule instead.
+static void compile_shaders(void)
+{
+#ifdef _WIN32
+    _mkdir("build");
+    _mkdir("build/shaders");
+#else
+    mkdir("build",0755);
+    mkdir("build/shaders",0755);
+#endif
+    static const char* files[]={
+        "cloud.comp","gi.comp","light.comp","tone.comp",
+        "fullscreen.vert","present.frag"
+    };
+    for(size_t i=0;i<sizeof(files)/sizeof(files[0]);++i)
+    {
+        char src[256],dst[256],cmd[768];
+        snprintf(src,sizeof(src),"pcloud/shaders/%s",files[i]);
+        snprintf(dst,sizeof(dst),"build/shaders/pcloud_%s.spv",files[i]);
+        struct stat input,output;
+        if(stat(src,&input)!=0)
+        {
+            fprintf(stderr,"Missing PCloud shader: %s\n",src);
+            exit(1);
+        }
+        if(stat(dst,&output)==0 && output.st_mtime>=input.st_mtime)continue;
+        snprintf(cmd,sizeof(cmd),"glslangValidator -V \"%s\" -o \"%s\"",src,dst);
+        if(system(cmd)!=0)
+        {
+            fprintf(stderr,"PCloud shader failed: %s\n",src);
+            exit(1);
+        }
+    }
+}
+
 void build(C_Build* b)
 {
-    // Standalone development also compiles shaders from the same source
-    // used by VulkanWrapper consumers using pc_build_compile_shaders().
-    const pc_build_paths paths={"..",NULL,NULL,NULL};
-    if(pc_build_compile_shaders(paths,"build/shaders")!=0)exit(1);
-
+    compile_shaders();
     C_Dependency* wrapper=c_git(b,"VulkanWrapper",
         "https://github.com/xt9y/vulkan-wrapper.git",
         "69bae1717dbcb5df838f4fc6de78de50507ed4ac");
@@ -31,7 +66,7 @@ void build(C_Build* b)
     c_sources(pcloud,"pcloud/*.cpp");
 
     C_Target* targets[]={gpu,render,bvh,spatial,jobs,pcloud};
-    for(unsigned int i=0;i<sizeof(targets)/sizeof(targets[0]);++i)
+    for(size_t i=0;i<sizeof(targets)/sizeof(targets[0]);++i)
     {
         C_Target* target=targets[i];
         c_include(target,".");

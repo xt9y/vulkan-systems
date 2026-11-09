@@ -1,35 +1,14 @@
-vulkan-systems | WIP
+vulkan-systems
 
-Reusable independent C++17 Vulkan and CPU modules:
+Independent C++17 VulkanWrapper and CPU modules. Each directory owns its
+source, public .hpp headers, and build.c; there is no combined engine.
 
-  gpu/        VulkanGPU     GPU memory, descriptors, compute and barriers
-  render/     VulkanRender  Frame submission, swapchain rendering, pipelines
-  bvh/        VulkanBVH     GPU BLAS/TLAS and ray-query infrastructure
-  lumen/      VulkanLumen   Lumen-style GI API skeleton (no rendering yet)
-  spatial/    VulkanSpatial CPU index / spatial queries
-  network/    VulkanNetwork Authenticated UDP / DTLS session
-  jobs/       VulkanJobs    CPU job scheduling
-
-There is deliberately NO root build.c or combined VulkanSystems target.
-Each module has its own <module>/build.c, with precisely scoped sources,
-include paths and dependencies. Applications fetch only the needed modules:
-
-  C_Dependency* render=c_git(b,"VulkanRender",
-    "https://github.com/xt9y/vulkan-systems.git","main");
-  c_dep_subdir(render,"render");
-  c_dep_cbuild(render,"VulkanRender",C_TARGET_STATIC_LIBRARY);
-  c_dep_include(render,".");
-
-For render clients, also link VulkanGPU because the render/postprocess module
-uses GPU-managed images. Link users before providers (render, gpu, engine).
-For a Lumen harness, additionally fetch the lumen subdirectory and link
-VulkanLumen; it currently exports no-op create/set_scene/set_gbuffer/
-set_lighting/invalidate/resize/record/compose/result/reset entry points.
-The modules' VulkanWrapper dependencies are defined by their own build.c files.
-
-No game-specific scene serialization, weapons, networking policy, or world
-authority belongs in VulkanGPU, VulkanRender, VulkanBVH, or VulkanLumen.
-
-The shader algorithms needed for Lumen (screen tracing, surface cache, probe
-gather, world radiance cache, reflections and composite) have intentionally
-NOT been implemented. See lumen/readme for the fixed integration contract.
+gpu       GPU buffers, images, descriptors, compute, resource graph
+render    Frame scheduling, targets, pipelines, draw and postprocess
+bvh       GPU BVH and TLAS/BLAS ray traversal
+lumen     Cornell GI: surface cards, probes, reflections
+pcloud    Point-cloud GI, BVH shadows, point-light BRDF, tonemapping
+spatial   CPU spatial BVH and indexed neighborhoods
+network   DTLS-secured datagrams and reliable transport
+jobs      Worker scheduling and main-thread completion
+editor    Editor input/UI and optional Vulkan drawing

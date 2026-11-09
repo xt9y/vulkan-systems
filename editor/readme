@@ -1,0 +1,5 @@
+VulkanEditor
+
+Renderer-independent editor UI, input state, menus, text/sprites and
+optional Vulkan drawing. Includes an editor shell modeled on Hell2024.
+Public headers: editor/editor.hpp and editor/vulkan.hpp.
