@@ -2,6 +2,11 @@
 #include <stdexcept>
 #include <algorithm>
 #include <array>
+#include <gpu/upload.hpp>
+#include <unordered_map>
+#include <cstdint>
+#include <limits>
+#include <cstring>
 #include <cmath>
 #include <vector>
 
@@ -13,11 +18,12 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
-        std::vector<vk::DescriptorSetLayoutBinding> bindings(13);
-        for(std::uint32_t i=0;i<13;++i) {
+        std::vector<vk::DescriptorSetLayoutBinding> bindings(15);
+        for(std::uint32_t i=0;i<15;++i) {
             bindings[i].binding=i;
             bindings[i].descriptorCount=1;
-            bindings[i].descriptorType=i>=6 ? vk::DescriptorType::eStorageBuffer :
+            bindings[i].descriptorType=(i>=6 && i<=13) ?
+                vk::DescriptorType::eStorageBuffer :
                 vk::DescriptorType::eCombinedImageSampler;
             bindings[i].stageFlags=vk::ShaderStageFlagBits::eFragment;
         }
@@ -30,6 +36,9 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         lights_.create(16+16*32,vk::BufferUsageFlagBits::eStorageBuffer,host);
         const std::array<std::uint8_t,16+16*32> empty_lights{};
         lights_.upload(empty_lights.data(),empty_lights.size());
+        face_uv_.create(48,vk::BufferUsageFlagBits::eStorageBuffer,host);
+        const std::array<std::uint8_t,48> empty_uv{};
+        face_uv_.upload(empty_uv.data(),empty_uv.size());
         vk::SamplerCreateInfo sampler_info{};
         sampler_info.magFilter=vk::Filter::eNearest;
         sampler_info.minFilter=vk::Filter::eNearest;
@@ -73,6 +82,7 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             for(std::uint32_t binding=6;binding<=11;++binding)
                 descriptors_.write_buffer(i,binding,empty_.descriptor());
             descriptors_.write_buffer(i,12,lights_.descriptor());
+            descriptors_.write_buffer(i,13,face_uv_.descriptor());
             for(std::uint32_t binding=0;binding<views.size();++binding) {
                 if(!views[binding])throw std::invalid_argument("optics: missing input view");
                 vk::DescriptorImageInfo image{};
@@ -86,6 +96,7 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             }
         }
         frame_count_=static_cast<std::uint32_t>(frames.size());
+        set_textures({},{});
     }catch(...) {reset();throw;}
 }
 void compositor::set_scene(geometry g,const std::vector<light>& lights)
@@ -123,6 +134,128 @@ void compositor::set_scene(geometry g,const std::vector<light>& lights)
     }
     lights_.upload(&packet,sizeof(packet));
 }
+
+void compositor::set_textures(const std::vector<face_uv>& faces,
+                              const std::vector<texture_rgba>& textures)
+{
+    if(!frame_count_)throw std::logic_error("optics: compositor not initialized");
+    // This function must be called while all submissions using the old
+    // atlas/descriptors have completed, as with set_scene().
+    struct placement {std::uint32_t id,x,y,w,h;};
+    std::vector<texture_rgba> inputs;
+    inputs.reserve(textures.size()+1);
+    inputs.push_back({0,1,1,{255,255,255,255}});
+    for(const auto& texture:textures) {
+        if(!texture.id)continue;
+        if(!texture.width || !texture.height ||
+           texture.width>8190 || texture.height>8190 ||
+           std::uint64_t(texture.width)*texture.height*4u!=texture.pixels.size())
+            throw std::invalid_argument("optics: invalid reflection texture");
+        inputs.push_back(texture);
+    }
+    std::uint32_t width=1;
+    for(const auto& x:inputs)
+        while(width<x.width+2)width*=2;
+    std::vector<placement> placed;
+    std::uint32_t height=0;
+    for(;width<=8192;width*=2) {
+        placed.clear();
+        std::uint32_t x=0,y=0,row=0;
+        bool fits=true;
+        for(const auto& texture:inputs) {
+            if(x+texture.width+2>width) {x=0;y+=row;row=0;}
+            if(y+texture.height+2>8192) {fits=false;break;}
+            placed.push_back({texture.id,x,y,texture.width,texture.height});
+            x+=texture.width+2;
+            row=std::max(row,texture.height+2);
+        }
+        if(fits) {
+            height=1;
+            while(height<y+row)height*=2;
+            break;
+        }
+    }
+    if(!height || height>8192 || width>8192)
+        throw std::length_error("optics: reflection texture atlas exceeds 8192 pixels");
+    std::vector<std::uint8_t> pixels(std::size_t(width)*height*4,255);
+    std::unordered_map<std::uint32_t,placement> locations;
+    for(std::size_t i=0;i<inputs.size();++i) {
+        const auto& t=inputs[i];
+        const auto& r=placed[i];
+        if(!locations.emplace(t.id,r).second)
+            throw std::invalid_argument("optics: duplicate scene texture ID");
+        // Duplicate the edge pixels into a 1-pixel gutter. Filtering cannot
+        // leak colors from neighboring atlas entries.
+        for(int py=-1;py<=int(t.height);++py)
+        for(int px=-1;px<=int(t.width);++px) {
+            int sx=std::clamp(px,0,int(t.width)-1);
+            int sy=std::clamp(py,0,int(t.height)-1);
+            std::size_t dst=(std::size_t(r.y+1+py)*width+
+                             std::size_t(r.x+1+px))*4;
+            std::size_t src=(std::size_t(sy)*t.width+std::size_t(sx))*4;
+            std::memcpy(pixels.data()+dst,t.pixels.data()+src,4);
+        }
+    }
+    struct alignas(16) gpu_uv {
+        std::array<float,4> uv01{},uv2_origin{},extent{};
+    };
+    static_assert(sizeof(gpu_uv)==48);
+    std::vector<gpu_uv> mapping(std::max<std::size_t>(faces.size(),1));
+    for(std::size_t i=0;i<faces.size();++i) {
+        const auto& f=faces[i];
+        auto& m=mapping[i];
+        m.uv01={f.a[0],f.a[1],f.b[0],f.b[1]};
+        m.uv2_origin[0]=f.c[0];
+        m.uv2_origin[1]=f.c[1];
+        if(f.texture_id) {
+            auto it=locations.find(f.texture_id);
+            if(it==locations.end())
+                throw std::invalid_argument("optics: reflection face references missing texture");
+            const auto& r=it->second;
+            m.uv2_origin[2]=float(r.x+1)/float(width);
+            m.uv2_origin[3]=float(r.y+1)/float(height);
+            m.extent={float(r.w)/float(width),float(r.h)/float(height),1.f,0.f};
+        }
+    }
+    const auto host=vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent;
+    face_uv_.reset();
+    face_uv_.create(mapping.size()*sizeof(gpu_uv),
+                    vk::BufferUsageFlagBits::eStorageBuffer,host);
+    face_uv_.upload(mapping.data(),mapping.size()*sizeof(gpu_uv));
+    gpu::upload::batch upload;
+    auto image=upload.add_image(pixels.data(),width,height);
+    upload.finish();
+    gpu::upload::retire(true);
+    if(atlas_view_)vk::image_view::destroy(atlas_view_);
+    atlas_view_=nullptr;
+    atlas_.reset();
+    atlas_=image;
+    vk::ImageViewCreateInfo info{};
+    info.image=atlas_.handle;
+    info.viewType=vk::ImageViewType::e2D;
+    info.format=vk::Format::eR8G8B8A8Unorm;
+    info.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
+    atlas_view_=vk::image_view::create(info);
+    if(!atlas_sampler_) {
+        vk::SamplerCreateInfo sampler{};
+        sampler.magFilter=vk::Filter::eLinear;
+        sampler.minFilter=vk::Filter::eLinear;
+        sampler.mipmapMode=vk::SamplerMipmapMode::eNearest;
+        sampler.addressModeU=sampler.addressModeV=sampler.addressModeW=
+            vk::SamplerAddressMode::eClampToEdge;
+        atlas_sampler_=vk::device::get()->handle.createSampler(sampler);
+    }
+    vk::DescriptorImageInfo atlas{};
+    atlas.sampler=atlas_sampler_;
+    atlas.imageView=atlas_view_;
+    atlas.imageLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
+    for(std::uint32_t i=0;i<frame_count_;++i) {
+        descriptors_.write_buffer(i,13,face_uv_.descriptor());
+        descriptors_.write_image(i,14,atlas);
+    }
+}
+
 void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,const camera& view) const
 {
     if(!cmd || !pipeline_.handle() || frame>=frame_count_)
@@ -141,6 +274,12 @@ void compositor::reset() noexcept
     descriptors_.reset();
     empty_.reset();
     lights_.reset();
+    face_uv_.reset();
+    if(atlas_view_)vk::image_view::destroy(atlas_view_);
+    atlas_view_=nullptr;
+    atlas_.reset();
+    if(atlas_sampler_)vk::device::get()->handle.destroySampler(atlas_sampler_);
+    atlas_sampler_=nullptr;
     if(sampler_)vk::device::get()->handle.destroySampler(sampler_);
     sampler_=nullptr;
     frame_count_=0;

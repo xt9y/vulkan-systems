@@ -2,6 +2,7 @@
 #include <vk/vk.hpp>
 #include <gpu/descriptors.hpp>
 #include <gpu/buffer.hpp>
+#include <gpu/resource.hpp>
 #include <render/pipeline.hpp>
 #include <array>
 #include <cstdint>
@@ -17,6 +18,16 @@ struct input {
 struct geometry {
     vk::Buffer faces{},nodes{},triangles{},scene_info{};
     vk::Buffer photons{},offsets{};
+};
+// Per-BVH-face UV triangles stay index-aligned with VulkanPMap surfaces.
+// The texture atlas is built and owned by VulkanOptics, not the game.
+struct face_uv {
+    std::array<float,2> a{},b{},c{};
+    std::uint32_t texture_id=0;
+};
+struct texture_rgba {
+    std::uint32_t id=0,width=0,height=0;
+    std::vector<std::uint8_t> pixels;
 };
 struct light {
     vk::util::math::vec3 position{};
@@ -42,14 +53,18 @@ public:
     // Share the photon mapper's static GPU BVH; the mapper must outlive
     // submitted rendering work. Empty geometry disables off-screen rays.
     void set_scene(geometry,const std::vector<light>&);
+    void set_textures(const std::vector<face_uv>&,
+                      const std::vector<texture_rgba>&);
     void record(vk::CommandBuffer command,std::uint32_t frame,
                 const camera& view) const;
     void reset() noexcept;
 private:
     gpu::descriptors descriptors_;
     render::pipeline pipeline_;
-    gpu::buffer empty_,lights_;
-    vk::Sampler sampler_{};
+    gpu::buffer empty_,lights_,face_uv_;
+    gpu::owned_image atlas_;
+    vk::ImageView atlas_view_{};
+    vk::Sampler sampler_{},atlas_sampler_{};
     vk::PipelineLayout layout_{};
     std::uint32_t frame_count_=0;
 };

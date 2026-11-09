@@ -23,6 +23,17 @@ layout(std430,set=0,binding=12) readonly buffer OpticalLights {
     uvec4 optics_light_count;
     OpticsLight optics_lights[16];
 };
+// A face maps its three source UVs onto a subrectangle of the packed
+// RGBA8 atlas. Face indices match the Photon Mapping BVH exactly.
+struct OpticsUV {
+    vec4 uv01;
+    vec4 uv2_origin;
+    vec4 rect;
+};
+layout(std430,set=0,binding=13) readonly buffer OpticalUV {
+    OpticsUV optics_uv[];
+};
+layout(set=0,binding=14) uniform sampler2D optics_atlas;
 struct OpticsHit {vec3 position,normal;float t;uint face_id;};
 bool optics_aabb(vec3 ro,vec3 rd,vec3 lo,vec3 hi,float max_t)
 {
@@ -137,6 +148,23 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
             albedo*=((tile.x+tile.y)&1)!=0?1.0:.08;
         }
     }
+    OpticsUV mapping=optics_uv[hit.face_id];
+    if(mapping.rect.z>.5) {
+        vec3 d=hit.position-f.origin.xyz;
+        vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
+        vec2 bary=vec2(q.x*f.metric.x+q.y*f.metric.y,
+                       q.x*f.metric.y+q.y*f.metric.z);
+        vec2 uv=fract(mapping.uv01.xy*(1.0-bary.x-bary.y)+
+                      mapping.uv01.zw*bary.x+
+                      mapping.uv2_origin.xy*bary.y);
+        vec2 atlas_size=vec2(textureSize(optics_atlas,0));
+        vec2 atlas_min=mapping.uv2_origin.zw+0.5/atlas_size;
+        vec2 atlas_max=mapping.uv2_origin.zw+mapping.rect.xy-0.5/atlas_size;
+        vec2 atlas_uv=mix(atlas_min,atlas_max,uv);
+        // Explicit LOD keeps sampling defined in divergent BVH ray paths.
+        albedo*=pow(max(textureLod(optics_atlas,atlas_uv,0.0).rgb,
+                        vec3(0.0)),vec3(2.2));
+    }
     vec3 radiance=max(f.emission.rgb,vec3(0.0))+
                   optics_photon_radiance(hit,albedo);
     vec3 normal=hit.normal;
@@ -163,54 +191,105 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
     }
     return radiance;
 }
-vec3 optics_offscreen_radiance(vec3 ro,vec3 direction)
+struct OpticsPath {
+    vec3 origin;
+    vec3 direction;
+    vec3 throughput;
+    int depth;
+};
+vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
 {
     if(optics_desc.x==0u)return vec3(0.0);
-    vec3 energy=vec3(1);
-    for(int bounce=0;bounce<3;++bounce) {
+    OpticsPath pending[16];
+    int queued=1;
+    pending[0]=OpticsPath(origin,normalize(direction),vec3(1.0),0);
+    vec3 accumulated=vec3(0.0);
+    // Material interactions are bounded, not recursively compiled. Eight
+    // boundaries permit glass -> glass -> mirror -> glass and exits.
+    for(int iteration=0;iteration<64 && queued>0;++iteration) {
+        OpticsPath path=pending[--queued];
+        if(path.depth>=10 ||
+           max(path.throughput.r,max(path.throughput.g,
+               path.throughput.b))<.003)continue;
         OpticsHit hit;
-        if(!optics_closest(ro,direction,1000.0,hit))return vec3(0.0);
-        OpticsFace f=optics_faces[hit.face_id];
-        if(f.albedo.w>.001) {
-            float ior=max(1.001,f.emission.w);
-            float eta=dot(direction,f.normal.xyz)<0.0?1.0/ior:ior;
-            vec3 n=hit.normal;
-            vec3 refracted=refract(direction,n,eta);
-            direction=dot(refracted,refracted)>.0001?
-                normalize(refracted):reflect(direction,n);
-            energy*=max(f.albedo.rgb,vec3(0.0))*f.albedo.w;
-            ro=hit.position+direction*.03;
+        if(!optics_closest(path.origin,path.direction,1000.0,hit))
+            continue; // Outside the real scene: no cubemap/sky substitute.
+        OpticsFace surface=optics_faces[hit.face_id];
+        if(surface.albedo.w>.001) {
+            float strength=clamp(surface.albedo.w,0.0,1.0);
+            float ior=max(1.001,surface.emission.w);
+            bool entering=dot(path.direction,surface.normal.xyz)<0.0;
+            float eta=entering?1.0/ior:ior;
+            vec3 normal=hit.normal;
+            float cosine=clamp(dot(-path.direction,normal),0.0,1.0);
+            float r0=(ior-1.0)/(ior+1.0);
+            r0*=r0;
+            float fresnel=r0+(1.0-r0)*pow(1.0-cosine,5.0);
+            vec3 T=refract(path.direction,normal,eta);
+            bool total_internal=dot(T,T)<.00001;
+            if(total_internal)fresnel=1.0;
+            vec3 tint=max(surface.albedo.rgb,vec3(0.0));
+            // Low pass-through still reveals the material itself and
+            // keeps the edge visible in nested reflections/refractions.
+            if(entering)
+                accumulated+=path.throughput*tint*(1.0-strength)*
+                             (1.0-fresnel);
+            vec3 reflected=path.throughput*fresnel;
+            if(queued<16 && max(reflected.r,max(reflected.g,reflected.b))>.003)
+                pending[queued++]=OpticsPath(
+                    hit.position+normal*.012,
+                    normalize(reflect(path.direction,normal)),
+                    reflected,path.depth+1);
+            if(!total_internal && strength>.003) {
+                vec3 transmitted=path.throughput*(1.0-fresnel)*strength;
+                if(entering)transmitted*=tint;
+                if(queued<16)
+                    pending[queued++]=OpticsPath(
+                        hit.position-normal*.012,normalize(T),
+                        transmitted,path.depth+1);
+            }
             continue;
         }
-        if(f.emission.w<-.001) {
-            direction=reflect(direction,hit.normal);
-            energy*=max(f.albedo.rgb,vec3(0.0))*(-f.emission.w);
-            ro=hit.position+direction*.03;
+        if(surface.emission.w<-.001) {
+            float reflectivity=clamp(-surface.emission.w,0.0,1.0);
+            vec3 tint=max(surface.albedo.rgb,vec3(0.0));
+            accumulated+=path.throughput*tint*.10*(1.0-reflectivity);
+            path.throughput*=tint*reflectivity;
+            path.origin=hit.position+hit.normal*.012;
+            path.direction=normalize(reflect(path.direction,hit.normal));
+            path.depth++;
+            if(queued<16)pending[queued++]=path;
             continue;
         }
-        // When the BVH hit is visible from the real camera, read the exact
-        // rasterized/fully lit pixel (including GLB textures), not a second
-        // flat-color shading model. Depth equality prevents unrelated
-        // foreground objects being pasted into the reflection.
+        // Reuse the *exact* lit raster color when this hit is visible
+        // in the primary camera, preserving textures and animation.
         vec4 projected=camera.vp*vec4(hit.position,1.0);
-        if(projected.w>.0001) {
+        bool from_screen=false;
+        if(projected.w>.00001) {
             vec3 ndc=projected.xyz/projected.w;
             vec2 screen=ndc.xy*.5+.5;
             if(all(greaterThanEqual(screen,vec2(.001))) &&
                all(lessThanEqual(screen,vec2(.999))) &&
                ndc.z>=0.0 && ndc.z<=1.0) {
                 float expected_depth=.1+.9*ndc.z;
-                float scene_depth=texture(opaque_depth,screen).r;
-                if(abs(scene_depth-expected_depth)<.0003)
-                    return energy*texture(lit_image,screen).rgb;
+                float actual_depth=textureLod(opaque_depth,screen,0.0).r;
+                // Exclude near-depth first-person weapon pixels.
+                if(actual_depth>=.1 &&
+                   abs(actual_depth-expected_depth)<.0004) {
+                    accumulated+=path.throughput*
+                        textureLod(lit_image,screen,0.0).rgb;
+                    from_screen=true;
+                }
             }
         }
-        // A ray outside the viewport still hits real world geometry and
-        // receives direct and cached indirect illumination, not a probe.
-        vec3 radiance=optics_surface_radiance(hit,direction);
-        return energy*(radiance/(vec3(1.0)+max(radiance,vec3(0.0))));
+        if(!from_screen) {
+            vec3 radiance=optics_surface_radiance(hit,path.direction);
+            // Match the main scene's output transfer for off-screen hits.
+            accumulated+=path.throughput*
+                (radiance/(vec3(1.0)+max(radiance,vec3(0.0))));
+        }
     }
-    return vec3(0.0);
+    return accumulated;
 }
 vec3 optics_offscreen_glossy(vec3 origin,vec3 direction,float mattness)
 {

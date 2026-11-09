@@ -30,17 +30,6 @@ vec3 world_position(vec2 uv,float depth)
         camera.right.xyz*screen.x*linear*camera.right.w+
         camera.up.xyz*(-screen.y)*linear*camera.up.w;
 }
-vec3 sample_rough(vec2 coord,float mattness)
-{
-    vec2 texel=1.0/vec2(textureSize(lit_image,0));
-    float radius=mattness*mattness*12.;
-    vec3 sum=texture(lit_image,coord).rgb*4.;
-    sum+=texture(lit_image,coord+texel*vec2(radius,0)).rgb;
-    sum+=texture(lit_image,coord-texel*vec2(radius,0)).rgb;
-    sum+=texture(lit_image,coord+texel*vec2(0,radius)).rgb;
-    sum+=texture(lit_image,coord-texel*vec2(0,radius)).rgb;
-    return sum/8.;
-}
 void main()
 {
     vec2 uv=gl_FragCoord.xy/vec2(textureSize(lit_image,0));
@@ -62,20 +51,12 @@ void main()
     float cosine=clamp(dot(-incoming,N),0.0,1.0);
     float fresnel=.04+.96*pow(1.0-cosine,5.0);
     if(mask.a<.75) {
-        // A thin dielectric samples the rasterized opaque background in
-        // screen space. This is the primary transmission path, not an
-        // off-screen fallback; all geometry outside the viewport is omitted.
-        const float ior=1.52;
-        vec3 T=refract(incoming,N,1.0/ior);
-        vec4 refracted_clip=camera.vp*vec4(P+T*.30,1.0);
-        vec2 transmit_uv=refracted_clip.xy/max(refracted_clip.w,.00001)*.5+.5;
-        bool transmitted=refracted_clip.w>0.0 &&
-            all(greaterThanEqual(transmit_uv,vec2(0.0))) &&
-            all(lessThan(transmit_uv,vec2(1.0))) &&
-            dot(T,T)>.01;
-        vec3 background=transmitted ?
-            sample_rough(transmit_uv,mattness) :
-            dot(T,T)>.01 ? optics_offscreen_glossy(P-N*.03,T,mattness) :
+        // Transmit through the same BVH as mirrors. The previous
+        // displaced screen sample duplicated the first-person gun and
+        // skipped secondary glass and mirror surfaces.
+        vec3 T=refract(incoming,N,1.0/1.52);
+        vec3 background=dot(T,T)>.0001 ?
+            optics_offscreen_glossy(P-N*.018,normalize(T),mattness) :
             reflection;
         // At zero pass-through show opaque tinted glass, not an invisible
         // hole. At one show refraction with no additive photon splats.
