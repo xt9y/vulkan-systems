@@ -3,33 +3,41 @@ VulkanOptics (optics::)
 
 Reusable Vulkan material compositor. The host owns rasterization,
 G-buffers, swapchain, photon-transport lifetime and command buffers.
-No hardware ray-tracing extensions or cubemap/probe substitutes.
+No hardware ray-tracing extensions, cubemap/probe substitutes or second BVH.
 
-Reflective pixels resolve one BVH-derived reflection result, which replaces
-the underlying rasterized surface rather than alpha-blending a second
-reflection layer. The GPU stackless triangle BVH is shared with VulkanPMap.
-Raster camera depth is decoded using VulkanGame's 0.1..1.0 viewport depth
-range before tracing.
+Reflective and glass faces are removed from the opaque G-buffer and
+composited from a separate front-surface material target. One shared
+software BVH traces ordered secondary hits through glass, other mirrors
+and ordinary geometry. Bounded ray-path branching handles Fresnel
+reflection, Snell transmission, internal reflection and absorption, with
+no compiler-side shader recursion.
 
-When a reflected BVH hit is also directly visible to the camera, its
-actual lit screen pixel is sampled, preserving streamed textures.
-Off-screen hits are evaluated from geometry, surface color, procedural
-checker patterns, scene point lights and the cached photon map.
-Matte off-screen reflections use a deterministic 3-ray cone filter.
-Glass has pass-through, mattness, Fresnel and BVH transmission.
+Reflected/through-glass GLB base-color textures are sampled via a GPU
+RGBA8 texture atlas plus per-face triangle UV mappings. Alpha-cutout
+textures are also tested during BVH intersections. The host supplies
+the decoded textures and UVs using compositor::set_textures(). Textures
+are packed with 1-pixel duplicated borders and uploaded only when the
+streamed scene changes; a single atlas is bounded at 8192x8192 pixels.
 
-Individual photon deposits are NOT displayed. VulkanGame no longer creates
-the caustic projector and does not dispatch it. Photon data remains
-GPU resident only as an invisible cache for indirect lighting in reflected
-surfaces. The optional caustics module remains available for future
-physically normalized receiver-density gathering; it is not used by the
-game's material renderer.
+When an opaque hit is directly camera-visible, its fully lit rasterized
+pixel is sampled, preserving material and animation details. Otherwise
+the BVH hit is shaded from its source texture, procedural checker material,
+scene lights and the existing photon-grid radiance. No shifted
+screen-image refraction is performed, preventing duplicate first-person
+weapons. Viewmodel geometry is not included in the world BVH.
 
-Limitations: off-screen mesh hits do not yet sample imported GLB textures
-or skinned/animated mesh poses. Off-screen direct lighting approximates
-the existing Point Cloud lighting and supports up to 16 point lights.
-These limitations prevent pixel-perfect mirrors of fully textured,
-animated scenes. Full-screen mirror coverage may exceed 60 FPS on M2.
+Individual photon deposits are NOT displayed. Photon data remains an
+invisible indirect-lighting cache. The optional caustics projector is
+not called by VulkanGame.
+
+Known limitations: CPU-built Photon Mapping BVH positions currently
+represent the streamed mesh at its static/bind pose, not live skinned
+vertices. Off-screen point-light shading does not yet match every
+material channel of the primary PCloud renderer (e.g. metallic-roughness
+and normal maps). View-dependent recursion is bounded to 10 surface
+interactions; large mirror coverage needs further profiling. The
+texture atlas has a finite 8192x8192 upper bound. Performance
+optimizations are deferred until image correctness is validated on M2.
 
 Public API: optics/optics.hpp, optics/caustics.hpp.
 Shaders: optics/shaders/compose.frag, raytrace.glsl.
