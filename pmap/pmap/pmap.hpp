@@ -46,9 +46,9 @@ namespace pm
         std::uint32_t photons=8192,bounces=4;
         std::uint32_t gi_updates=64,direct_updates=16;
         std::uint32_t direct_spp=4,atlas_tile=64;
-        std::uint32_t denoise_passes=1,edge_spp=2,debug_view=0;
-        float photon_radius=.45f;
-        bool screen_shadows=false;
+        std::uint32_t denoise_passes=1,edge_spp=2,screen_spp=2,debug_view=0;
+        float photon_radius=.30f;
+        bool screen_shadows=true;
     };
     struct progress
     {
