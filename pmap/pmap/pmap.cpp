@@ -540,6 +540,25 @@ namespace pm
         destroy();
         create(s,size,cfg);
     }
+    void mapper::set_glass(const glass_sphere& sphere)
+    {
+        if(!state_)throw std::logic_error("pm: mapper not created");
+        if(!std::isfinite(sphere.radius) || sphere.radius<0.f ||
+           !(sphere.ior>1.f) || !std::isfinite(sphere.ior))
+            throw std::invalid_argument("pm: invalid dielectric sphere");
+        state_->world.glass=sphere;
+        invalidate();
+    }
+    void mapper::set_emission(std::uint32_t index,vec3 emission)
+    {
+        if(!state_ || index>=state_->world.surfaces.size())
+            throw std::out_of_range("pm: invalid emissive surface");
+        const f4 value=pack(emission);
+        state_->world.surfaces[index].emission=emission;
+        state_->faces.upload(value.data(),sizeof(value),
+                             std::size_t(index)*sizeof(gpu_face)+5u*sizeof(f4));
+        invalidate();
+    }
     void mapper::invalidate()
     {
         if(!state_)throw std::logic_error("pm: mapper not created");
