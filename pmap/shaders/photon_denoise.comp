@@ -1,12 +1,11 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "photon_scene.glsl"
-// Two 3x3, à-trous-inspired bilateral passes with a variance-dependent
-// luminance kernel. Respect first-hit material/normal/position boundaries.
+// Display-only bilateral filter, never writes the progressive history.
+// Pass one: temporal -> scratch; pass two (if enabled): scratch -> temporal.
 layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
-layout(rgba16f,set=0,binding=0) uniform writeonly image2D history;
 layout(rgba16f,set=0,binding=12) uniform readonly image2D position_now;
-layout(rgba16f,set=0,binding=17) uniform readonly image2D temporal;
+layout(rgba16f,set=0,binding=17) uniform image2D temporal;
 layout(rgba16f,set=0,binding=18) uniform image2D scratch;
 float luminance(vec3 x) {return dot(x,vec3(.2126,.7152,.0722));}
 vec3 surface_normal(vec4 surface)
@@ -26,13 +25,12 @@ void main()
     ivec2 size=imageSize(temporal);
     if(any(greaterThanEqual(p,size)))return;
     bool second=camera.settings.w>1.5 && camera.settings.w<3.5;
-    bool single=camera.settings.w>3.5;
     int step_size=second?2:1;
     vec4 original=sample_color(p,second);
     vec4 world=imageLoad(position_now,p);
     if(world.w<0.5)
     {
-        if(second || single)imageStore(history,p,original);
+        if(second)imageStore(temporal,p,original);
         else imageStore(scratch,p,original);
         return;
     }
@@ -67,6 +65,6 @@ void main()
     }
     vec3 filtered=sum>0.0?weighted/sum:original.rgb;
     vec4 result=vec4(filtered,original.a);
-    if(second || single)imageStore(history,p,result);
+    if(second)imageStore(temporal,p,result);
     else imageStore(scratch,p,result);
 }
