@@ -1,8 +1,8 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// Rasterized on-screen reflection/refraction uses the already lit scene.
-// Off-screen rays query the same software BVH used by VulkanPMap. No probes,
-// cubemaps, hardware ray tracing, or fabricated background reflections.
+// Opaque/reflective material resolve. Every reflective pixel traces the
+// same GPU BVH as VulkanPMap, including geometry outside the viewport.
+// Glass transmission still samples the opaque image when possible.
 layout(location=0) in vec2 uv_in;
 layout(location=0) out vec4 color;
 layout(set=0,binding=0) uniform sampler2D lit_image;
@@ -11,9 +11,6 @@ layout(set=0,binding=2) uniform sampler2D optic_normal;
 layout(set=0,binding=3) uniform sampler2D optic_tint;
 layout(set=0,binding=4) uniform sampler2D optic_material;
 layout(set=0,binding=5) uniform sampler2D optic_depth;
-layout(std430,set=0,binding=6) readonly buffer CausticRadiance {
-    uint caustic_values[];
-};
 layout(push_constant) uniform View {
     mat4 vp;
     vec4 eye, right, up, forward;
@@ -23,58 +20,15 @@ layout(push_constant) uniform View {
 vec3 world_position(vec2 uv,float depth)
 {
     const float near_plane=.1,far_plane=1000.;
+    // VulkanGame renders geometry with viewport minDepth=0.1,maxDepth=1.
+    // The depth attachment contains window depth, NOT projection NDC depth.
+    float ndc_depth=clamp((depth-.1)/.9,0.0,1.0);
     float linear=near_plane*far_plane/
-        max(far_plane-depth*(far_plane-near_plane),1e-5);
+        max(far_plane-ndc_depth*(far_plane-near_plane),1e-5);
     vec2 screen=uv*2.0-1.0;
     return camera.eye.xyz+camera.forward.xyz*linear+
         camera.right.xyz*screen.x*linear*camera.right.w+
         camera.up.xyz*(-screen.y)*linear*camera.up.w;
-}
-bool trace_screen(vec3 origin,vec3 direction,out vec2 hit_uv)
-{
-    float t=.075;
-    for(int i=0;i<32;++i)
-    {
-        t+=.06+t*.095;
-        vec4 projected=camera.vp*vec4(origin+direction*t,1);
-        if(projected.w<=.0001)break;
-        vec3 ndc=projected.xyz/projected.w;
-        vec2 coord=ndc.xy*.5+.5;
-        if(any(lessThanEqual(coord,vec2(.001))) ||
-           any(greaterThanEqual(coord,vec2(.999))) ||
-           ndc.z<=0.0 || ndc.z>=1.0)break;
-        float scene_d=texture(opaque_depth,coord).r;
-        if(scene_d>=.999999)continue;
-        // Depth intersection in view space; reject large disocclusions.
-        vec3 scene_p=world_position(coord,scene_d);
-        // Reject the launching surface itself, notably for mirrors that
-        // also occupy the opaque G-buffer.
-        if(distance(scene_p,origin)<.12)continue;
-        vec3 target=origin+direction*t;
-        float along=dot(scene_p-origin,direction);
-        float error=length(scene_p-target);
-        if(along>0.0 && along<=t+.18 && error<max(.08,t*.065)) {
-            hit_uv=coord;
-            return true;
-        }
-    }
-    return false;
-}
-vec3 sample_caustic(ivec2 pixel)
-{
-    ivec2 size=textureSize(lit_image,0);
-    vec3 sum=vec3(0.0);
-    // Symmetric 3x3 reconstruction removes isolated photon pixels without
-    // stochastic noise or a separate full-screen blur target.
-    for(int y=-1;y<=1;++y)
-    for(int x=-1;x<=1;++x) {
-        ivec2 coord=clamp(pixel+ivec2(x,y),ivec2(0),size-1);
-        uint offset=uint(coord.x+coord.y*size.x)*3u;
-        float w=float((x==0?2:1)*(y==0?2:1));
-        sum+=w*vec3(caustic_values[offset],caustic_values[offset+1u],
-                    caustic_values[offset+2u]);
-    }
-    return sum*(1.0/(256.0*16.0));
 }
 vec3 sample_rough(vec2 coord,float mattness)
 {
@@ -91,20 +45,11 @@ void main()
 {
     vec2 uv=gl_FragCoord.xy/vec2(textureSize(lit_image,0));
     ivec2 pixel=ivec2(gl_FragCoord.xy);
-    vec3 caustic=sample_caustic(pixel);
     vec4 mask=texture(optic_normal,uv);
-    if(mask.a<.25) {
-        if(max(caustic.r,max(caustic.g,caustic.b))<=0.)discard;
-        color=vec4(texture(lit_image,uv).rgb+caustic,1.);
-        return;
-    }
+    if(mask.a<.25)discard;
     float surface_depth=texture(optic_depth,uv).r;
     float scene_depth=texture(opaque_depth,uv).r;
-    if(surface_depth>scene_depth+.0003) { // occluded optical material
-        if(max(caustic.r,max(caustic.g,caustic.b))<=0.)discard;
-        color=vec4(texture(lit_image,uv).rgb+caustic,1.);
-        return;
-    }
+    if(surface_depth>scene_depth+.0003)discard;
     vec4 tint=texture(optic_tint,uv);
     float mattness=texture(optic_material,uv).r;
     vec3 N=normalize(mask.rgb*2.0-1.0);
@@ -112,12 +57,9 @@ void main()
     vec3 incoming=normalize(P-camera.eye.xyz);
     if(dot(N,incoming)>0.0)N=-N;
     vec3 R=reflect(incoming,N);
-    vec2 ref_uv;
-    bool reflected=trace_screen(P+N*.018,R,ref_uv);
-    vec3 reflection=reflected?
-        sample_rough(ref_uv,mattness)+
-            sample_caustic(ivec2(ref_uv*vec2(textureSize(lit_image,0)))) :
-        optics_offscreen_glossy(P+N*.03,R,mattness);
+    // Every mirror pixel resolves a physical ray against the *same* GPU
+    // scene BVH: no screen-depth jumps, disocclusion layering or probes.
+    vec3 reflection=optics_offscreen_glossy(P+N*.03,R,mattness);
     float cosine=clamp(dot(-incoming,N),0.0,1.0);
     float fresnel=.04+.96*pow(1.0-cosine,5.0);
     if(mask.a<.75) {
@@ -133,8 +75,7 @@ void main()
             all(lessThan(transmit_uv,vec2(1.0))) &&
             dot(T,T)>.01;
         vec3 background=transmitted ?
-            sample_rough(transmit_uv,mattness)+
-                sample_caustic(ivec2(transmit_uv*vec2(textureSize(lit_image,0)))) :
+            sample_rough(transmit_uv,mattness) :
             optics_offscreen_glossy(P-N*.03,T,mattness);
         // At zero pass-through show opaque tinted glass, not an invisible
         // hole. At one show the refracted image, including receiver caustics.
@@ -145,6 +86,7 @@ void main()
     } else {
         // Mirrors only show traced on-screen hits, never probes/cubemaps.
         float strength=clamp(tint.a,0.0,1.0);
-        color=vec4(reflection*tint.rgb,strength);
+        // Reflectivity is a material parameter, not alpha blending.
+        color=vec4(mix(tint.rgb*.10,reflection*tint.rgb,strength),1.0);
     }
 }

@@ -9,17 +9,17 @@ struct OpticsFace {vec4 origin,u,v,normal,albedo,emission,metric;};
 struct OpticsNode {vec3 minimum;uint next;vec3 maximum;uint first_and_count;};
 struct OpticsPhoton {vec4 position,power;uvec4 link;};
 struct OpticsLight {vec4 position_radius,color_strength;};
-layout(std430,set=0,binding=7) readonly buffer OpticalFaces {OpticsFace optics_faces[];};
-layout(std430,set=0,binding=8) readonly buffer OpticalNodes {OpticsNode optics_nodes[];};
-layout(std430,set=0,binding=9) readonly buffer OpticalTriangles {vec4 optics_triangles[];};
-layout(std430,set=0,binding=10) readonly buffer OpticalScene {
+layout(std430,set=0,binding=6) readonly buffer OpticalFaces {OpticsFace optics_faces[];};
+layout(std430,set=0,binding=7) readonly buffer OpticalNodes {OpticsNode optics_nodes[];};
+layout(std430,set=0,binding=8) readonly buffer OpticalTriangles {vec4 optics_triangles[];};
+layout(std430,set=0,binding=9) readonly buffer OpticalScene {
     uvec4 optics_desc;
     vec4 optics_grid;
     uvec4 optics_extra;
 };
-layout(std430,set=0,binding=11) readonly buffer OpticalPhotons {OpticsPhoton optics_photons[];};
-layout(std430,set=0,binding=12) readonly buffer OpticalOffsets {uint optics_offsets[];};
-layout(std430,set=0,binding=13) readonly buffer OpticalLights {
+layout(std430,set=0,binding=10) readonly buffer OpticalPhotons {OpticsPhoton optics_photons[];};
+layout(std430,set=0,binding=11) readonly buffer OpticalOffsets {uint optics_offsets[];};
+layout(std430,set=0,binding=12) readonly buffer OpticalLights {
     uvec4 optics_light_count;
     OpticsLight optics_lights[16];
 };
@@ -150,6 +150,12 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
         vec3 L=delta/distance;
         float lambert=max(dot(normal,L),0.0);
         if(lambert<=0.0)continue;
+        // The reflected view must preserve actual hard shadowing.
+        OpticsHit blocker;
+        bool occluded=optics_closest(hit.position+normal*.03,L,
+                                    distance-.06,blocker);
+        if(occluded && optics_faces[blocker.face_id].albedo.w<=.001)
+            continue;
         float fade=max(0.0,1.0-distance/radius);
         radiance+=albedo*light.color_strength.rgb*
             (light.color_strength.w*lambert*fade*fade/
@@ -182,8 +188,26 @@ vec3 optics_offscreen_radiance(vec3 ro,vec3 direction)
             ro=hit.position+direction*.03;
             continue;
         }
+        // When the BVH hit is visible from the real camera, read the exact
+        // rasterized/fully lit pixel (including GLB textures), not a second
+        // flat-color shading model. Depth equality prevents unrelated
+        // foreground objects being pasted into the reflection.
+        vec4 projected=camera.vp*vec4(hit.position,1.0);
+        if(projected.w>.0001) {
+            vec3 ndc=projected.xyz/projected.w;
+            vec2 screen=ndc.xy*.5+.5;
+            if(all(greaterThanEqual(screen,vec2(.001))) &&
+               all(lessThanEqual(screen,vec2(.999))) &&
+               ndc.z>=0.0 && ndc.z<=1.0) {
+                float expected_depth=.1+.9*ndc.z;
+                float scene_depth=texture(opaque_depth,screen).r;
+                if(abs(scene_depth-expected_depth)<.0003)
+                    return energy*texture(lit_image,screen).rgb;
+            }
+        }
+        // A ray outside the viewport still hits real world geometry and
+        // receives direct and cached indirect illumination, not a probe.
         vec3 radiance=optics_surface_radiance(hit,direction);
-        // Match PCloud's Reinhard LDR mapping at its default exposure.
         return energy*(radiance/(vec3(1.0)+max(radiance,vec3(0.0))));
     }
     return vec3(0.0);

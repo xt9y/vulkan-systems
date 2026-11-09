@@ -13,8 +13,8 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
-        std::vector<vk::DescriptorSetLayoutBinding> bindings(14);
-        for(std::uint32_t i=0;i<14;++i) {
+        std::vector<vk::DescriptorSetLayoutBinding> bindings(13);
+        for(std::uint32_t i=0;i<13;++i) {
             bindings[i].binding=i;
             bindings[i].descriptorCount=1;
             bindings[i].descriptorType=i>=6 ? vk::DescriptorType::eStorageBuffer :
@@ -54,14 +54,10 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         raster.cull=vk::CullModeFlagBits::eNone;
         raster.depth_test=false;
         raster.depth_write=false;
+        // The material resolve replaces the rasterized surface. Alpha
+        // blending produced doubled images and unstable mirror edges.
         vk::PipelineColorBlendAttachmentState blend{};
-        blend.blendEnable=true;
-        blend.srcColorBlendFactor=vk::BlendFactor::eSrcAlpha;
-        blend.dstColorBlendFactor=vk::BlendFactor::eOneMinusSrcAlpha;
-        blend.colorBlendOp=vk::BlendOp::eAdd;
-        blend.srcAlphaBlendFactor=vk::BlendFactor::eOne;
-        blend.dstAlphaBlendFactor=vk::BlendFactor::eZero;
-        blend.alphaBlendOp=vk::BlendOp::eAdd;
+        blend.blendEnable=false;
         blend.colorWriteMask=vk::ColorComponentFlagBits::eR |
             vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB;
         raster.blend_attachments.push_back(blend);
@@ -74,12 +70,9 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             const std::array<vk::ImageView,6> views{
                 f.lit,f.opaque_depth,f.normal,f.tint,f.material,f.material_depth
             };
-            if(!f.caustics)throw std::invalid_argument("optics: missing caustics buffer");
-            vk::DescriptorBufferInfo irradiance{f.caustics,0,VK_WHOLE_SIZE};
-            descriptors_.write_buffer(i,6,irradiance);
-            for(std::uint32_t binding=7;binding<=12;++binding)
+            for(std::uint32_t binding=6;binding<=11;++binding)
                 descriptors_.write_buffer(i,binding,empty_.descriptor());
-            descriptors_.write_buffer(i,13,lights_.descriptor());
+            descriptors_.write_buffer(i,12,lights_.descriptor());
             for(std::uint32_t binding=0;binding<views.size();++binding) {
                 if(!views[binding])throw std::invalid_argument("optics: missing input view");
                 vk::DescriptorImageInfo image{};
@@ -106,7 +99,7 @@ void compositor::set_scene(geometry g,const std::vector<light>& lights)
             vk::DescriptorBufferInfo resource{
                 buffers[j]?buffers[j]:empty_.handle(),0,VK_WHOLE_SIZE
             };
-            descriptors_.write_buffer(i,7+j,resource);
+            descriptors_.write_buffer(i,6+j,resource);
         }
     struct alignas(16) gpu_light {
         std::array<float,4> position_radius{},color_strength{};
