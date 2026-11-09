@@ -44,6 +44,9 @@ bool trace_screen(vec3 origin,vec3 direction,out vec2 hit_uv)
         if(scene_d>=.999999)continue;
         // Depth intersection in view space; reject large disocclusions.
         vec3 scene_p=world_position(coord,scene_d);
+        // Reject the launching surface itself, notably for mirrors that
+        // also occupy the opaque G-buffer.
+        if(distance(scene_p,origin)<.12)continue;
         vec3 target=origin+direction*t;
         float along=dot(scene_p-origin,direction);
         float error=length(scene_p-target);
