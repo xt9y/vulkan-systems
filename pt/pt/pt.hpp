@@ -66,7 +66,10 @@ namespace pt
         void resize(vk::Extent2D);
         void set_scene(const scene&);
         void invalidate();
-        image_output record(vk::CommandBuffer,const view&);
+        // Optional timestamp slots: after trace, temporal, denoise.
+        image_output record(vk::CommandBuffer,const view&,
+                            vk::QueryPool timestamps={},
+                            std::uint32_t first_query=0);
         image_output output() const; // Display-only denoised HDR, FP16.
         image_output surface_positions() const; // First hits + surface ID.
         progress status() const;
