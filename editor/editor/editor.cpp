@@ -312,9 +312,15 @@ namespace editor
             const rect r=label_rect(label,width,height);
             if(label.text=="LIGHT"||label.text=="CUBE")
             {
+                const bool highlighted=label.object==selected_object_||
+                    label.object==hovered_object_;
                 image(out,draw_command::texture::light_icon,r,
-                    label.object==selected_object_||label.object==hovered_object_
-                        ? red:color{1,1,1,1});
+                    highlighted?red:color{1,1,1,1});
+                // Mask lettering baked into Icon_Light.jpg before rendering
+                // the chosen word in the embedded bold serif face.
+                rectangle(out,{r.x+5,r.y+4,r.w-10,r.h-8},
+                    highlighted?color{.46f,.06f,.08f,1.f}:
+                                color{.15f,.13f,.16f,1.f});
                 draw_command lettering{};
                 lettering.kind=draw_command::type::sign_text;
                 lettering.x=r.x;lettering.y=r.y;
