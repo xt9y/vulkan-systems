@@ -1,1 +1,4 @@
-VulkanJobs: bounded C++17 worker pool with explicit main-thread completion callbacks. Jobs must not touch unsynchronized game state.\n
+VulkanJobs
+
+Bounded C++17 worker pool with main-thread completion callbacks.
+Public header: jobs/pool.hpp.

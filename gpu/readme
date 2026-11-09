@@ -1,26 +1,6 @@
-VulkanGPU - reusable C++17 VulkanWrapper resources and compute.
-  gpu/gpu.hpp              umbrella API
-  gpu/resource.hpp         move-only owned buffer/image and creation helpers
-  gpu/buffer.*             owned GPU buffer, mapped uploads
-  gpu/image.*              owned GPU image/view
-  gpu/descriptors.*        owned arbitrary descriptor layouts/pools/sets
-  gpu/shader.*             SPIR-V shader modules
-  gpu/pipeline.*           compute pipeline layout
-  gpu/compute.*            generic compute dispatch
-  gpu/transfer.*           buffer copy/fill operations
-  gpu/upload.hpp           asynchronous fenced staging
-  gpu/texture_cache.*      RGBA8 residency cache
-  gpu/graph.*              explicit accesses, pass barriers
-  gpu/culler.*             frustum sphere compaction to indirect draws
-  gpu/shaders/cull.comp    reference shader
+VulkanGPU
 
-owned_buffer and owned_image wrap VulkanWrapper resource structs with RAII,
-move-only semantics, and raw handle compatibility. create_buffer/create_image
-return owned resources. Ensure all referencing GPU work has finished before
-replacing or destroying them.
-
-Host owns device, queue, swapchain and frame fences. Texture replacement and
-descriptor writes cannot race in-flight reads. Culling descriptors use binding
-0 transforms, 1 sphere bounds, 2 visible IDs and 3 indirect draw arguments.
-The caller supplies compiled SPIR-V. Culling is not occlusion culling.
-
+VulkanWrapper GPU buffers, images, descriptor sets, shader pipelines,
+compute dispatch, transfers, texture cache, frustum culling and
+resource-aware pass graph. Resources use explicit GPU lifetimes.
+Public headers are in gpu/*.hpp; gpu/gpu.hpp is the umbrella header.

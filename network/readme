@@ -1,56 +1,7 @@
-VulkanNetwork — UDP, reliable datagrams and authenticated encryption.
+VulkanNetwork
 
-Public headers:
-  network/network.hpp
-  network/endpoint.hpp         IPv4/IPv6 address and peer identity
-  network/socket.hpp           low-level unencrypted UDP; internal transport use
-  network/secure.hpp           automatic server identity, pinned DTLS 1.2
-  network/stream.hpp           reliable messages, ordering-independent, congestion window
-  network/session.hpp          reliable channels over a supplied datagram sender
-
-Secure transport:
-- Only supported game transport: authenticated and encrypted DTLS 1.2.
-- net::secure::create(role, settings, port, bind_host) creates a secure endpoint.
-- settings.storage_directory points at a writable per-user config directory.
-  A server creates a persistent P-256 private key and a renewable certificate.
-- Client settings.trust_identity is the configured host:port. On the first
-  authenticated cryptographic handshake, the client's trust-on-first-use
-  mechanism stores the server's SHA-256 public-key fingerprint.
-- A later changed fingerprint is rejected. First-use trust cannot prove the
-  intended server's identity against an active on-path attacker. An independent
-  server identity channel is required for that additional guarantee.
-- Client keys, client certificates, external OpenSSL scripts, CA distribution,
-  plaintext and alternate network modes are not part of this implementation.
-- All gameplay and reliable scene packets use the authenticated DTLS channel.
-- net::session fragments, acknowledges and retries inside DTLS without owning
-  its own UDP socket. Only net::secure binds to the UDP socket.
-- Calling net::secure::connect after a session timeout creates a fresh DTLS
-  handshake while retaining the trusted server key on the client's disk.
-- The DTLS peer collection is single-thread-owned; callers must serialize use.
-
-Protocol restrictions:
-- Both endpoints must run the same version of the application and wire
-  protocol. An earlier plaintext game client cannot join this server.
-- DTLS does not authenticate individual clients; the game must enforce
-  admission control, permissions and bans. A game-session token is not a
-  user account identity.
-- Bounded queues and DTLS cookies reduce trivial resource attacks but do not
-  constitute DDoS protection. Nonblocking handshake and packet-loss testing
-  are essential before deploying on an untrusted Internet network.
-- DTLS 1.2 provides no automatic NAT traversal, dynamic DNS or relay.
-- network/socket.hpp exposes raw UDP primitives needed internally by DTLS,
-  but is not an alternate gameplay transport.
-
-Build:
-  The c build tool exports Git files without submodules. network/mbedtls_prepare.cmake
-  is injected before the upstream Mbed TLS project configuration, fetches the
-  Mbed TLS framework dependency at the exact upstream Gitlink revision
-  dde0c4a0e448a0552f18817dcea633bb851fd288, and verifies its commit.
-  This dependency needs Git access during first-time CMake configuration.
-  In offline environments, pre-populate the pinned framework in the Mbed TLS
-  source cache. Unavailable or mismatched framework sources fail the build.
-
-  Mbed TLS 3.6.7 source is pinned and built as a static CMake dependency
-  of VulkanNetwork (mbedtls, mbedx509, mbedcrypto).
-  Mbed TLS is Apache-2.0 licensed.
-
+DTLS-secured UDP transport with authenticated peers, pinned/TOFU server
+identity, reliable messages, sessions, congestion control and networking
+endpoints. Initial TOFU trust requires an independently verified server
+identity for protection against first-connection interception.
+Public API: network/network.hpp and component headers.
