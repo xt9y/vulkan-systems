@@ -44,7 +44,6 @@ vec3 sample_rough(vec2 coord,float mattness)
 void main()
 {
     vec2 uv=gl_FragCoord.xy/vec2(textureSize(lit_image,0));
-    ivec2 pixel=ivec2(gl_FragCoord.xy);
     vec4 mask=texture(optic_normal,uv);
     if(mask.a<.25)discard;
     float surface_depth=texture(optic_depth,uv).r;
@@ -76,15 +75,16 @@ void main()
             dot(T,T)>.01;
         vec3 background=transmitted ?
             sample_rough(transmit_uv,mattness) :
-            optics_offscreen_glossy(P-N*.03,T,mattness);
+            dot(T,T)>.01 ? optics_offscreen_glossy(P-N*.03,T,mattness) :
+            reflection;
         // At zero pass-through show opaque tinted glass, not an invisible
-        // hole. At one show the refracted image, including receiver caustics.
+        // hole. At one show refraction with no additive photon splats.
         float transmission=clamp(tint.a,0.0,1.0);
         vec3 glass=mix(tint.rgb,background*mix(vec3(1.0),tint.rgb,.20),
                        transmission);
         color=vec4(mix(glass,reflection,fresnel),1.0);
     } else {
-        // Mirrors only show traced on-screen hits, never probes/cubemaps.
+        // Mirrors trace the software BVH even for off-screen geometry.
         float strength=clamp(tint.a,0.0,1.0);
         // Reflectivity is a material parameter, not alpha blending.
         color=vec4(mix(tint.rgb*.10,reflection*tint.rgb,strength),1.0);
