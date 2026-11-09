@@ -1,0 +1,8 @@
+VulkanPMap (pm::)
+
+GPU photon emission, compact grid indexing, multi-bounce diffuse GI,
+dielectric sphere transport, caustics and progressive surface caches.
+Adaptive direct area-light shadows, variance-aware filtering, temporal
+reprojection and denoising produce an HDR output.
+Public API: pmap/pmap.hpp; shaders: shaders/.
+Host owns VulkanWrapper, command buffers, camera and presentation.

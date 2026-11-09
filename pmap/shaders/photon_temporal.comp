@@ -1,0 +1,103 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "photon_scene.glsl"
+// Reproject the previous denoised HDR pixel into the current view; reject
+// disocclusions, material changes, changed surfaces and normal mismatches.
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+layout(rgba16f,set=0,binding=0) uniform readonly image2D noisy;
+layout(rgba16f,set=0,binding=12) uniform readonly image2D position_now;
+layout(rgba16f,set=0,binding=14) uniform readonly image2D position_old;
+layout(rgba16f,set=0,binding=16) uniform readonly image2D history_old;
+layout(rgba16f,set=0,binding=17) uniform writeonly image2D temporal;
+float luminance(vec3 x) {return dot(x,vec3(0.2126,0.7152,0.0722));}
+vec3 surface_normal(vec4 surface)
+{
+    int id=int(surface.w+0.5)-1;
+    if(id<0)return vec3(0);
+    if(id<int(scene_desc.x))return faces[id].normal.xyz;
+    return normalize(surface.xyz-camera.sphere.xyz);
+}
+bool previous_pixel(vec3 point,ivec2 size,out vec2 pixel)
+{
+    vec3 delta=point-prev_eye.xyz;
+    vec3 forward=cross(prev_up.xyz,prev_right.xyz);
+    float z=dot(delta,forward);
+    if(z<PM_EPS)return false;
+    float FOV=max(prev_up.w,0.001);
+    float x=dot(delta,prev_right.xyz)/
+             (z*FOV*float(size.x)/float(size.y));
+    float y=dot(delta,prev_up.xyz)/(z*FOV);
+    pixel=(vec2(x,-y)*0.5+0.5)*vec2(size)-
+          pm_taa_jitter(uint(prev_eye.w));
+    return all(greaterThan(pixel,vec2(-1))) &&
+           all(lessThan(pixel,vec2(size)));
+}
+void main()
+{
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size=imageSize(noisy);
+    if(any(greaterThanEqual(p,size)))return;
+    vec3 current=imageLoad(noisy,p).rgb;
+    vec4 here=imageLoad(position_now,p);
+    vec3 color=current;
+    float variance=0.002;
+    vec2 previous;
+    if(camera.settings.y>0.5 && here.w>0.5 &&
+       previous_pixel(here.xyz,size,previous))
+    {
+        // Bilinear reprojection, but only from history texels identifying
+        // the *same* world-space surface. Prevents silhouette bleeding
+        // and jagged quantization from rounded old-pixel coordinates.
+        ivec2 base=ivec2(floor(previous));
+        vec2 phase=fract(previous);
+        vec3 history_sum=vec3(0);
+        float variance_sum=0.0,weight_sum=0.0;
+        float depth=length(here.xyz-camera.eye.xyz);
+        float footprint=2.0*max(camera.up.w,0.001)*max(depth,0.1)/float(size.y);
+        // FP16 world-position precision requires a small epsilon,
+        // but 0.02 world units was several pixels at contact edges.
+        // Tight validation prevents history from sliding across silhouettes.
+        float tolerance=max(0.006,1.5*footprint);
+        vec3 normal=surface_normal(here);
+        for(int dy=0;dy<2;++dy)
+        for(int dx=0;dx<2;++dx)
+        {
+            ivec2 q=base+ivec2(dx,dy);
+            if(any(lessThan(q,ivec2(0))) ||
+               any(greaterThanEqual(q,size)))continue;
+            vec4 old_position=imageLoad(position_old,q);
+            if(abs(old_position.w-here.w)>0.25 ||
+               distance(old_position.xyz,here.xyz)>tolerance ||
+               dot(surface_normal(old_position),normal)<0.85)
+                continue;
+            float weight=(dx==0?1.0-phase.x:phase.x)*
+                         (dy==0?1.0-phase.y:phase.y);
+            vec4 history=imageLoad(history_old,q);
+            history_sum+=history.rgb*weight;
+            variance_sum+=history.a*weight;
+            weight_sum+=weight;
+        }
+        if(weight_sum>0.1)
+        {
+            vec3 old_color=history_sum/weight_sum;
+            float old_variance=variance_sum/weight_sum;
+            bool glass=here.w>float(scene_desc.x);
+            // During motion use faster reactivity; once stationary,
+            // progressively integrate up to 128 temporal samples.
+            // This removes residual 2-4 SPP shadow grain without
+            // increasing per-frame shadow-ray cost.
+            float alpha=camera.settings.w>0.5?
+                        0.19:1.0/float(min(camera.params.z,128u)+1u);
+            if(glass)alpha=max(alpha,0.14);
+            // React to genuine changes while retaining smooth penumbrae.
+            float difference=luminance(abs(current-old_color));
+            float signal=max(luminance(max(current,old_color)),0.05);
+            float threshold=0.22*signal+3.0*sqrt(max(old_variance,0.0));
+            if(difference>threshold)alpha=max(alpha,0.5);
+            color=mix(old_color,current,alpha);
+            float error=luminance(current)-luminance(old_color);
+            variance=max(0.00001,mix(old_variance,error*error,alpha));
+        }
+    }
+    imageStore(temporal,p,vec4(color,variance));
+}

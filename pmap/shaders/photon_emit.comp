@@ -1,0 +1,54 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "photon_scene.glsl"
+// Emit one forward photon path per thread. Specular dielectric interactions
+// can focus photons into caustics; diffuse energy is stored at later surfaces.
+layout(local_size_x=64,local_size_y=1,local_size_z=1) in;
+layout(std430,set=0,binding=2) buffer Map { Photon raw[]; };
+layout(std430,set=0,binding=4) buffer Counter { uint used; };
+void main()
+{
+    uint path=gl_GlobalInvocationID.x;
+    if(path>=camera.config.x)return;
+    uint seed=(path+1u)*747796405u ^ (uint(camera.eye.w)+1u)*2891336453u
+              ^ 0x9e3779b9u;
+    pm_random_bits(seed);
+    Face lamp=faces[scene_desc.y];
+    vec3 origin=pm_light_point(vec2(pm_random(seed),pm_random(seed)));
+    vec3 direction=pm_hemisphere(lamp.normal.xyz,seed);
+    origin+=lamp.normal.xyz*PM_EPS;
+    vec3 flux=lamp.emission.rgb*(PM_PI*lamp.metric.w/float(camera.config.x));
+    bool caustic=false;
+    uint diffuse_hits=0u;
+    for(uint bounce=0u;bounce<clamp(camera.params.w,2u,6u);++bounce)
+    {
+        Hit hit;
+        if(!pm_closest(origin,direction,1e20,hit))break;
+        if(hit.index==int(scene_desc.x))
+        {
+            direction=pm_dielectric(direction,hit,seed);
+            origin=hit.point+direction*PM_EPS;
+            caustic=true;
+            continue;
+        }
+        Face surface=faces[hit.index];
+        if(any(greaterThan(surface.emission.rgb,vec3(0.0))))break;
+        if(diffuse_hits>0u || caustic)
+        {
+            uint index=atomicAdd(used,1u);
+            if(index<camera.config.y)
+            {
+                raw[index].position=vec4(hit.point,1.0);
+                raw[index].power=vec4(flux,0.0);
+                raw[index].link=uvec4(pm_cell(hit.point),uint(hit.index),
+                                       caustic?1u:0u,0u);
+            }
+        }
+        ++diffuse_hits;
+        caustic=false;
+        flux*=surface.albedo.rgb;
+        if(max(flux.r,max(flux.g,flux.b))<1e-10)break;
+        direction=pm_hemisphere(hit.normal,seed);
+        origin=hit.point+hit.normal*PM_EPS;
+    }
+}

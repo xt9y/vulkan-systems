@@ -1,0 +1,81 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "photon_scene.glsl"
+// Face-local, variance-guided 5x5 shadow filter. Runs on the surface
+// atlas after direct accumulation, never across Cornell faces or behind
+// a solid box. Store the filtered radiance + visibility in a compact SSBO
+// so Vulkan 1.1 storage-image binding limits remain unchanged.
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+layout(rgba32f,set=0,binding=19) uniform readonly image2D direct_atlas;
+layout(std430,set=0,binding=21) readonly buffer DirectMoments {
+    vec4 moments[];
+};
+layout(std430,set=0,binding=22) writeonly buffer FilteredDirect {
+    vec4 filtered[];
+};
+float variance_at(ivec2 pixel,int extent)
+{
+    vec4 m=moments[uint(pixel.x+pixel.y*extent)];
+    return max(m.y-m.x*m.x,0.0)/max(m.z,1.0);
+}
+void main()
+{
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
+    int tile=int(camera.material.z),extent=tile*int(scene_desc.z);
+    if(any(greaterThanEqual(pixel,ivec2(extent))))return;
+    uint face_id=uint(pixel.x/tile+int(scene_desc.z)*(pixel.y/tile));
+    if(face_id>=scene_desc.x)return;
+    uint index=uint(pixel.x+pixel.y*extent);
+    vec4 center=imageLoad(direct_atlas,pixel);
+    if(center.a<0.0)
+    {
+        filtered[index]=center;
+        return;
+    }
+
+    ivec2 tile_origin=(pixel/tile)*tile;
+    ivec2 lower=tile_origin,upper=tile_origin+tile-1;
+    float uncertainty=sqrt(variance_at(pixel,extent));
+    bool penumbra=center.a>.005 && center.a<.995;
+    // Detect contacts/penumbrae from neighbors, even if this particular
+    // texel happened to receive zero or full visibility.
+    for(int y=-1;y<=1;y++)
+    for(int x=-1;x<=1;x++)
+    {
+        ivec2 q=clamp(pixel+ivec2(x,y),lower,upper);
+        vec4 sample_value=imageLoad(direct_atlas,q);
+        if(sample_value.a<0.0 ||
+           abs(sample_value.a-center.a)>.035)penumbra=true;
+    }
+    if(!penumbra && uncertainty<.02)
+    {
+        filtered[index]=center;
+        return;
+    }
+
+    // Cubic/binomial spatial kernel, bilateral visibility constraint,
+    // and inverse-uncertainty confidence. Never cross a face boundary.
+    // This removes stochastic penumbra spikes in surface space, rather
+    // than smearing the final camera image across object silhouettes.
+    const float taps[5]=float[5](1.0,4.0,6.0,4.0,1.0);
+    float sigma=clamp(.22+3.0*uncertainty,.22,.65);
+    vec3 sum_radiance=vec3(0.0);
+    float sum_visibility=0.0,weight_sum=0.0;
+    for(int dy=-2;dy<=2;++dy)
+    for(int dx=-2;dx<=2;++dx)
+    {
+        ivec2 q=clamp(pixel+ivec2(dx,dy),lower,upper);
+        vec4 sample_value=imageLoad(direct_atlas,q);
+        if(sample_value.a<0.0)continue;
+        float delta=sample_value.a-center.a;
+        float edge=exp(-.5*delta*delta/(sigma*sigma));
+        float neighbor_uncertainty=sqrt(variance_at(q,extent));
+        float confidence=1.0/(1.0+3.0*neighbor_uncertainty);
+        float w=taps[dx+2]*taps[dy+2]*edge*confidence;
+        sum_radiance+=sample_value.rgb*w;
+        sum_visibility+=sample_value.a*w;
+        weight_sum+=w;
+    }
+    filtered[index]=weight_sum>1e-6?
+        vec4(sum_radiance/weight_sum,sum_visibility/weight_sum):center;
+}

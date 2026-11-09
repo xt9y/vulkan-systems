@@ -1,0 +1,92 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "photon_scene.glsl"
+// Progressive direct-light integration. RGB is physical reflected radiance,
+// A is mean visibility. Moments hold E[V], E[V^2] and exact sample count.
+// The per-texel R2 sequence plus Cranley-Patterson rotation avoids repeating
+// the same tiny light-sampling grid in every neighboring atlas texel.
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+layout(rgba32f,set=0,binding=19) uniform image2D direct_atlas;
+layout(std430,set=0,binding=21) buffer DirectMoments { vec4 moments[]; };
+
+vec2 light_sample(uint index,vec2 rotation)
+{
+    return fract(vec2(.7548776662467,.569840290998)*
+                 (float(index)+.5)+rotation);
+}
+void main()
+{
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
+    int tile=int(camera.material.z);
+    int extent=tile*int(scene_desc.z);
+    if(any(greaterThanEqual(pixel,ivec2(extent))))return;
+    uint index=uint(pixel.x+pixel.y*extent);
+    uint id=uint(pixel.x/tile+int(scene_desc.z)*(pixel.y/tile));
+    if(id>=scene_desc.x)return;
+    Face surface=faces[id];
+    vec2 uv=(vec2(pixel%tile)+.5)/float(tile);
+    vec3 p=surface.origin.xyz+surface.u.xyz*uv.x+
+           surface.v.xyz*uv.y;
+
+    if((pm_receiver_masked(id,p)) ||
+       any(greaterThan(surface.emission.rgb,vec3(0.0))))
+    {
+        bool hidden=pm_receiver_masked(id,p);
+        imageStore(direct_atlas,pixel,
+                   hidden?vec4(0.0,0.0,0.0,-1.0):vec4(0.0,0.0,0.0,1.0));
+        moments[index]=hidden?vec4(-1.0,-1.0,0.0,0.0):
+                              vec4(1.0,1.0,0.0,0.0);
+        return;
+    }
+
+    vec4 stats=camera.material.y>0.5?moments[index]:vec4(0.0);
+    float old_count=max(stats.z,0.0);
+    vec4 old=camera.material.y>0.5?imageLoad(direct_atlas,pixel):vec4(0.0);
+    float mean=old_count>0.0?stats.x:0.5;
+    float variance=max(0.0,stats.y-stats.x*stats.x);
+    uint spp=uint(camera.material.w);
+
+    // Minimum warm-up of 32 rays avoids premature "all lit/all shadow"
+    // classification. Thereafter stable texels keep one probe/update,
+    // while high-variance penumbrae receive twice the normal budget.
+    if(old_count>=32.0 && variance<.002 &&
+       (mean<.005 || mean>.995))
+        spp=1u;
+    else if(old_count>=8.0 &&
+            (variance>.008 || (mean>.02 && mean<.98)))
+        spp=min(16u,spp*2u);
+
+    uint seed=(uint(pixel.x)+1u)*1973u ^
+              (uint(pixel.y)+1u)*9277u ^ 0x9e3779b9u;
+    pm_random_bits(seed);
+    vec2 rotation=vec2(pm_random(seed),pm_random(seed));
+
+    Face light=faces[scene_desc.y];
+    vec3 direct_sum=vec3(0.0);
+    float visibility_sum=0.0,visibility_sq_sum=0.0;
+    for(uint s=0u;s<spp;++s)
+    {
+        vec2 light_uv=light_sample(uint(old_count)+s,rotation);
+        vec3 target=pm_light_point(light_uv);
+        vec3 delta=target-p;
+        float r2=dot(delta,delta);
+        if(r2<=1e-6)continue;
+        float distance=sqrt(r2);
+        vec3 wi=delta/distance;
+        float receiver=max(dot(surface.normal.xyz,wi),0.0);
+        float emitter=max(dot(light.normal.xyz,-wi),0.0);
+        if(receiver<=0.0 || emitter<=0.0)continue;
+        float visible=clamp(pm_shadow_visibility(
+            p+surface.normal.xyz*PM_EPS,wi,distance-2.0*PM_EPS),0.0,1.0);
+        visibility_sum+=visible;
+        visibility_sq_sum+=visible*visible;
+        direct_sum+=surface.albedo.rgb*light.emission.rgb*
+                    (light.metric.w/PM_PI)*receiver*emitter*visible/r2;
+    }
+    float next_count=old_count+float(spp);
+    vec3 radiance=(old.rgb*old_count+direct_sum)/next_count;
+    float visibility=(stats.x*old_count+visibility_sum)/next_count;
+    float second=(stats.y*old_count+visibility_sq_sum)/next_count;
+    moments[index]=vec4(visibility,second,next_count,0.0);
+    imageStore(direct_atlas,pixel,vec4(radiance,visibility));
+}

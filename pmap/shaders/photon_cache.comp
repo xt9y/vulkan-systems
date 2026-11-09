@@ -1,0 +1,83 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "photon_scene.glsl"
+// Surface-space irradiance atlas: dynamic face grid, configurable tile size.
+// One query per surface texel rather than per visible screen pixel.
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+layout(std430,set=0,binding=5) readonly buffer Compact { Photon photons[]; };
+layout(std430,set=0,binding=6) readonly buffer Offsets { uint offsets[]; };
+layout(rgba32f,set=0,binding=8) uniform image2D atlas;
+vec3 density_estimate(vec3 position,uint face_id,vec3 albedo)
+{
+    float radius=camera.settings.x;
+    float short2=radius*radius;
+    float wide2=0.25;
+    float caustic2=max(0.0256,short2*0.36);
+    ivec3 center=ivec3(floor((position-grid.xyz)/grid.w));
+    vec3 near_flux=vec3(0),wide_flux=vec3(0),caustic_flux=vec3(0);
+    uint nearby=0u;
+    for(int z=-1;z<=1;z++)
+    for(int y=-1;y<=1;y++)
+    for(int x=-1;x<=1;x++)
+    {
+        ivec3 cell=center+ivec3(x,y,z);
+        if(any(lessThan(cell,ivec3(0))) ||
+           any(greaterThanEqual(cell,ivec3(PM_GRID))))continue;
+        uint bucket=uint(cell.x+PM_GRID*(cell.y+PM_GRID*cell.z));
+        uint begin=offsets[bucket],end=offsets[bucket+1u];
+        for(uint i=begin;i<end;++i)
+        {
+            Photon photon=photons[i];
+            if(photon.link.y!=face_id)continue;
+            vec3 d=position-photon.position.xyz;
+            float d2=dot(d,d);
+            if(photon.link.z!=0u)
+            {
+                if(d2<caustic2)
+                    caustic_flux+=photon.power.rgb*(1.0-d2/caustic2);
+            }
+            else
+            {
+                if(d2<short2)
+                {
+                    ++nearby;
+                    near_flux+=photon.power.rgb*(1.0-d2/short2);
+                }
+                if(d2<wide2)
+                    wide_flux+=photon.power.rgb*(1.0-d2/wide2);
+            }
+        }
+    }
+    // Adapt bandwidth where photon density is low while respecting the
+    // one-cell lookup radius and preventing cross-face light leaks.
+    float indirect_radius2=nearby>=8u?short2:wide2;
+    vec3 indirect=nearby>=8u?near_flux:wide_flux;
+    return albedo*(indirect*(2.0/(PM_PI*PM_PI*indirect_radius2))+
+                   caustic_flux*(2.0/(PM_PI*PM_PI*caustic2)));
+}
+void main()
+{
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
+    int tile=int(camera.material.z);
+    if(any(greaterThanEqual(pixel,ivec2(int(scene_desc.z)*tile,int(scene_desc.w)*tile))))return;
+    int tile_x=pixel.x/tile,tile_y=pixel.y/tile;
+    uint face_id=uint(tile_x+int(scene_desc.z)*tile_y);
+    if(face_id>=scene_desc.x)return;
+    Face face=faces[face_id];
+    vec2 uv=(vec2(pixel%tile)+vec2(0.5))/float(tile);
+    vec3 position=face.origin.xyz+face.u.xyz*uv.x+face.v.xyz*uv.y;
+    // Prevent photons from hidden floor texels leaking into the visible
+    // floor through the bilinear indirect irradiance lookup.
+    if(pm_receiver_masked(face_id,position))
+    {
+        imageStore(atlas,pixel,vec4(0.0,0.0,0.0,-1.0));
+        return;
+    }
+    vec3 radiance=vec3(0);
+    if(!any(greaterThan(face.emission.rgb,vec3(0))))
+        radiance=density_estimate(position,face_id,face.albedo.rgb);
+    vec3 previous=camera.config.z==0u?
+                  vec3(0):imageLoad(atlas,pixel).rgb;
+    float weight=1.0/float(camera.config.z+1u);
+    imageStore(atlas,pixel,vec4(mix(previous,radiance,weight),1));
+}
