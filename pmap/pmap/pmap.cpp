@@ -501,6 +501,12 @@ namespace pm
                  vk::PipelineStageFlagBits::eFragmentShader,
                  vk::AccessFlagBits::eShaderRead,
                  vk::ImageLayout::eGeneral,vk::ImageLayout::eGeneral);
+            image_barrier(cmd,positions[current],
+                 vk::PipelineStageFlagBits::eComputeShader,
+                 vk::AccessFlagBits::eShaderWrite,
+                 vk::PipelineStageFlagBits::eFragmentShader,
+                 vk::AccessFlagBits::eShaderRead,
+                 vk::ImageLayout::eGeneral,vk::ImageLayout::eGeneral);
             have_output=true;
             history_valid=previous_valid=true;
             last_eye=eye;last_right=right;last_up=up;
@@ -512,6 +518,12 @@ namespace pm
             if(!have_output)return {};
             const gpu::image& display=cfg.denoise_passes==2u?temporal:scratch;
             return {display.handle(),display.view(),
+                    extent,vk::ImageLayout::eGeneral};
+        }
+        image_output surface_positions() const
+        {
+            if(!have_output)return {};
+            return {positions[current].handle(),positions[current].view(),
                     extent,vk::ImageLayout::eGeneral};
         }
         progress status() const
@@ -581,6 +593,10 @@ namespace pm
     image_output mapper::output() const
     {
         return state_?state_->output():image_output{};
+    }
+    image_output mapper::surface_positions() const
+    {
+        return state_?state_->surface_positions():image_output{};
     }
     progress mapper::status() const
     {
