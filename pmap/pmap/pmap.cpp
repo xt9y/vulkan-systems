@@ -193,8 +193,7 @@ namespace pm
                (cfg.denoise_passes!=1 && cfg.denoise_passes!=2) ||
                (cfg.edge_spp!=0 && cfg.edge_spp!=2 &&
                 cfg.edge_spp!=4 && cfg.edge_spp!=8) ||
-               (cfg.screen_spp!=1 && cfg.screen_spp!=2 &&
-                cfg.screen_spp!=4 && cfg.screen_spp!=8) ||
+               (cfg.screen_spp<1 || cfg.screen_spp>8) ||
                cfg.debug_view>6 || cfg.shader_directory.empty())
                 throw std::invalid_argument("pm: invalid configuration");
         }
