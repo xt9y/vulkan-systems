@@ -1,0 +1,74 @@
+#version 450
+// Geometry-guided variance-aware spatial reconstruction.
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+layout(rgba16f,set=0,binding=6) uniform readonly image2D temporal;
+layout(rgba16f,set=0,binding=2) uniform readonly image2D position_now;
+layout(rgba32f,set=0,binding=0) uniform writeonly image2D history;
+layout(rgba16f,set=0,binding=4) uniform writeonly image2D display_image;
+struct Face {vec4 origin,u,v,normal,albedo,emission,metric;};
+layout(std430,set=0,binding=1) readonly buffer Scene {Face faces[];};
+layout(push_constant) uniform Camera {
+    vec4 eye,right,up; // up.w contains tan(vertical_fov/2)
+    uvec4 params;      // x,y: extent, z: accumulation count, w: bounces
+    vec4 settings;     // reuse history, moving, light spp, filter radius
+    uvec4 scene;       // surface count, emitter index
+} camera;
+// Pixel footprint uses the actual host-camera FOV.
+float luminance(vec3 c){return dot(c,vec3(.2126,.7152,.0722));}
+void main()
+{
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size=imageSize(temporal);
+    if(any(greaterThanEqual(pixel,size)))return;
+    vec4 base=imageLoad(temporal,pixel);
+    vec4 surface=imageLoad(position_now,pixel);
+    // Store the *unfiltered* temporal mean and luminance variance for
+    // the next frame. Only the presentation image is spatially filtered.
+    imageStore(history,pixel,base);
+    int radius=int(camera.settings.w+.5);
+    if(radius==0 || surface.w<.5 ||
+       any(greaterThan(faces[int(max(surface.w,1.0))-1].emission.rgb,vec3(0))))
+    {
+        imageStore(display_image,pixel,vec4(base.rgb,1.0));
+        return;
+    }
+    float pixel_footprint=2.0*max(camera.up.w,0.001)*
+         max(distance(surface.xyz,camera.eye.xyz),.1)/float(size.y);
+    vec3 normal=faces[int(surface.w)-1].normal.xyz;
+    vec3 forward=cross(camera.up.xyz,camera.right.xyz);
+    float grazing=max(abs(dot(normal,forward)),.25);
+    // A pixel footprint expands along faces seen at grazing angles.
+    float maximum_distance=max(.02,
+        pixel_footprint*float(radius)*3.0/grazing);
+    float effective_count=camera.settings.y>.5?
+        8.0:max(1.0,float(camera.params.z+1u));
+    float standard_error=sqrt(max(base.a,0.0)/effective_count);
+    float color_sigma=max(.055,.12*luminance(base.rgb)+
+                             2.8*standard_error);
+    vec3 sum=vec3(0);
+    float weights=0;
+    for(int y=-2;y<=2;++y)
+    for(int x=-2;x<=2;++x)
+    {
+        if(abs(x)>radius || abs(y)>radius)continue;
+        ivec2 q=pixel+ivec2(x,y);
+        if(any(lessThan(q,ivec2(0))) ||
+           any(greaterThanEqual(q,size)))continue;
+        vec4 neighbor_position=imageLoad(position_now,q);
+        if(neighbor_position.w!=surface.w)continue;
+        float distance_world=distance(surface.xyz,neighbor_position.xyz);
+        if(distance_world>maximum_distance)continue;
+        vec4 neighbor=imageLoad(temporal,q);
+        float spatial=exp(-.35*float(x*x+y*y));
+        float geometry=exp(-2.0*
+             (distance_world/maximum_distance)*
+             (distance_world/maximum_distance));
+        float color=exp(-abs(luminance(neighbor.rgb)-luminance(base.rgb))/
+                         color_sigma);
+        float w=spatial*geometry*color;
+        sum+=neighbor.rgb*w;
+        weights+=w;
+    }
+    vec3 filtered=weights>0.0?sum/weights:base.rgb;
+    imageStore(display_image,pixel,vec4(filtered,1.0));
+}
