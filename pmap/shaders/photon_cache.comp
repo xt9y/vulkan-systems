@@ -1,7 +1,7 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "photon_scene.glsl"
-// Surface-space irradiance atlas: 4x4 Cornell faces, configurable tile size.
+// Surface-space irradiance atlas: dynamic face grid, configurable tile size.
 // One query per surface texel rather than per visible screen pixel.
 layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
 layout(std430,set=0,binding=5) readonly buffer Compact { Photon photons[]; };
@@ -68,7 +68,7 @@ void main()
     vec3 position=face.origin.xyz+face.u.xyz*uv.x+face.v.xyz*uv.y;
     // Prevent photons from hidden floor texels leaking into the visible
     // floor through the bilinear indirect irradiance lookup.
-    if(face_pm_receiver_masked(face_id,position))
+    if(pm_receiver_masked(face_id,position))
     {
         imageStore(atlas,pixel,vec4(0.0,0.0,0.0,-1.0));
         return;
