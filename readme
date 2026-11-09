@@ -5,6 +5,7 @@ Reusable independent C++17 Vulkan and CPU modules:
   gpu/        VulkanGPU     GPU memory, descriptors, compute and barriers
   render/     VulkanRender  Frame submission, swapchain rendering, pipelines
   bvh/        VulkanBVH     GPU BLAS/TLAS and ray-query infrastructure
+  pmap/       VulkanPMap    Forward photon GI, caustics, soft shadows, temporal HDR
   lumen/      VulkanLumen   Lumen-style GI API skeleton (no rendering yet)
   spatial/    VulkanSpatial CPU index / spatial queries
   network/    VulkanNetwork Authenticated UDP / DTLS session
@@ -33,3 +34,11 @@ authority belongs in VulkanGPU, VulkanRender, VulkanBVH, or VulkanLumen.
 The shader algorithms needed for Lumen (screen tracing, surface cache, probe
 gather, world radiance cache, reflections and composite) have intentionally
 NOT been implemented. See lumen/readme for the fixed integration contract.
+
+VulkanPMap is the reusable, renderer-neutral implementation of the
+vulkan-experiment photon mapper. It is developed on branch `photon-system`
+and uses `pm::mapper`, `pm::scene`, `pm::view` and `pm::configuration`.
+See `pmap/readme` for source lists, GPU barriers, shaders and a one-call
+`record()` integration using the host's existing VulkanWrapper.
+The standalone `pmap/build.c` and optional `pmap/integration.h` are
+provided; no new root build target or second VulkanWrapper is needed.
