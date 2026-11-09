@@ -90,11 +90,23 @@ namespace pm
                     throw std::invalid_argument("pm: invalid face normal");
                 const vec3 n=vk::util::math::normalize(f.normal);
                 const float area=length*(f.triangle?.5f:1.f);
+                if(f.optical_type>2 || !std::isfinite(f.optical_strength) ||
+                   f.optical_strength<0.f || f.optical_strength>1.f ||
+                   !std::isfinite(f.roughness) || f.roughness<0.f ||
+                   f.roughness>1.f || !std::isfinite(f.ior) ||
+                   f.ior<=1.f)
+                    throw std::invalid_argument("pm: invalid optical material");
+                const float transmission=f.optical_type==1 ?
+                    f.optical_strength : 0.f;
+                const float conductor=f.optical_type==2 ?
+                    -f.optical_strength : 0.f;
                 result.faces.push_back({
                     pack(f.origin),pack(f.u),pack(f.v),
-                    pack(n,f.triangle?1.f:0.f),pack(f.albedo),
-                    pack(f.emission),{{c/determinant,-b/determinant,
-                                      a/determinant,area}}
+                    pack(n,f.triangle?1.f:0.f),
+                    pack(f.albedo,transmission),
+                    pack(f.emission, f.optical_type==1 ? f.ior : conductor),
+                    {{c/determinant,-b/determinant,
+                      a/determinant,f.optical_type ? f.roughness : area}}
                 });
                 auto add_tri=[&](vec3 x,vec3 y,vec3 z)
                 {

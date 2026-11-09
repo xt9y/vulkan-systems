@@ -18,6 +18,12 @@ namespace pm
         vec3 albedo{.725f,.710f,.680f};
         vec3 emission{};
         bool triangle=false;
+        // 0 = diffuse, 1 = refractive dielectric, 2 = reflective conductor.
+        // Both optical types use the same software-BVH photon transport.
+        std::uint32_t optical_type=0;
+        float optical_strength=0.f;
+        float roughness=0.f;
+        float ior=1.52f;
     };
     // Mark receiver texels hidden behind another surface, e.g. a floor
     // covered by a box top, using projection along receiver normal.
