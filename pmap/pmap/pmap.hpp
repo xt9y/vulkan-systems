@@ -40,6 +40,9 @@ namespace pm
         std::uint32_t emitter=0;
         std::vector<cutout> cutouts;
         glass_sphere glass{};
+        // Interpret the emitter as an isotropic point source at its origin.
+        // The existing rectangular area-emitter mode remains unchanged.
+        bool omnidirectional_emitter=false;
     };
     struct view
     {

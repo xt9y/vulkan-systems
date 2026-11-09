@@ -54,6 +54,14 @@ bool trace_screen(vec3 origin,vec3 direction,out vec2 hit_uv)
     }
     return false;
 }
+vec3 sample_caustic(ivec2 pixel)
+{
+    ivec2 size=textureSize(lit_image,0);
+    pixel=clamp(pixel,ivec2(0),size-1);
+    uint offset=uint(pixel.x+pixel.y*size.x)*3u;
+    return vec3(caustic_values[offset],caustic_values[offset+1u],
+                caustic_values[offset+2u])*(1.0/256.0);
+}
 vec3 sample_rough(vec2 coord,float mattness)
 {
     vec2 texel=1.0/vec2(textureSize(lit_image,0));
@@ -69,10 +77,7 @@ void main()
 {
     vec2 uv=gl_FragCoord.xy/vec2(textureSize(lit_image,0));
     ivec2 pixel=ivec2(gl_FragCoord.xy);
-    uint offset=uint(pixel.x+pixel.y*textureSize(lit_image,0).x)*3u;
-    vec3 caustic=vec3(caustic_values[offset],
-                       caustic_values[offset+1u],
-                       caustic_values[offset+2u])*(1.0/256.0);
+    vec3 caustic=sample_caustic(pixel);
     vec4 mask=texture(optic_normal,uv);
     if(mask.a<.25) {
         if(max(caustic.r,max(caustic.g,caustic.b))<=0.)discard;
@@ -95,7 +100,9 @@ void main()
     vec3 R=reflect(incoming,N);
     vec2 ref_uv;
     bool reflected=trace_screen(P+N*.018,R,ref_uv);
-    vec3 reflection=reflected?sample_rough(ref_uv,mattness):vec3(0);
+    vec3 reflection=reflected?
+        sample_rough(ref_uv,mattness)+
+            sample_caustic(ivec2(ref_uv*vec2(textureSize(lit_image,0)))):vec3(0);
     float cosine=clamp(dot(-incoming,N),0.0,1.0);
     float fresnel=.04+.96*pow(1.0-cosine,5.0);
     if(mask.a<.75) {
@@ -108,7 +115,7 @@ void main()
         vec3 transmission=transmitted ?
             sample_rough(transmit_uv,mattness)*mix(vec3(1),tint.rgb,.25) :
             texture(lit_image,uv).rgb;
-        color=vec4(mix(transmission,reflection,fresnel),
+        color=vec4(mix(transmission+caustic,reflection,fresnel),
                    clamp(tint.a,0.0,1.0));
     } else {
         // Reflective has no environmental fallback. The strength slider

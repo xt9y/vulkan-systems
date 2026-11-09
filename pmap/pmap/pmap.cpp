@@ -162,6 +162,7 @@ namespace pm
             result.parameters.description={count,source.emitter,columns,rows};
             result.parameters.grid={{low.x,low.y,low.z,cell_size}};
             result.parameters.extra[0]=std::uint32_t(result.cutouts.size());
+            result.parameters.extra[1]=source.omnidirectional_emitter?1u:0u;
             return result;
         }
         void image_barrier(vk::CommandBuffer command,gpu::image& resource,
