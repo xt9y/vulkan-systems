@@ -11,7 +11,7 @@ vec3 density_estimate(vec3 position,uint face_id,vec3 albedo)
 {
     float radius=camera.settings.x;
     float short2=radius*radius;
-    float wide2=0.25;
+    float wide2=max(short2,0.16);
     float caustic2=max(0.0256,short2*0.36);
     ivec3 center=ivec3(floor((position-grid.xyz)/grid.w));
     vec3 near_flux=vec3(0),wide_flux=vec3(0),caustic_flux=vec3(0);
@@ -50,8 +50,11 @@ vec3 density_estimate(vec3 position,uint face_id,vec3 albedo)
     }
     // Adapt bandwidth where photon density is low while respecting the
     // one-cell lookup radius and preventing cross-face light leaks.
-    float indirect_radius2=nearby>=8u?short2:wide2;
-    vec3 indirect=nearby>=8u?near_flux:wide_flux;
+    // Use the narrow kernel as soon as enough nearby photons are present.
+    // A persistent half-metre fallback had been spreading indirect energy
+    // across contact regions even after the scene had converged.
+    float indirect_radius2=nearby>=4u?short2:wide2;
+    vec3 indirect=nearby>=4u?near_flux:wide_flux;
     return albedo*(indirect*(2.0/(PM_PI*PM_PI*indirect_radius2))+
                    caustic_flux*(2.0/(PM_PI*PM_PI*caustic2)));
 }
