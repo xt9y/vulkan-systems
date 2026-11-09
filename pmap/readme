@@ -9,7 +9,7 @@ Cornell box, editor, or render-loop dependency**.
 Files:
 - `pmap/pmap/pmap.hpp`: public scene, camera, configuration, lifecycle and output API.
 - `pmap/pmap/pmap.cpp`: GPU resources, stackless VulkanBVH, progressive frame graph and barriers.
-- `pmap/shaders/`: all eleven original compute shaders plus shared GLSL, made scene-generic.
+- `pmap/shaders/`: all eleven original compute shaders plus shared GLSL, made scene-generic. Optional fullscreen vertex/tonemap presentation shaders are bundled as well.
 - `pmap/integration.h`: c-build registration and incremental SPIR-V compilation.
 - `pmap/build.c`: standalone development build.
 
@@ -46,7 +46,7 @@ if(pm_build_compile_shaders(paths,"build/shaders")!=0)exit(1);
 ```
 
 `glslangValidator` must be available on PATH. The helper compiles
-`build/shaders/pmap_photon_*.comp.spv` and rebuilds shaders when a source
+`build/shaders/pmap_photon_*.comp.spv (plus `pmap_fullscreen.vert.spv` and `pmap_present.frag.spv`)` and rebuilds shaders when a source
 or shared include changes.
 
 ## Minimal runtime example
@@ -149,7 +149,7 @@ presentation, logging, and UI controls.
 `pm::configuration` exposes photon count (256..65536), bounce count (2..6),
 GI update count (1..2048), direct-shadow update count (1..512),
 direct SPP (4/8, adaptive 1..16), atlas tile (32/64/128), denoise passes (1/2),
-radius (.05..5), optional screen-space shadow correction, and debug view
+radius (.05..0.5), optional screen-space shadow correction, and debug view
 (0=combined, 1=direct, 2=indirect, 3=penumbra, 4=raw visibility,
 5=filtered visibility, 6=visibility variance).
 
