@@ -62,7 +62,7 @@ namespace pt
         tracer& operator=(const tracer&)=delete;
 
         // Device must be idle when creating, resizing or replacing the scene.
-        void create(const scene&,vk::Extent2D,const configuration&={});
+        void create(const scene&,vk::Extent2D,const configuration& config={});
         void resize(vk::Extent2D);
         void set_scene(const scene&);
         void invalidate();
