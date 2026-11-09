@@ -4,8 +4,6 @@
 #include <sys/stat.h>
 #ifdef _WIN32
 #include <direct.h>
-#else
-#include <sys/stat.h>
 #endif
 
 static void compile_shaders(void)
