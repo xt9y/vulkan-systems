@@ -23,7 +23,7 @@ bool previous_pixel(vec3 point,ivec2 size,out vec2 pixel)
     vec3 forward=cross(prev_up.xyz,prev_right.xyz);
     float z=dot(delta,forward);
     if(z<PM_EPS)return false;
-    const float FOV=max(prev_up.w,0.001);
+    float FOV=max(prev_up.w,0.001);
     float x=dot(delta,prev_right.xyz)/
              (z*FOV*float(size.x)/float(size.y));
     float y=dot(delta,prev_up.xyz)/(z*FOV);
