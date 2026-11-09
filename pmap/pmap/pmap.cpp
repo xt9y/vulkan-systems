@@ -193,6 +193,8 @@ namespace pm
                (cfg.denoise_passes!=1 && cfg.denoise_passes!=2) ||
                (cfg.edge_spp!=0 && cfg.edge_spp!=2 &&
                 cfg.edge_spp!=4 && cfg.edge_spp!=8) ||
+               (cfg.screen_spp!=1 && cfg.screen_spp!=2 &&
+                cfg.screen_spp!=4 && cfg.screen_spp!=8) ||
                cfg.debug_view>6 || cfg.shader_directory.empty())
                 throw std::invalid_argument("pm: invalid configuration");
         }
@@ -431,7 +433,8 @@ namespace pm
                 {{extent.width,extent.height,stable_frames,cfg.bounces}},
                 {{cfg.photons,photon_capacity,gi_samples,node_count}},
                 {{cfg.photon_radius,history_valid?1.f:0.f,
-                  cfg.screen_shadows?1.f:-float(cfg.edge_spp),moving?1.f:0.f}},
+                  cfg.screen_shadows?float(cfg.screen_spp):-float(cfg.edge_spp),
+                  moving?1.f:0.f}},
                 pack(world.glass.center,world.glass.radius),
                 {{world.glass.ior,float(direct_samples),
                   float(cfg.atlas_tile),float(cfg.direct_spp)}}
@@ -462,7 +465,10 @@ namespace pm
                 indirect_prepared=true;
                 ++gi_samples;
             }
-            if(direct_samples<cfg.direct_updates)
+            // Full-screen direct rays bypass the surface atlas. Do not
+            // spend thousands of shadow rays on a cache that is not read.
+            if(direct_samples<cfg.direct_updates &&
+               (!cfg.screen_shadows || cfg.debug_view>=3u))
             {
                 atlas_transition(cmd,direct,direct_prepared);
                 direct_pass.dispatch(cmd,ax,ay,1,{set},&push,sizeof(push));
