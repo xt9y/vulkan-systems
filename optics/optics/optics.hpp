@@ -24,6 +24,7 @@ struct geometry {
 struct face_uv {
     std::array<float,2> a{},b{},c{};
     std::uint32_t texture_id=0;
+    float alpha_cutoff=0.f;
 };
 struct texture_rgba {
     std::uint32_t id=0,width=0,height=0;

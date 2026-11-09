@@ -48,7 +48,18 @@ bool optics_aabb(vec3 ro,vec3 rd,vec3 lo,vec3 hi,float max_t)
     float far_t=min(min(maximum.x,maximum.y),min(maximum.z,max_t));
     return near_t<=far_t;
 }
-bool optics_face_hit(vec3 ro,vec3 rd,OpticsFace f,float limit,out float t)
+vec2 optics_atlas_coord(OpticsUV mapping,vec2 bary)
+{
+    vec2 uv=fract(mapping.uv01.xy*(1.0-bary.x-bary.y)+
+                  mapping.uv01.zw*bary.x+
+                  mapping.uv2_origin.xy*bary.y);
+    vec2 size=vec2(textureSize(optics_atlas,0));
+    vec2 lo=mapping.uv2_origin.zw+.5/size;
+    vec2 hi=mapping.uv2_origin.zw+mapping.rect.xy-.5/size;
+    return mix(lo,hi,uv);
+}
+bool optics_face_hit(vec3 ro,vec3 rd,OpticsFace f,uint face_id,
+                     float limit,out float t)
 {
     float dot_n=dot(rd,f.normal.xyz);
     if(abs(dot_n)<1e-6)return false;
@@ -60,6 +71,12 @@ bool optics_face_hit(vec3 ro,vec3 rd,OpticsFace f,float limit,out float t)
     float v=q.x*f.metric.y+q.y*f.metric.z;
     if(u<-.0001 || v<-.0001 || u>1.0001 || v>1.0001 ||
        (f.normal.w>.5 && u+v>1.0001))return false;
+    OpticsUV mapping=optics_uv[face_id];
+    if(mapping.rect.z>.5 && mapping.rect.w>.0) {
+        vec2 address=optics_atlas_coord(mapping,vec2(u,v));
+        if(textureLod(optics_atlas,address,0.0).a<mapping.rect.w)
+            return false;
+    }
     t=dist;
     return true;
 }
@@ -84,7 +101,7 @@ bool optics_closest(vec3 ro,vec3 rd,float max_t,out OpticsHit result)
             uint face_id=uint(optics_triangles[(first+k)*3u].w);
             if(face_id>=optics_desc.x)continue;
             float t;
-            if(optics_face_hit(ro,rd,optics_faces[face_id],result.t,t)) {
+            if(optics_face_hit(ro,rd,optics_faces[face_id],face_id,result.t,t)) {
                 result.t=t;
                 result.face_id=face_id;
                 found=true;
@@ -154,14 +171,7 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
         vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
         vec2 bary=vec2(q.x*f.metric.x+q.y*f.metric.y,
                        q.x*f.metric.y+q.y*f.metric.z);
-        vec2 uv=fract(mapping.uv01.xy*(1.0-bary.x-bary.y)+
-                      mapping.uv01.zw*bary.x+
-                      mapping.uv2_origin.xy*bary.y);
-        vec2 atlas_size=vec2(textureSize(optics_atlas,0));
-        vec2 atlas_min=mapping.uv2_origin.zw+0.5/atlas_size;
-        vec2 atlas_max=mapping.uv2_origin.zw+mapping.rect.xy-0.5/atlas_size;
-        vec2 atlas_uv=mix(atlas_min,atlas_max,uv);
-        // Explicit LOD keeps sampling defined in divergent BVH ray paths.
+        vec2 atlas_uv=optics_atlas_coord(mapping,bary);
         albedo*=pow(max(textureLod(optics_atlas,atlas_uv,0.0).rgb,
                         vec3(0.0)),vec3(2.2));
     }

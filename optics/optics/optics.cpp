@@ -214,7 +214,8 @@ void compositor::set_textures(const std::vector<face_uv>& faces,
             const auto& r=it->second;
             m.uv2_origin[2]=float(r.x+1)/float(width);
             m.uv2_origin[3]=float(r.y+1)/float(height);
-            m.extent={float(r.w)/float(width),float(r.h)/float(height),1.f,0.f};
+            m.extent={float(r.w)/float(width),float(r.h)/float(height),
+                      1.f,std::clamp(f.alpha_cutoff,0.f,1.f)};
         }
     }
     const auto host=vk::MemoryPropertyFlagBits::eHostVisible |
