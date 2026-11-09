@@ -157,6 +157,7 @@ namespace editor
         if(events.question)
         {
             visible_=!visible_;
+            if(!visible_)cursor_free_=false;
             menu_=menu::none;
             dragging_menu_=false;
             delete_armed_=false;
