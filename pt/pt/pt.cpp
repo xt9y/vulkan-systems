@@ -293,12 +293,16 @@ namespace pt
     void tracer::resize(vk::Extent2D e)
     {
         if(!state_)throw std::logic_error("pt: not created");
-        create(state_->world,e,state_->cfg);
+        scene world=state_->world;
+        configuration config=state_->cfg;
+        create(world,e,config);
     }
     void tracer::set_scene(const scene& s)
     {
         if(!state_)throw std::logic_error("pt: not created");
-        create(s,state_->extent,state_->cfg);
+        vk::Extent2D extent=state_->extent;
+        configuration config=state_->cfg;
+        create(s,extent,config);
     }
     void tracer::invalidate()
     {
