@@ -189,7 +189,8 @@ namespace pt
             accumulate.create(prefix+"temporal.comp.spv",{layout},sizeof(camera_push));
             filter.create(prefix+"denoise.comp.spv",{layout},sizeof(camera_push));
         }
-        void record(vk::CommandBuffer cmd,const view& camera)
+        void record(vk::CommandBuffer cmd,const view& camera,
+                    vk::QueryPool timestamps,std::uint32_t first_query)
         {
             if(!cmd || !std::isfinite(camera.vertical_fov) ||
                !(camera.vertical_fov>0.01f && camera.vertical_fov<3.1f))
@@ -244,10 +245,16 @@ namespace pt
             const auto group_x=(extent.width+7u)/8u;
             const auto group_y=(extent.height+7u)/8u;
             trace.dispatch(cmd,group_x,group_y,1,{set},&push,sizeof(push));
+            if(timestamps)cmd.writeTimestamp(
+                vk::PipelineStageFlagBits::eBottomOfPipe,timestamps,first_query);
             compute_barrier(cmd);
             accumulate.dispatch(cmd,group_x,group_y,1,{set},&push,sizeof(push));
+            if(timestamps)cmd.writeTimestamp(
+                vk::PipelineStageFlagBits::eBottomOfPipe,timestamps,first_query+1u);
             compute_barrier(cmd);
             filter.dispatch(cmd,group_x,group_y,1,{set},&push,sizeof(push));
+            if(timestamps)cmd.writeTimestamp(
+                vk::PipelineStageFlagBits::eBottomOfPipe,timestamps,first_query+2u);
             image_barrier(cmd,display,
                 vk::PipelineStageFlagBits::eComputeShader,
                 vk::AccessFlagBits::eShaderWrite,
@@ -309,10 +316,11 @@ namespace pt
         if(!state_)throw std::logic_error("pt: not created");
         state_->invalidate();
     }
-    image_output tracer::record(vk::CommandBuffer cmd,const view& camera)
+    image_output tracer::record(vk::CommandBuffer cmd,const view& camera,
+                                vk::QueryPool timestamps,std::uint32_t first_query)
     {
         if(!state_)throw std::logic_error("pt: not created");
-        state_->record(cmd,camera);
+        state_->record(cmd,camera,timestamps,first_query);
         return state_->output();
     }
     image_output tracer::output() const
