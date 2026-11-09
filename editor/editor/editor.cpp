@@ -43,7 +43,7 @@ namespace editor
             item.width=area.w;item.height=area.h;item.tint=tint;
             out.push_back(std::move(item));
         }
-        void image(draw_list& out,draw_command::texture texture,rect area)
+        void image(draw_list& out,draw_command::texture texture,rect area,color tint={1,1,1,1})
         {
             if(area.w<=0 || area.h<=0)return;
             draw_command item{};
@@ -51,6 +51,7 @@ namespace editor
             item.image=texture;
             item.x=area.x;item.y=area.y;
             item.width=area.w;item.height=area.h;
+            item.tint=tint;
             out.push_back(std::move(item));
         }
         void text(draw_list& out,int x,int y,std::string content,
@@ -77,7 +78,7 @@ namespace editor
             constexpr int label_height=22;
             // Hell2024's Icon_Light uses Alignment::CENTERED: its visual
             // center must coincide with the light's projected 3D position.
-            const int top=label.text=="LIGHT"?cy-label_height/2:cy-20;
+            const int top=(label.text=="LIGHT"||label.text=="CUBE")?cy-label_height/2:cy-20;
             return {std::clamp(cx-label_width/2,0,
                      std::max(0,virtual_width-label_width)),
                     std::clamp(top,0,virtual_height-label_height),
@@ -159,6 +160,7 @@ namespace editor
             menu_=menu::none;
             dragging_menu_=false;
             delete_armed_=false;
+            selected_object_=hovered_object_=0;
             selected_row_=scroll_first_=0;
         }
         if(!visible_)return;
@@ -172,11 +174,20 @@ namespace editor
             menu_=menu::none;
             dragging_menu_=false;
             delete_armed_=false;
+            selected_object_=0;
             return;
         }
 
         const int mx=virtual_x(events.mouse_x,events.viewport_width);
         const int my=virtual_y(events.mouse_y,events.viewport_height);
+        hovered_object_=0;
+        if(cursor_free_)
+            for(auto it=labels_.rbegin();it!=labels_.rend();++it)
+                if(it->visible && it->object &&
+                   inside(mx,my,label_rect(*it,events.viewport_width,events.viewport_height))) {
+                    hovered_object_=it->object;
+                    break;
+                }
         if(!events.mouse_down)dragging_menu_=false;
         if(dragging_menu_ && events.mouse_down)
         {
@@ -299,9 +310,18 @@ namespace editor
         {
             if(!label.visible || label.object==0)continue;
             const rect r=label_rect(label,width,height);
-            if(label.text=="LIGHT")
+            if(label.text=="LIGHT"||label.text=="CUBE")
             {
-                image(out,draw_command::texture::light_icon,r);
+                image(out,draw_command::texture::light_icon,r,
+                    label.object==selected_object_||label.object==hovered_object_
+                        ? red:color{1,1,1,1});
+                draw_command lettering{};
+                lettering.kind=draw_command::type::sign_text;
+                lettering.x=r.x;lettering.y=r.y;
+                lettering.width=r.w;lettering.height=r.h;
+                lettering.text=label.text;
+                lettering.tint={1.f,.94f,.88f,1.f};
+                out.push_back(std::move(lettering));
             }
             else
             {

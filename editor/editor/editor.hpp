@@ -61,7 +61,7 @@ namespace editor
     struct draw_command
     {
         // Geometry matches Hell2024's 960x540 PRESENT_WIDTH/HEIGHT canvas.
-        enum class type { rectangle,text,image } kind=type::rectangle;
+        enum class type { rectangle,text,image,sign_text } kind=type::rectangle;
         enum class texture { menu_bg,border_horizontal,border_vertical,corner_tl,corner_tr,corner_bl,corner_br,light_icon } image=texture::menu_bg;
         enum class alignment { left,center,right } text_alignment=alignment::left;
         int x=0,y=0,width=0,height=0,scale=1;
@@ -104,7 +104,7 @@ namespace editor
         bool delete_armed_=false; // Committed only on Escape from Properties.
         int drag_x_=0,drag_y_=0;
 
-        std::uint64_t selected_object_=0;
+        std::uint64_t selected_object_=0, hovered_object_=0;
         std::vector<object_type> catalog_;
         std::vector<screen_label> labels_;
         std::unordered_map<std::uint64_t,std::vector<property>> properties_;
