@@ -1,6 +1,8 @@
 #version 450
-// Screen-visible reflections/refraction only. No ray-query, probe or
-// cubemap fallback; rays ending outside the camera viewport produce no hit.
+#extension GL_GOOGLE_include_directive : require
+// Rasterized on-screen reflection/refraction uses the already lit scene.
+// Off-screen rays query the same software BVH used by VulkanPMap. No probes,
+// cubemaps, hardware ray tracing, or fabricated background reflections.
 layout(location=0) in vec2 uv_in;
 layout(location=0) out vec4 color;
 layout(set=0,binding=0) uniform sampler2D lit_image;
@@ -16,6 +18,7 @@ layout(push_constant) uniform View {
     mat4 vp;
     vec4 eye, right, up, forward;
 } camera;
+#include "raytrace.glsl"
 
 vec3 world_position(vec2 uv,float depth)
 {
@@ -60,10 +63,18 @@ bool trace_screen(vec3 origin,vec3 direction,out vec2 hit_uv)
 vec3 sample_caustic(ivec2 pixel)
 {
     ivec2 size=textureSize(lit_image,0);
-    pixel=clamp(pixel,ivec2(0),size-1);
-    uint offset=uint(pixel.x+pixel.y*size.x)*3u;
-    return vec3(caustic_values[offset],caustic_values[offset+1u],
-                caustic_values[offset+2u])*(1.0/256.0);
+    vec3 sum=vec3(0.0);
+    // Symmetric 3x3 reconstruction removes isolated photon pixels without
+    // stochastic noise or a separate full-screen blur target.
+    for(int y=-1;y<=1;++y)
+    for(int x=-1;x<=1;++x) {
+        ivec2 coord=clamp(pixel+ivec2(x,y),ivec2(0),size-1);
+        uint offset=uint(coord.x+coord.y*size.x)*3u;
+        float w=float((x==0?2:1)*(y==0?2:1));
+        sum+=w*vec3(caustic_values[offset],caustic_values[offset+1u],
+                    caustic_values[offset+2u]);
+    }
+    return sum*(1.0/(256.0*16.0));
 }
 vec3 sample_rough(vec2 coord,float mattness)
 {
@@ -105,7 +116,8 @@ void main()
     bool reflected=trace_screen(P+N*.018,R,ref_uv);
     vec3 reflection=reflected?
         sample_rough(ref_uv,mattness)+
-            sample_caustic(ivec2(ref_uv*vec2(textureSize(lit_image,0)))):vec3(0);
+            sample_caustic(ivec2(ref_uv*vec2(textureSize(lit_image,0)))) :
+        optics_offscreen_glossy(P+N*.03,R,mattness);
     float cosine=clamp(dot(-incoming,N),0.0,1.0);
     float fresnel=.04+.96*pow(1.0-cosine,5.0);
     if(mask.a<.75) {
@@ -123,7 +135,7 @@ void main()
         vec3 background=transmitted ?
             sample_rough(transmit_uv,mattness)+
                 sample_caustic(ivec2(transmit_uv*vec2(textureSize(lit_image,0)))) :
-            vec3(0.0);
+            optics_offscreen_glossy(P-N*.03,T,mattness);
         // At zero pass-through show opaque tinted glass, not an invisible
         // hole. At one show the refracted image, including receiver caustics.
         float transmission=clamp(tint.a,0.0,1.0);

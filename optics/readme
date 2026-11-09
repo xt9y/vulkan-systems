@@ -1,17 +1,34 @@
 VulkanOptics (optics::)
 ======================
 
-Reusable Vulkan screen-space material compositor. Draw host-owned
-glass/reflective material targets, then composite inside an active compatible
-presentation render pass. The host owns the rasterizer, masks, G-buffer,
-opaque scene color, and swapchain. No GL/GLFW or Vulkan global scene coupling.
+Reusable Vulkan material compositor and optional screen-space caustic
+projection. The host owns rasterization, G-buffers, swapchain and command
+buffers. VulkanOptics uses no hardware ray-tracing extensions.
 
-Effects: screen-visible reflection rays, Fresnel glass reflection,
-refraction through the opaque G-buffer, tint, and rough/matte filtering.
-Unresolvable/off-screen reflections produce zero reflection radiance;
-no probe, cubemap, or BVH fallback is used.
+Glass uses a pass-through, tint and mattness control. Reflective surfaces
+use reflectivity and mattness. Screen-space reflection/refraction samples
+the existing shaded opaque image when the reflected hit is visible.
 
-Host controls GPU work by skipping the compositor entirely when there are
-no optical materials. Avoid binding the same image as source and destination.
+When a reflected/refracted ray cannot resolve visible screen data, the
+compositor queries the GPU stackless triangle BVH from VulkanPMap instead.
+Off-screen hits are shaded using scene lights, material base colors and
+the existing photon-grid indirect lighting. Matte off-screen reflections
+use deterministic cone samples. No cubemap, static probe, approximate
+environment fallback or separate acceleration structure is used.
 
-API: optics/optics.hpp; GLSL shader: optics/shaders/compose.frag
+The host supplies GPU geometry buffers through compositor::set_scene().
+Keep the mapper and its GPU buffers alive until all referencing submissions
+complete. Update descriptors only while the renderer is idle.
+
+Caustic photons are projected into visible receiver depth, reconstructed
+over a smooth finite footprint and filtered by the compositor. Photon
+emission is cached until the scene/light/material changes; camera movement
+does not rebuild the photon map.
+
+Limitations: off-screen geometry currently uses per-face base color, not
+the source mesh's sampled texture, and supports up to 16 point lights.
+Software BVH reflections are workload-dependent and should be profiled
+when mirror coverage is large.
+
+Public API: optics/optics.hpp, optics/caustics.hpp.
+Shaders: optics/shaders/*.frag, *.comp and raytrace.glsl.

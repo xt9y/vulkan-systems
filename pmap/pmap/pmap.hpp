@@ -70,6 +70,12 @@ namespace pm
         vk::Buffer sorted{},used{};
         std::uint32_t capacity=0;
     };
+    // Read-only GPU buffers for generic visibility/radiance consumers.
+    // Exactly the same BVH and face data used by photon tracing.
+    struct geometry_output {
+        vk::Buffer faces{}, nodes{}, triangles{}, scene_info{};
+        vk::Buffer photons{}, offsets{};
+    };
     struct image_output
     {
         vk::Image image{};
@@ -108,6 +114,7 @@ namespace pm
         // No camera rays, full-screen gathering, or tonemapping.
         photon_output record_transport(vk::CommandBuffer);
         photon_output photon_buffers() const;
+        geometry_output geometry_buffers() const;
         image_output output() const;
         image_output surface_positions() const;
         progress status() const;

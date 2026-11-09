@@ -653,6 +653,13 @@ namespace pm
         return {state_->sorted.handle(),state_->counter.handle(),
                 state_->photon_capacity};
     }
+    geometry_output mapper::geometry_buffers() const
+    {
+        if(!state_)throw std::logic_error("pm: mapper not created");
+        return {state_->faces.handle(),state_->nodes.handle(),
+                state_->triangles.handle(),state_->scene_info.handle(),
+                state_->sorted.handle(),state_->offsets.handle()};
+    }
     image_output mapper::output() const
     {
         return state_?state_->output():image_output{};

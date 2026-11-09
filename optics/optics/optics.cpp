@@ -1,5 +1,8 @@
 #include "optics.hpp"
 #include <stdexcept>
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <vector>
 
 namespace optics {
@@ -10,15 +13,23 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
-        std::vector<vk::DescriptorSetLayoutBinding> bindings(7);
-        for(std::uint32_t i=0;i<7;++i) {
+        std::vector<vk::DescriptorSetLayoutBinding> bindings(14);
+        for(std::uint32_t i=0;i<14;++i) {
             bindings[i].binding=i;
             bindings[i].descriptorCount=1;
-            bindings[i].descriptorType=i==6 ? vk::DescriptorType::eStorageBuffer :
+            bindings[i].descriptorType=i>=6 ? vk::DescriptorType::eStorageBuffer :
                 vk::DescriptorType::eCombinedImageSampler;
             bindings[i].stageFlags=vk::ShaderStageFlagBits::eFragment;
         }
         descriptors_.create(bindings,static_cast<std::uint32_t>(frames.size()));
+        const auto host=vk::MemoryPropertyFlagBits::eHostVisible |
+                        vk::MemoryPropertyFlagBits::eHostCoherent;
+        empty_.create(128,vk::BufferUsageFlagBits::eStorageBuffer,host);
+        const std::array<std::uint8_t,128> zeros{};
+        empty_.upload(zeros.data(),zeros.size());
+        lights_.create(16+16*32,vk::BufferUsageFlagBits::eStorageBuffer,host);
+        const std::array<std::uint8_t,16+16*32> empty_lights{};
+        lights_.upload(empty_lights.data(),empty_lights.size());
         vk::SamplerCreateInfo sampler_info{};
         sampler_info.magFilter=vk::Filter::eNearest;
         sampler_info.minFilter=vk::Filter::eNearest;
@@ -66,6 +77,9 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             if(!f.caustics)throw std::invalid_argument("optics: missing caustics buffer");
             vk::DescriptorBufferInfo irradiance{f.caustics,0,VK_WHOLE_SIZE};
             descriptors_.write_buffer(i,6,irradiance);
+            for(std::uint32_t binding=7;binding<=12;++binding)
+                descriptors_.write_buffer(i,binding,empty_.descriptor());
+            descriptors_.write_buffer(i,13,lights_.descriptor());
             for(std::uint32_t binding=0;binding<views.size();++binding) {
                 if(!views[binding])throw std::invalid_argument("optics: missing input view");
                 vk::DescriptorImageInfo image{};
@@ -80,6 +94,41 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         }
         frame_count_=static_cast<std::uint32_t>(frames.size());
     }catch(...) {reset();throw;}
+}
+void compositor::set_scene(geometry g,const std::vector<light>& lights)
+{
+    if(!frame_count_)throw std::logic_error("optics: compositor not initialized");
+    const std::array<vk::Buffer,6> buffers{
+        g.faces,g.nodes,g.triangles,g.scene_info,g.photons,g.offsets
+    };
+    for(std::uint32_t i=0;i<frame_count_;++i)
+        for(std::uint32_t j=0;j<buffers.size();++j) {
+            vk::DescriptorBufferInfo resource{
+                buffers[j]?buffers[j]:empty_.handle(),0,VK_WHOLE_SIZE
+            };
+            descriptors_.write_buffer(i,7+j,resource);
+        }
+    struct alignas(16) gpu_light {
+        std::array<float,4> position_radius{},color_strength{};
+    };
+    struct alignas(16) gpu_lights {
+        std::array<std::uint32_t,4> count{};
+        std::array<gpu_light,16> values{};
+    };
+    static_assert(sizeof(gpu_lights)==16+16*32);
+    gpu_lights packet{};
+    for(const auto& l:lights) {
+        if(packet.count[0]==16)break;
+        if(!(std::isfinite(l.position.x) && std::isfinite(l.position.y) &&
+             std::isfinite(l.position.z) && std::isfinite(l.color.x) &&
+             std::isfinite(l.color.y) && std::isfinite(l.color.z) &&
+             std::isfinite(l.radius) && std::isfinite(l.strength)) ||
+             l.radius<=0.f || l.strength<=0.f)continue;
+        auto& x=packet.values[packet.count[0]++];
+        x.position_radius={l.position.x,l.position.y,l.position.z,l.radius};
+        x.color_strength={l.color.x,l.color.y,l.color.z,l.strength};
+    }
+    lights_.upload(&packet,sizeof(packet));
 }
 void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,const camera& view) const
 {
@@ -97,6 +146,8 @@ void compositor::reset() noexcept
     if(layout_)vk::device::get()->handle.destroyPipelineLayout(layout_);
     layout_=nullptr;
     descriptors_.reset();
+    empty_.reset();
+    lights_.reset();
     if(sampler_)vk::device::get()->handle.destroySampler(sampler_);
     sampler_=nullptr;
     frame_count_=0;
