@@ -99,31 +99,43 @@ vec3 pm_lookup(int id,vec3 point)
     return weight>1e-6?
         (a.rgb*w.x+b.rgb*w.y+c.rgb*w.z+d.rgb*w.w)/weight:vec3(0.0);
 }
-// Optional exact screen-space shadow mode. Default caches the same 4-8
-// samples per surface texel instead, reducing work at high resolutions.
-vec3 pm_screen_light(Hit hit,vec3 albedo,inout uint seed,uint spp)
+// The cached atlas handles smooth regions. Near shadow boundaries,
+// evaluate the actual receiver position with progressive area-light
+// samples, avoiding a blurred receiver-space contact silhouette.
+// Each screen pixel gets a stable R2 sequence with a pixel scramble;
+// temporal history integrates it across frames.
+vec3 pm_screen_light(Hit hit,vec3 albedo,uint spp)
 {
     Face lamp=faces[scene_desc.y];
-    uint rows=spp/2u;
+    uint pixel=uint(gl_GlobalInvocationID.x)+
+               uint(gl_GlobalInvocationID.y)*camera.params.x;
+    uint scramble=pixel*747796405u+2891336453u;
+    scramble^=scramble>>16u;
+    scramble*=2246822519u;
+    scramble^=scramble>>13u;
+    vec2 offset=vec2(float(scramble&65535u),
+                     float((scramble>>16u)&65535u))/65536.0;
     vec3 sum=vec3(0);
-    for(uint s=0u;s<spp;++s)
+    uint first=uint(camera.eye.w)*spp;
+    for(uint i=0u;i<spp;++i)
     {
-        vec2 uv=vec2((float(s%2u)+pm_random(seed))*.5,
-                     (float(s/2u)+pm_random(seed))/float(rows));
+        float sample_index=float(first+i)+0.5;
+        vec2 uv=fract(vec2(.7548776662467,.569840290998)*
+                      sample_index+offset);
         vec3 source=pm_light_point(uv);
         vec3 delta=source-hit.point;
         float r2=dot(delta,delta);
         if(r2<=1e-6)continue;
         float distance=sqrt(r2);
         vec3 wi=delta/distance;
-        float a=max(dot(hit.normal,wi),0.0);
-        float b=max(dot(lamp.normal.xyz,-wi),0.0);
-        if(a<=0.0 || b<=0.0)continue;
+        float receiver=max(dot(hit.normal,wi),0.0);
+        float emitter=max(dot(lamp.normal.xyz,-wi),0.0);
+        if(receiver<=0.0 || emitter<=0.0)continue;
         float transmission=pm_shadow_visibility(
             hit.point+hit.normal*PM_EPS,wi,distance-2.0*PM_EPS);
         if(transmission<=0.0)continue;
         sum+=albedo*lamp.emission.rgb*(lamp.metric.w/PM_PI)*
-             (a*b*transmission/r2);
+             (receiver*emitter*transmission/r2);
     }
     return sum/float(spp);
 }
@@ -188,19 +200,17 @@ void main()
                                          variance);
             if(camera.settings.z>0.5)
             {
-                // Explicit reference mode: exact screen-space sampling.
-                direct=pm_screen_light(hit,surface.albedo.rgb,seed,
+                // Full direct-light reference; photon GI is still cached.
+                direct=pm_screen_light(hit,surface.albedo.rgb,
                                        uint(camera.material.w));
             }
             else if(penumbra && camera.settings.z<-0.5)
             {
-                // Optional experimental correction. Never replace an
-                // already converged atlas with only two/four samples:
-                // that created the quantized steps at shadow edges.
-                uint samples=uint(-camera.settings.z);
-                vec3 estimate=pm_screen_light(hit,surface.albedo.rgb,seed,samples);
-                float confidence=float(samples)/(float(samples)+24.0);
-                direct=mix(direct,estimate,confidence);
+                // Refine the *actual* shadow boundary instead of mixing
+                // a 4-ray estimate at only ~14% into a blurred atlas.
+                // Progressive temporal sampling resolves its variance.
+                direct=pm_screen_light(hit,surface.albedo.rgb,
+                                       uint(-camera.settings.z));
             }
             int debug_view=int(camera.material.y+0.5);
             if(debug_view==1)radiance=direct;
