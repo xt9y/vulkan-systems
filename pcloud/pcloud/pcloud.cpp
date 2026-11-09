@@ -80,6 +80,7 @@ namespace pc
             std::unique_ptr<gpu::compute> lighting_program;
             std::unique_ptr<gpu::compute> tone_program;
             std::unique_ptr<::render::pipeline> present_program;
+            std::unique_ptr<::render::pipeline> comparison_program;
         };
 
         state& get()
@@ -308,6 +309,13 @@ namespace pc
                  data.shader_paths.fullscreen_shader},
                 {vk::ShaderStageFlagBits::eFragment,
                  data.shader_paths.presentation_shader}
+            });
+            data.comparison_program=std::make_unique<::render::pipeline>();
+            data.comparison_program->create(raster, {
+                {vk::ShaderStageFlagBits::eVertex,
+                 data.shader_paths.fullscreen_shader},
+                {vk::ShaderStageFlagBits::eFragment,
+                 data.shader_paths.comparison_shader}
             });
 
             const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
@@ -775,6 +783,7 @@ namespace pc
         data.lighting_program.reset();
         data.tone_program.reset();
         data.present_program.reset();
+        data.comparison_program.reset();
         data.presentation.reset();
         if (data.present_layout) device.destroyPipelineLayout(data.present_layout);
         data.cloud_sets.reset();
@@ -904,8 +913,15 @@ namespace pc
         compute(command,*get().tone_program,current.tone,frame);
     }
 
-    void present(vk::CommandBuffer command, std::uint32_t image,
-                 const overlay_callback& overlay)
+    vk::RenderPass presentation_pass()
+    {
+        return get().presentation->pass();
+    }
+
+    namespace {
+    void present_base(vk::CommandBuffer command,std::uint32_t image,
+                      const draw_callback& override_draw,
+                      bool use_comparison,const overlay_callback& overlay)
     {
         const auto extent = get().output.extent;
         vk::ClearValue clear{};
@@ -922,15 +938,65 @@ namespace pc
         graphics.viewport(
             vk::Viewport{0, 0, float(extent.width), float(extent.height), 0, 1},
             vk::Rect2D{{0, 0}, extent});
-        ::render::mesh triangle{};
-        triangle.vertex_count = 3;
-        ::render::material surface{};
-        surface.pipeline = get().present_program->handle();
-        surface.layout = get().present_layout;
-        surface.sets = {get().frames.at(image).presentation};
-        graphics.draw(triangle, surface);
+        if(override_draw)override_draw(command);
+        else {
+            ::render::mesh triangle{};
+            triangle.vertex_count = 3;
+            ::render::material surface{};
+            surface.pipeline=use_comparison ?
+                get().comparison_program->handle():get().present_program->handle();
+            surface.layout=get().present_layout;
+            surface.sets={get().frames.at(image).presentation};
+            graphics.draw(triangle,surface);
+        }
         if(overlay)overlay(command,extent);
         graphics.end_pass();
+    }
+    } // namespace
+
+    void present(vk::CommandBuffer command,std::uint32_t image,
+                 const overlay_callback& overlay)
+    {
+        auto& data=get();
+        vk::DescriptorImageInfo source{};
+        source.sampler=data.sampler;
+        source.imageView=data.frames.at(image).ldr.view;
+        source.imageLayout=vk::ImageLayout::eGeneral;
+        data.present_sets->write_image(image,0,source);
+        present_base(command,image,{},false,overlay);
+    }
+
+    void present_image(vk::CommandBuffer command,std::uint32_t image,
+                       vk::Image source_image,vk::ImageView view,
+                       vk::ImageLayout layout,const overlay_callback& overlay)
+    {
+        if(!source_image || !view)
+            throw std::invalid_argument("pc::present_image invalid source");
+        vk::ImageMemoryBarrier ready{};
+        ready.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+        ready.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+        ready.oldLayout=layout;
+        ready.newLayout=layout;
+        ready.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        ready.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        ready.image=source_image;
+        ready.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
+        command.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                                vk::PipelineStageFlagBits::eFragmentShader,
+                                {},{},{},{ready});
+        vk::DescriptorImageInfo source{};
+        source.sampler=get().sampler;
+        source.imageView=view;
+        source.imageLayout=layout;
+        get().present_sets->write_image(image,0,source);
+        present_base(command,image,{},true,overlay);
+    }
+
+    void present_custom(vk::CommandBuffer command,std::uint32_t image,
+                        const draw_callback& draw,const overlay_callback& overlay)
+    {
+        if(!draw)throw std::invalid_argument("pc::present_custom missing draw");
+        present_base(command,image,draw,false,overlay);
     }
 
     void record(vk::CommandBuffer command,std::uint32_t image,

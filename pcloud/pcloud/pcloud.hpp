@@ -71,6 +71,7 @@ namespace pc
         std::string tonemap_shader="build/shaders/pcloud_tone.comp.spv";
         std::string fullscreen_shader="build/shaders/pcloud_fullscreen.vert.spv";
         std::string presentation_shader="build/shaders/pcloud_present.frag.spv";
+        std::string comparison_shader="build/shaders/pcloud_compare.frag.spv";
 
         static configuration from_directory(const std::string& dir)
         {
@@ -82,11 +83,13 @@ namespace pc
             value.tonemap_shader=base+"/pcloud_tone.comp.spv";
             value.fullscreen_shader=base+"/pcloud_fullscreen.vert.spv";
             value.presentation_shader=base+"/pcloud_present.frag.spv";
+            value.comparison_shader=base+"/pcloud_compare.frag.spv";
             return value;
         }
     };
     struct targets {vk::Image grid{};vk::Buffer points{};vk::Image hdr{},ldr{};};
     using overlay_callback=std::function<void(vk::CommandBuffer,vk::Extent2D)>;
+    using draw_callback=std::function<void(vk::CommandBuffer)>;
     // Explicit targets work with any VulkanWrapper-based renderer.
     void create(const configuration&,const std::vector<gbuffer>&,
                 const presentation_target&);
@@ -105,6 +108,14 @@ namespace pc
     void lighting(vk::CommandBuffer,std::uint32_t,const camera_frame&);
     void tonemap(vk::CommandBuffer,std::uint32_t,const camera_frame&);
     void present(vk::CommandBuffer,std::uint32_t,const overlay_callback& overlay={});
+    // Present a foreign compute-produced HDR image, or draw an alternative
+    // renderer in the exact same swapchain render pass (e.g. Lumen).
+    vk::RenderPass presentation_pass();
+    void present_image(vk::CommandBuffer,std::uint32_t,vk::Image,
+                       vk::ImageView,vk::ImageLayout,
+                       const overlay_callback& overlay={});
+    void present_custom(vk::CommandBuffer,std::uint32_t,
+                        const draw_callback&,const overlay_callback& overlay={});
     // One-call path: records cloud + GI + lighting + tonemap + present with
     // internally tracked Vulkan memory/image barriers for this swapchain image.
     // G-buffer must be finished and shader-readable before record().

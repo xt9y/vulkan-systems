@@ -176,7 +176,7 @@ static int pc_build_compile_shaders(pc_build_paths paths,const char* out_dir)
 {
     static const char* names[]={
         "cloud.comp","gi.comp","light.comp","tone.comp",
-        "fullscreen.vert","present.frag"
+        "fullscreen.vert","present.frag","compare.frag"
     };
     if(!out_dir || !paths.systems || pc_build_mkdirs(out_dir))
     {
