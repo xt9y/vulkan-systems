@@ -43,7 +43,7 @@ namespace editor
             item.width=area.w;item.height=area.h;item.tint=tint;
             out.push_back(std::move(item));
         }
-        void image(draw_list& out,draw_command::texture texture,rect area,color tint={1,1,1,1})
+        void image(draw_list& out,draw_command::texture texture,rect area)
         {
             if(area.w<=0 || area.h<=0)return;
             draw_command item{};
@@ -51,7 +51,6 @@ namespace editor
             item.image=texture;
             item.x=area.x;item.y=area.y;
             item.width=area.w;item.height=area.h;
-            item.tint=tint;
             out.push_back(std::move(item));
         }
         void text(draw_list& out,int x,int y,std::string content,
@@ -78,7 +77,8 @@ namespace editor
             constexpr int label_height=22;
             // Hell2024's Icon_Light uses Alignment::CENTERED: its visual
             // center must coincide with the light's projected 3D position.
-            const int top=(label.text=="LIGHT"||label.text=="CUBE")?cy-label_height/2:cy-20;
+            const bool sign=label.text=="LIGHT" || label.text=="CUBE";
+            const int top=sign?cy-label_height/2:cy-20;
             return {std::clamp(cx-label_width/2,0,
                      std::max(0,virtual_width-label_width)),
                     std::clamp(top,0,virtual_height-label_height),
@@ -154,14 +154,19 @@ namespace editor
         std::lock_guard<std::mutex> guard(mutex_);
         // Controls are intentionally hardcoded here, not in VulkanGame.
         if(events.tab)cursor_free_=!cursor_free_;
+        const bool cursor_inside=events.viewport_width>0 && events.viewport_height>0 &&
+            events.mouse_x>=0 && events.mouse_y>=0 &&
+            events.mouse_x<events.viewport_width && events.mouse_y<events.viewport_height;
+        mouse_x_=cursor_inside?virtual_x(events.mouse_x,events.viewport_width):-1;
+        mouse_y_=cursor_inside?virtual_y(events.mouse_y,events.viewport_height):-1;
         if(events.question)
         {
             visible_=!visible_;
             if(!visible_)cursor_free_=false;
             menu_=menu::none;
+            selected_object_=0;
             dragging_menu_=false;
             delete_armed_=false;
-            selected_object_=hovered_object_=0;
             selected_row_=scroll_first_=0;
         }
         if(!visible_)return;
@@ -173,22 +178,14 @@ namespace editor
                 pending_.push_back({action_kind::remove,"",
                                     selected_object_,"",0});
             menu_=menu::none;
+            selected_object_=0;
             dragging_menu_=false;
             delete_armed_=false;
-            selected_object_=0;
             return;
         }
 
         const int mx=virtual_x(events.mouse_x,events.viewport_width);
         const int my=virtual_y(events.mouse_y,events.viewport_height);
-        hovered_object_=0;
-        if(cursor_free_)
-            for(auto it=labels_.rbegin();it!=labels_.rend();++it)
-                if(it->visible && it->object &&
-                   inside(mx,my,label_rect(*it,events.viewport_width,events.viewport_height))) {
-                    hovered_object_=it->object;
-                    break;
-                }
         if(!events.mouse_down)dragging_menu_=false;
         if(dragging_menu_ && events.mouse_down)
         {
@@ -306,33 +303,37 @@ namespace editor
         draw_list out;
         if(!visible_||width<=0||height<=0)return out;
 
+        // Use the same topmost label and panel occlusion rules as clicking.
+        std::uint64_t hovered_object=0;
+        if(cursor_free_ && !dragging_menu_ && mouse_x_>=0 && mouse_y_>=0 &&
+           (menu_==menu::none || !inside(mouse_x_,mouse_y_,menu_rect(menu_x_,menu_y_))))
+            for(auto it=labels_.rbegin();it!=labels_.rend();++it)
+                if(it->visible && it->object && inside(mouse_x_,mouse_y_,label_rect(*it,width,height)))
+                {
+                    hovered_object=it->object;
+                    break;
+                }
+
         // World icons appear whenever '?' mode is enabled, even without TAB.
         for(const auto& label:labels_)
         {
             if(!label.visible || label.object==0)continue;
             const rect r=label_rect(label,width,height);
-            if(label.text=="LIGHT"||label.text=="CUBE")
+            const bool selected=menu_==menu::properties && label.object==selected_object_;
+            const bool highlighted=selected || label.object==hovered_object;
+            if(label.text=="LIGHT")
             {
-                const bool highlighted=label.object==selected_object_||
-                    label.object==hovered_object_;
-                image(out,draw_command::texture::light_icon,r,
-                    highlighted?red:color{1,1,1,1});
-                // Mask lettering baked into Icon_Light.jpg before rendering
-                // the chosen word in the embedded bold serif face.
-                rectangle(out,{r.x+5,r.y+4,r.w-10,r.h-8},
-                    highlighted?color{.46f,.06f,.08f,1.f}:
-                                color{.15f,.13f,.16f,1.f});
-                draw_command lettering{};
-                lettering.kind=draw_command::type::sign_text;
-                lettering.x=r.x;lettering.y=r.y;
-                lettering.width=r.w;lettering.height=r.h;
-                lettering.text=label.text;
-                lettering.tint={1.f,.94f,.88f,1.f};
-                out.push_back(std::move(lettering));
+                image(out,draw_command::texture::light_icon,r);
+                if(highlighted)out.back().tint={1.f,0.25f,0.25f,1.f};
+            }
+            else if(label.text=="CUBE")
+            {
+                image(out,draw_command::texture::cube_icon,r);
+                if(highlighted)out.back().tint={1.f,0.25f,0.25f,1.f};
             }
             else
             {
-                rectangle(out,r,label.object==selected_object_?red:teal);
+                rectangle(out,r,highlighted?red:teal);
                 text(out,r.x+r.w/2,r.y+4,label.text,
                      draw_command::alignment::center);
             }
