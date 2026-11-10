@@ -2,6 +2,7 @@
 #include <vk/vk.hpp>
 #include <gpu/descriptors.hpp>
 #include <gpu/buffer.hpp>
+#include <gpu/compute.hpp>
 #include <gpu/resource.hpp>
 #include <render/pipeline.hpp>
 #include <array>
@@ -18,6 +19,7 @@ struct input {
 struct geometry {
     vk::Buffer faces{},nodes{},triangles{},scene_info{};
     vk::Buffer photons{},offsets{};
+    std::uint32_t face_count=0;
 };
 // Per-BVH-face UV triangles stay index-aligned with VulkanPMap surfaces.
 // The texture atlas is built and owned by VulkanOptics, not the game.
@@ -50,12 +52,16 @@ public:
     compositor& operator=(const compositor&)=delete;
     void create(vk::RenderPass pass, const std::vector<input>& frames,
                 const char* vertex="build/shaders/pcloud_fullscreen.vert.spv",
-                const char* fragment="build/shaders/optics_compose.frag.spv");
+                const char* fragment="build/shaders/optics_compose.frag.spv",
+                const char* cache_shader="build/shaders/optics_cache.comp.spv");
     // Share the photon mapper's static GPU BVH; the mapper must outlive
     // submitted rendering work. Empty geometry disables off-screen rays.
     void set_scene(geometry,const std::vector<light>&);
     void set_textures(const std::vector<face_uv>&,
                       const std::vector<texture_rgba>&);
+    // Once per geometry/light change: precompute diffuse irradiance on both
+    // sides of each BVH face; never repeat shadow/photon gathering per pixel.
+    void update_radiance(vk::CommandBuffer command,std::uint32_t frame);
     // Only emit fragments inside rasterized material bounds.
     void record(vk::CommandBuffer command,std::uint32_t frame,
                 const camera& view,const std::vector<vk::Rect2D>& regions,
@@ -64,7 +70,10 @@ public:
 private:
     gpu::descriptors descriptors_;
     render::pipeline pipeline_;
-    gpu::buffer empty_,lights_,face_uv_;
+    gpu::compute radiance_program_;
+    gpu::buffer empty_,lights_,face_uv_,radiance_;
+    std::uint32_t radiance_faces_=0;
+    bool radiance_dirty_=false;
     gpu::owned_image atlas_;
     vk::ImageView atlas_view_{};
     vk::Sampler sampler_{},atlas_sampler_{};

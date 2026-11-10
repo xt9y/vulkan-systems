@@ -34,6 +34,9 @@ layout(std430,set=0,binding=13) readonly buffer OpticalUV {
     OpticsUV optics_uv[];
 };
 layout(set=0,binding=14) uniform sampler2D optics_atlas;
+layout(std430,set=0,binding=15) readonly buffer CachedDiffuse {
+    vec4 cached_diffuse[];
+};
 struct OpticsHit {vec3 position,normal;float t;uint face_id;};
 bool optics_aabb(vec3 ro,vec3 rd,vec3 lo,vec3 hi,float max_t)
 {
@@ -118,35 +121,6 @@ bool optics_closest(vec3 ro,vec3 rd,float max_t,out OpticsHit result)
     }
     return found;
 }
-vec3 optics_photon_radiance(OpticsHit hit,vec3 albedo)
-{
-    // Use the existing photon grid for off-screen indirect radiance,
-    // limiting work per query so the first mirror stays affordable on M2.
-    float radius=max(.18,optics_grid.w);
-    float radius2=radius*radius;
-    ivec3 center=ivec3(floor((hit.position-optics_grid.xyz)/
-                             max(optics_grid.w,1e-5)));
-    vec3 flux=vec3(0);
-    for(int z=-1;z<=1;++z)
-    for(int y=-1;y<=1;++y)
-    for(int x=-1;x<=1;++x) {
-        ivec3 c=center+ivec3(x,y,z);
-        if(any(lessThan(c,ivec3(0))) ||
-           any(greaterThanEqual(c,ivec3(16))))continue;
-        uint cell=uint(c.x+16*(c.y+16*c.z));
-        uint start=optics_offsets[cell];
-        uint stop=min(optics_offsets[cell+1u],start+48u);
-        for(uint i=start;i<stop;++i) {
-            OpticsPhoton p=optics_photons[i];
-            if(p.link.y!=hit.face_id)continue;
-            vec3 delta=hit.position-p.position.xyz;
-            float distance2=dot(delta,delta);
-            if(distance2>=radius2)continue;
-            flux+=p.power.rgb*(1.0-distance2/radius2);
-        }
-    }
-    return flux*albedo*(2.0/(OPTICS_PI*OPTICS_PI*radius2));
-}
 vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
 {
     OpticsFace f=optics_faces[hit.face_id];
@@ -177,32 +151,21 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
         albedo*=pow(max(textureLod(optics_atlas,atlas_uv,0.0).rgb,
                         vec3(0.0)),vec3(2.2));
     }
-    vec3 radiance=max(f.emission.rgb,vec3(0.0))+
-                  optics_photon_radiance(hit,albedo);
-    vec3 normal=hit.normal;
-    for(uint i=0u;i<min(optics_light_count.x,16u);++i) {
-        OpticsLight light=optics_lights[i];
-        vec3 delta=light.position_radius.xyz-hit.position;
-        float dist2=dot(delta,delta);
-        float radius=max(light.position_radius.w,.001);
-        if(dist2>=radius*radius || dist2<.0001)continue;
-        float distance=sqrt(dist2);
-        vec3 L=delta/distance;
-        float lambert=max(dot(normal,L),0.0);
-        if(lambert<=0.0)continue;
-        // Use ordinary point-light visibility for shading BVH hits.
-        // Glass and reflective materials no longer tint/redirect scene light.
-        OpticsHit blocker;
-        bool occluded=optics_closest(hit.position+normal*.03,L,
-                                    distance-.06,blocker);
-        if(occluded && optics_faces[blocker.face_id].albedo.w<=.001)
-            continue;
-        float fade=max(0.0,1.0-distance/radius);
-        radiance+=albedo*light.color_strength.rgb*
-            (light.color_strength.w*lambert*fade*fade/
-             (1.0+.12*dist2));
-    }
-    return radiance;
+    // Precomputed when the authoritative scene or lighting changes.
+    // No BVH shadow rays, 16-light loop or 27-cell photon gathering inside
+    // any reflected fragment. Opaque albedo/GLB textures remain per-hit.
+    uint side=dot(hit.normal,f.normal.xyz)>=0.0?0u:1u;
+    vec3 offset=hit.position-f.origin.xyz;
+    vec2 projected=vec2(dot(offset,f.u.xyz),dot(offset,f.v.xyz));
+    float u=projected.x*f.metric.x+projected.y*f.metric.y;
+    float v=projected.x*f.metric.y+projected.y*f.metric.z;
+    vec3 weights=max(vec3(1.0-u-v,u,v),vec3(0.0));
+    weights/=max(weights.x+weights.y+weights.z,.00001);
+    uint base=hit.face_id*6u+side*3u;
+    vec3 irradiance=cached_diffuse[base].rgb*weights.x+
+                    cached_diffuse[base+1u].rgb*weights.y+
+                    cached_diffuse[base+2u].rgb*weights.z;
+    return max(f.emission.rgb,vec3(0.0))+albedo*irradiance;
 }
 struct OpticsPath {
     vec3 origin;
