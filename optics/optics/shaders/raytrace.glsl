@@ -35,6 +35,7 @@ layout(std430,set=0,binding=13) readonly buffer OpticalUV {
     OpticsUV optics_uv[];
 };
 layout(set=0,binding=14) uniform sampler2D optics_atlas;
+layout(set=0,binding=16) uniform sampler2D hdr_image;
 // Per-face vertex normals share the exact face ordering of the traced BVH.
 // They do not change triangle intersections; curved meshes keep smooth
 // reflected directions instead of showing their individual polygons.
@@ -268,21 +269,47 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
     }
     return radiance;
 }
+// Unpolarized Fresnel for the actual incident and transmitted IORs.
+// Unlike Schlick, this also handles total internal reflection exactly.
+float optics_dielectric_fresnel(float cosine,float eta_i,float eta_t)
+{
+    cosine=clamp(cosine,0.0,1.0);
+    float eta=eta_i/eta_t;
+    float transmitted_sine2=eta*eta*(1.0-cosine*cosine);
+    if(transmitted_sine2>=1.0)return 1.0;
+    float transmitted_cosine=sqrt(max(0.0,1.0-transmitted_sine2));
+    float rs=(eta_i*cosine-eta_t*transmitted_cosine)/
+             max(eta_i*cosine+eta_t*transmitted_cosine,1e-6);
+    float rp=(eta_t*cosine-eta_i*transmitted_cosine)/
+             max(eta_t*cosine+eta_i*transmitted_cosine,1e-6);
+    return clamp(.5*(rs*rs+rp*rp),0.0,1.0);
+}
+vec3 optics_absorption(vec3 transmittance,float travel)
+{
+    // Tint is the transmission over one scene metre. Beer-Lambert
+    // yields white short paths and naturally deeper colors in thick glass.
+    return pow(clamp(transmittance,vec3(.001),vec3(1.0)),
+               vec3(max(0.0,travel)));
+}
 struct OpticsPath {
     vec3 origin;
     vec3 direction;
     vec3 throughput;
     int depth;
+    float medium_ior;
+    vec3 medium_tint;
 };
-vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
+vec3 optics_offscreen_radiance(vec3 origin,vec3 direction,
+                                float medium_ior,vec3 medium_tint)
 {
     if(optics_desc.x==0u)return vec3(0.0);
     OpticsPath pending[16];
     int queued=1;
-    pending[0]=OpticsPath(origin,normalize(direction),vec3(1.0),0);
+    pending[0]=OpticsPath(origin,normalize(direction),vec3(1.0),0,
+                           medium_ior,medium_tint);
     vec3 accumulated=vec3(0.0);
-    // Material interactions are bounded, not recursively compiled. Eight
-    // boundaries permit glass -> glass -> mirror -> glass and exits.
+    // Queue both physical Fresnel branches. No fake scene/environment
+    // substitutions and no recursion-specific shader compilation.
     for(int iteration=0;iteration<64 && queued>0;++iteration) {
         OpticsPath path=pending[--queued];
         if(path.depth>=10 ||
@@ -290,63 +317,59 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
                path.throughput.b))<.003)continue;
         OpticsHit hit;
         if(!optics_closest(path.origin,path.direction,1000.0,hit))
-            continue; // Outside the real scene: no cubemap/sky substitute.
+            continue;
+        if(path.medium_ior>1.001)
+            path.throughput*=optics_absorption(path.medium_tint,hit.t);
         OpticsFace surface=optics_faces[hit.face_id];
         if(surface.emission.w>1.0) {
             float strength=clamp(surface.albedo.w,0.0,1.0);
-            float ior=max(1.001,surface.emission.w);
+            float ior=clamp(surface.emission.w,1.001,3.0);
+            // Mesh outward orientation determines entry/exit, independently
+            // of the normal flipped toward the ray for shading.
             bool entering=dot(path.direction,surface.normal.xyz)<0.0;
+            float eta_i=path.medium_ior;
+            float eta_t=entering?ior:1.0;
             vec3 normal=hit.normal;
             float cosine=clamp(dot(-path.direction,normal),0.0,1.0);
-            float r0=(ior-1.0)/(ior+1.0);
-            r0*=r0;
-            float fresnel=r0+(1.0-r0)*pow(1.0-cosine,5.0);
-            // Thin-window material: no angular refraction and no lensing.
-            // The direction remains the same at every material boundary.
-            vec3 tint=max(surface.albedo.rgb,vec3(0.0));
-            // Low pass-through still reveals the material itself and
-            // keeps the edge visible in nested reflections/refractions.
-            // An exiting surface does not bend or tint the ray a second time.
-            // This preserves the perspective of the original camera and
-            // avoids double surfaces on thick glass cubes.
-            if(!entering) {
-                if(queued<16)
-                    pending[queued++]=OpticsPath(
-                        hit.position+path.direction*.03,path.direction,
-                        path.throughput,path.depth+1);
-                continue;
-            }
-            if(entering)
-                accumulated+=path.throughput*tint*(1.0-strength)*
-                             (1.0-fresnel);
+            float fresnel=optics_dielectric_fresnel(cosine,eta_i,eta_t);
+            vec3 tint=clamp(surface.albedo.rgb,vec3(.001),vec3(1.0));
+            // Reflection remains in the incident medium.
             vec3 reflected=path.throughput*fresnel;
             if(queued<16 && max(reflected.r,max(reflected.g,reflected.b))>.003)
                 pending[queued++]=OpticsPath(
                     hit.position+hit.geometric_normal*.012,
                     normalize(reflect(path.direction,normal)),
-                    reflected,path.depth+1);
-            if(strength>.003) {
-                vec3 transmitted=path.throughput*(1.0-fresnel)*strength*tint;
+                    reflected,path.depth+1,path.medium_ior,path.medium_tint);
+            vec3 transmission=refract(path.direction,normal,eta_i/eta_t);
+            if(dot(transmission,transmission)>1e-8 && strength>.003) {
+                vec3 transmitted=path.throughput*(1.0-fresnel)*strength;
                 if(queued<16)
                     pending[queued++]=OpticsPath(
-                        hit.position+path.direction*.03,path.direction,
-                        transmitted,path.depth+1);
+                        hit.position-hit.geometric_normal*.012,
+                        normalize(transmission),transmitted,path.depth+1,
+                        eta_t,entering?tint:vec3(1.0));
             }
+            if(entering)
+                accumulated+=path.throughput*tint*(1.0-strength)*
+                             (1.0-fresnel);
             continue;
         }
         if(surface.emission.w<-.001) {
             float reflectivity=clamp(-surface.emission.w,0.0,1.0);
-            vec3 tint=max(surface.albedo.rgb,vec3(0.0));
+            vec3 tint=clamp(surface.albedo.rgb,vec3(0.0),vec3(1.0));
+            float cosine=clamp(dot(-path.direction,hit.normal),0.0,1.0);
+            vec3 f0=tint*reflectivity;
+            vec3 f=f0+(vec3(1.0)-f0)*pow(1.0-cosine,5.0);
             accumulated+=path.throughput*tint*.10*(1.0-reflectivity);
-            path.throughput*=tint*reflectivity;
+            path.throughput*=f;
             path.origin=hit.position+hit.geometric_normal*.012;
             path.direction=normalize(reflect(path.direction,hit.normal));
             path.depth++;
             if(queued<16)pending[queued++]=path;
             continue;
         }
-        // Reuse the *exact* lit raster color when this hit is visible
-        // in the primary camera, preserving textures and animation.
+        // If the same point is raster-visible, share the exact HDR
+        // lighting including its PBR BRDF, animated textures and emission.
         vec4 projected=camera.vp*vec4(hit.position,1.0);
         bool from_screen=false;
         if(projected.w>.00001) {
@@ -357,37 +380,37 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
                ndc.z>=0.0 && ndc.z<=1.0) {
                 float expected_depth=.1+.9*ndc.z;
                 float actual_depth=textureLod(opaque_depth,screen,0.0).r;
-                // Exclude near-depth first-person weapon pixels.
                 if(actual_depth>=.1 &&
                    abs(actual_depth-expected_depth)<.0004) {
                     accumulated+=path.throughput*
-                        textureLod(lit_image,screen,0.0).rgb;
+                        textureLod(hdr_image,screen,0.0).rgb;
                     from_screen=true;
                 }
             }
         }
-        if(!from_screen) {
-            vec3 radiance=optics_surface_radiance(hit,path.direction);
-            // Match the main scene's output transfer for off-screen hits.
+        if(!from_screen)
             accumulated+=path.throughput*
-                (radiance/(vec3(1.0)+max(radiance,vec3(0.0))));
-        }
+                         optics_surface_radiance(hit,path.direction);
     }
     return accumulated;
 }
-vec3 optics_offscreen_glossy(vec3 origin,vec3 direction,float mattness)
+vec3 optics_offscreen_glossy(vec3 origin,vec3 direction,float mattness,
+                            float medium_ior,vec3 medium_tint)
 {
-    vec3 center=optics_offscreen_radiance(origin,direction);
+    vec3 center=optics_offscreen_radiance(origin,direction,
+                                          medium_ior,medium_tint);
     // Deterministic cone sampling only for matte, off-screen reflections.
     // No noise, stochastic temporal filter or environment fallback.
-    if(mattness<=.35)return center;
+    if(mattness<=.08)return center;
     vec3 axis=abs(direction.y)<.9?vec3(0,1,0):vec3(1,0,0);
     vec3 tangent=normalize(cross(direction,axis));
     vec3 bitangent=normalize(cross(direction,tangent));
     float spread=mattness*mattness*.16;
     vec3 offset=(tangent+bitangent)*spread;
-    vec3 a=optics_offscreen_radiance(origin,normalize(direction+offset));
-    vec3 b=optics_offscreen_radiance(origin,normalize(direction-offset));
+    vec3 a=optics_offscreen_radiance(origin,normalize(direction+offset),
+                                    medium_ior,medium_tint);
+    vec3 b=optics_offscreen_radiance(origin,normalize(direction-offset),
+                                    medium_ior,medium_tint);
     return (center*2.0+a+b)*.25;
 }
 #endif
