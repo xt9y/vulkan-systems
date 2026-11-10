@@ -1,0 +1,22 @@
+#version 450
+// Convert cached specular->diffuse photon footprints into linear radiance.
+// Resolve before the PCloud tonemap, never as an LDR additive overlay.
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+layout(std430,set=0,binding=0) readonly buffer CausticEnergy {
+    uint energy[];
+};
+layout(rgba16f,set=0,binding=1) uniform image2D scene_hdr;
+void main()
+{
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size=imageSize(scene_hdr);
+    if(any(greaterThanEqual(p,size)))return;
+    uint i=uint(p.x+p.y*size.x)*3u;
+    vec3 flux=vec3(energy[i],energy[i+1u],energy[i+2u]);
+    if(all(equal(flux,vec3(0.0))))return;
+    // Fixed-point photon splat reconstruction; photon energy and density
+    // are already normalized at emission, so no viewport-dependent boosts.
+    vec3 contribution=flux*(1.0/3500.0);
+    vec4 original=imageLoad(scene_hdr,p);
+    imageStore(scene_hdr,p,vec4(original.rgb+contribution,original.a));
+}
