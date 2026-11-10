@@ -1,7 +1,8 @@
 // Reusable software-BVH reflection queries over Photon Mapping's scene
 // buffers. BVH leaf ordering and the 112-byte face layout match VulkanPMap.
-// Queries only run for material pixels whose reflected/refracted scene data
-// is unavailable in the visible rasterized image.
+// Full-resolution reflected rays use the same triangle BVH as Photon
+// Mapping. Per-hit shadows, photon irradiance, UV texture, and smooth
+// vertex normals are evaluated without an interpolated radiance cache.
 #ifndef OPTICS_RAYTRACE_GLSL
 #define OPTICS_RAYTRACE_GLSL
 const float OPTICS_PI=3.14159265358979;
@@ -34,10 +35,19 @@ layout(std430,set=0,binding=13) readonly buffer OpticalUV {
     OpticsUV optics_uv[];
 };
 layout(set=0,binding=14) uniform sampler2D optics_atlas;
-layout(std430,set=0,binding=15) readonly buffer CachedDiffuse {
-    vec4 cached_diffuse[];
+// Per-face vertex normals share the exact face ordering of the traced BVH.
+// They do not change triangle intersections; curved meshes keep smooth
+// reflected directions instead of showing their individual polygons.
+struct OpticsNormals {vec4 a,b,c;};
+layout(std430,set=0,binding=15) readonly buffer OpticalNormals {
+    OpticsNormals optics_normals[];
 };
-struct OpticsHit {vec3 position,normal;float t;uint face_id;};
+struct OpticsHit {
+    vec3 position,normal,geometric_normal;
+    float t;
+    uint face_id;
+    vec2 bary;
+};
 bool optics_aabb(vec3 ro,vec3 rd,vec3 lo,vec3 hi,float max_t)
 {
     vec3 safe=vec3(
@@ -117,9 +127,85 @@ bool optics_closest(vec3 ro,vec3 rd,float max_t,out OpticsHit result)
     if(found) {
         OpticsFace f=optics_faces[result.face_id];
         result.position=ro+rd*result.t;
-        result.normal=dot(rd,f.normal.xyz)<0.0?f.normal.xyz:-f.normal.xyz;
+        vec3 d=result.position-f.origin.xyz;
+        vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
+        result.bary=vec2(q.x*f.metric.x+q.y*f.metric.y,
+                         q.x*f.metric.y+q.y*f.metric.z);
+        OpticsNormals smooth=optics_normals[result.face_id];
+        vec3 n=smooth.a.xyz*(1.0-result.bary.x-result.bary.y)+
+               smooth.b.xyz*result.bary.x+smooth.c.xyz*result.bary.y;
+        vec3 geometric=normalize(f.normal.xyz);
+        if(dot(n,n)<1e-8)n=geometric;
+        else n=normalize(n);
+        // Keep shading normals in the same hemisphere as the triangle.
+        if(dot(n,geometric)<0.0)n=-n;
+        if(dot(rd,geometric)>0.0) {
+            geometric=-geometric;
+            n=-n;
+        }
+        result.geometric_normal=geometric;
+        result.normal=n;
     }
     return found;
+}
+// Direct point-light shadow visibility needs only an opaque intersection,
+// not a nearest surface with all the associated memory traffic. Transparent
+// glass does not block ordinary lights; reflective and opaque surfaces do.
+bool optics_occluded(vec3 ro,vec3 rd,float limit,uint source)
+{
+    if(limit<=.025 || optics_desc.x==0u)return false;
+    uint total=optics_nodes[0].next;
+    if(total==0u || total>1000000u)return false;
+    uint index=0u;
+    for(uint step=0u;index<total && step<total*2u;++step) {
+        OpticsNode node=optics_nodes[index];
+        if(!optics_aabb(ro,rd,node.minimum,node.maximum,limit)) {
+            index=node.next;
+            continue;
+        }
+        uint count=node.first_and_count&15u;
+        if(count==0u){++index;continue;}
+        uint first=node.first_and_count>>4u;
+        for(uint k=0u;k<count;++k) {
+            uint id=uint(optics_triangles[(first+k)*3u].w);
+            if(id>=optics_desc.x || id==optics_desc.y || id==source)continue;
+            OpticsFace f=optics_faces[id];
+            if(f.albedo.w>.001)continue;
+            float t;
+            if(optics_face_hit(ro,rd,f,id,limit,t))return true;
+        }
+        index=node.next;
+    }
+    return false;
+}
+vec3 optics_photon_radiance(OpticsHit hit,vec3 albedo)
+{
+    // Use the existing photon grid for off-screen indirect radiance,
+    // limiting work per query so the first mirror stays affordable on M2.
+    float radius=max(.18,optics_grid.w);
+    float radius2=radius*radius;
+    ivec3 center=ivec3(floor((hit.position-optics_grid.xyz)/
+                             max(optics_grid.w,1e-5)));
+    vec3 flux=vec3(0);
+    for(int z=-1;z<=1;++z)
+    for(int y=-1;y<=1;++y)
+    for(int x=-1;x<=1;++x) {
+        ivec3 c=center+ivec3(x,y,z);
+        if(any(lessThan(c,ivec3(0))) ||
+           any(greaterThanEqual(c,ivec3(16))))continue;
+        uint cell=uint(c.x+16*(c.y+16*c.z));
+        uint start=optics_offsets[cell];
+        uint stop=min(optics_offsets[cell+1u],start+48u);
+        for(uint i=start;i<stop;++i) {
+            OpticsPhoton p=optics_photons[i];
+            if(p.link.y!=hit.face_id)continue;
+            vec3 delta=hit.position-p.position.xyz;
+            float distance2=dot(delta,delta);
+            if(distance2>=radius2)continue;
+            flux+=p.power.rgb*(1.0-distance2/radius2);
+        }
+    }
+    return flux*albedo*(2.0/(OPTICS_PI*OPTICS_PI*radius2));
 }
 vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
 {
@@ -151,21 +237,29 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
         albedo*=pow(max(textureLod(optics_atlas,atlas_uv,0.0).rgb,
                         vec3(0.0)),vec3(2.2));
     }
-    // Precomputed when the authoritative scene or lighting changes.
-    // No BVH shadow rays, 16-light loop or 27-cell photon gathering inside
-    // any reflected fragment. Opaque albedo/GLB textures remain per-hit.
-    uint side=dot(hit.normal,f.normal.xyz)>=0.0?0u:1u;
-    vec3 offset=hit.position-f.origin.xyz;
-    vec2 projected=vec2(dot(offset,f.u.xyz),dot(offset,f.v.xyz));
-    float u=projected.x*f.metric.x+projected.y*f.metric.y;
-    float v=projected.x*f.metric.y+projected.y*f.metric.z;
-    vec3 weights=max(vec3(1.0-u-v,u,v),vec3(0.0));
-    weights/=max(weights.x+weights.y+weights.z,.00001);
-    uint base=hit.face_id*6u+side*3u;
-    vec3 irradiance=cached_diffuse[base].rgb*weights.x+
-                    cached_diffuse[base+1u].rgb*weights.y+
-                    cached_diffuse[base+2u].rgb*weights.z;
-    return max(f.emission.rgb,vec3(0.0))+albedo*irradiance;
+    vec3 radiance=max(f.emission.rgb,vec3(0.0))+
+                  optics_photon_radiance(hit,albedo);
+    vec3 normal=hit.normal;
+    for(uint i=0u;i<min(optics_light_count.x,16u);++i) {
+        OpticsLight light=optics_lights[i];
+        vec3 delta=light.position_radius.xyz-hit.position;
+        float dist2=dot(delta,delta);
+        float radius=max(light.position_radius.w,.001);
+        if(dist2>=radius*radius || dist2<.0001)continue;
+        float distance=sqrt(dist2);
+        vec3 L=delta/distance;
+        float lambert=max(dot(normal,L),0.0);
+        if(lambert<=0.0)continue;
+        // Early-out any-opaque traversal is exact for straight-line
+        // point-light visibility, including opaque surfaces behind glass.
+        if(optics_occluded(hit.position+hit.geometric_normal*.03,L,
+                           distance-.06,hit.face_id))continue;
+        float fade=max(0.0,1.0-distance/radius);
+        radiance+=albedo*light.color_strength.rgb*
+            (light.color_strength.w*lambert*fade*fade/
+             (1.0+.12*dist2));
+    }
+    return radiance;
 }
 struct OpticsPath {
     vec3 origin;
@@ -221,7 +315,7 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
             vec3 reflected=path.throughput*fresnel;
             if(queued<16 && max(reflected.r,max(reflected.g,reflected.b))>.003)
                 pending[queued++]=OpticsPath(
-                    hit.position+normal*.012,
+                    hit.position+hit.geometric_normal*.012,
                     normalize(reflect(path.direction,normal)),
                     reflected,path.depth+1);
             if(strength>.003) {
@@ -238,7 +332,7 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
             vec3 tint=max(surface.albedo.rgb,vec3(0.0));
             accumulated+=path.throughput*tint*.10*(1.0-reflectivity);
             path.throughput*=tint*reflectivity;
-            path.origin=hit.position+hit.normal*.012;
+            path.origin=hit.position+hit.geometric_normal*.012;
             path.direction=normalize(reflect(path.direction,hit.normal));
             path.depth++;
             if(queued<16)pending[queued++]=path;
