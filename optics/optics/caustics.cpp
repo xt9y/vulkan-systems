@@ -4,9 +4,11 @@
 
 namespace optics {
 void caustics::create(vk::Extent2D extent,const std::vector<vk::ImageView>& depth,
-                      const char* shader)
+                      const std::vector<vk::ImageView>& hdr,
+                      const char* shader,const char* resolve)
 {
-    if(!extent.width || !extent.height || depth.empty() || !shader)
+    if(!extent.width || !extent.height || depth.empty() ||
+       depth.size()!=hdr.size() || !shader || !resolve)
         throw std::invalid_argument("optics: invalid caustic target");
     reset();
     try {
@@ -29,6 +31,14 @@ void caustics::create(vk::Extent2D extent,const std::vector<vk::ImageView>& dept
             bindings[i].stageFlags=vk::ShaderStageFlagBits::eCompute;
         }
         sets_.create(bindings,static_cast<std::uint32_t>(depth.size()));
+        const std::array<vk::DescriptorSetLayoutBinding,2> resolve_bindings{{
+            {0,vk::DescriptorType::eStorageBuffer,1,
+                vk::ShaderStageFlagBits::eCompute},
+            {1,vk::DescriptorType::eStorageImage,1,
+                vk::ShaderStageFlagBits::eCompute}
+        }};
+        resolve_sets_.create(resolve_bindings,
+                             static_cast<std::uint32_t>(depth.size()));
         vk::SamplerCreateInfo sampler{};
         sampler.magFilter=vk::Filter::eNearest;
         sampler.minFilter=vk::Filter::eNearest;
@@ -43,8 +53,15 @@ void caustics::create(vk::Extent2D extent,const std::vector<vk::ImageView>& dept
             image.imageLayout=vk::ImageLayout::eDepthStencilReadOnlyOptimal;
             sets_.write_image(i,3,image);
             sets_.write_buffer(i,2,outputs_[i]->descriptor());
+            resolve_sets_.write_buffer(i,0,outputs_[i]->descriptor());
+            if(!hdr[i])throw std::invalid_argument("optics: missing HDR caustic view");
+            vk::DescriptorImageInfo target{};
+            target.imageView=hdr[i];
+            target.imageLayout=vk::ImageLayout::eGeneral;
+            resolve_sets_.write_image(i,1,target);
         }
         program_.create(shader,{sets_.layout()},sizeof(vk::util::math::mat4)+sizeof(std::array<std::uint32_t,4>));
+        resolve_.create(resolve,{resolve_sets_.layout()},0);
     }catch(...) {reset();throw;}
 }
 void caustics::set_photons(photons source)
@@ -92,8 +109,12 @@ void caustics::record(vk::CommandBuffer cmd,std::uint32_t image,
     after.dstAccessMask=vk::AccessFlagBits::eShaderRead;
     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader |
                         vk::PipelineStageFlagBits::eTransfer,
-                        vk::PipelineStageFlagBits::eFragmentShader,{},
+                        vk::PipelineStageFlagBits::eComputeShader,{},
                         {},{after},{});
+    if(source_.capacity)
+        resolve_.dispatch(cmd,(extent_.width+7u)/8u,
+                          (extent_.height+7u)/8u,1u,
+                          {resolve_sets_.set(image)});
 }
 vk::Buffer caustics::buffer(std::uint32_t image) const
 {
@@ -101,7 +122,9 @@ vk::Buffer caustics::buffer(std::uint32_t image) const
 }
 void caustics::reset() noexcept
 {
+    resolve_.reset();
     program_.reset();
+    resolve_sets_.reset();
     sets_.reset();
     outputs_.clear();
     if(sampler_)vk::device::get()->handle.destroySampler(sampler_);
