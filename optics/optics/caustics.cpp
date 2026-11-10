@@ -1,5 +1,7 @@
 #include "caustics.hpp"
 #include <array>
+#include <cstring>
+#include <utility>
 #include <stdexcept>
 
 namespace optics {
@@ -14,6 +16,8 @@ void caustics::create(vk::Extent2D extent,const std::vector<vk::ImageView>& dept
     try {
         extent_=extent;
         outputs_.resize(depth.size());
+        cached_views_.resize(depth.size());
+        valid_views_.assign(depth.size(),0u);
         const vk::DeviceSize bytes=vk::DeviceSize(extent.width)*extent.height*3u*sizeof(std::uint32_t);
         for(auto& out:outputs_) {
             out=std::make_unique<gpu::buffer>();
@@ -76,6 +80,7 @@ void caustics::set_photons(photons source)
     if(!source.sorted || !source.used)
         throw std::invalid_argument("optics: missing photon transport buffers");
     source_=source;
+    std::fill(valid_views_.begin(),valid_views_.end(),0u);
     for(std::uint32_t i=0;i<outputs_.size();++i) {
         vk::DescriptorBufferInfo sorted{source.sorted,0,VK_WHOLE_SIZE};
         vk::DescriptorBufferInfo count{source.used,0,sizeof(std::uint32_t)};
@@ -88,6 +93,31 @@ void caustics::record(vk::CommandBuffer cmd,std::uint32_t image,
 {
     if(!cmd || image>=outputs_.size())throw std::invalid_argument("optics: invalid image");
     auto& out=*outputs_[image];
+    // Photon deposits are in world coordinates. A still camera can reuse
+    // its previous projected footprint instead of clearing/reprojecting
+    // the same photons each frame. The HDR resolve still runs because
+    // PCloud recomputes the lighting image every frame.
+    if(valid_views_[image] &&
+       std::memcmp(&cached_views_[image],&vp,sizeof(vp))==0) {
+        if(source_.capacity) {
+            vk::BufferMemoryBarrier visible{};
+            visible.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+            visible.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+            visible.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            visible.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            visible.buffer=out.handle();
+            visible.size=VK_WHOLE_SIZE;
+            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                                vk::PipelineStageFlagBits::eComputeShader,{},
+                                {},{visible},{});
+            resolve_.dispatch(cmd,(extent_.width+7u)/8u,
+                              (extent_.height+7u)/8u,1u,
+                              {resolve_sets_.set(image)});
+        }
+        return;
+    }
+    cached_views_[image]=vp;
+    valid_views_[image]=1u;
     cmd.fillBuffer(out.handle(),0,out.size(),0);
     vk::BufferMemoryBarrier transfer{};
     transfer.srcAccessMask=vk::AccessFlagBits::eTransferWrite;
@@ -130,6 +160,8 @@ void caustics::reset() noexcept
     resolve_sets_.reset();
     sets_.reset();
     outputs_.clear();
+    cached_views_.clear();
+    valid_views_.clear();
     if(sampler_)vk::device::get()->handle.destroySampler(sampler_);
     sampler_=nullptr;
     source_={};
