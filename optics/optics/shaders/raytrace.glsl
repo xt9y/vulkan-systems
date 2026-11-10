@@ -215,6 +215,28 @@ vec3 optics_photon_radiance(OpticsHit hit,vec3 albedo)
     }
     return flux*albedo*(2.0/(OPTICS_PI*OPTICS_PI*radius2));
 }
+// Same direct-light GGX/Smith/Schlick BRDF as PCloud light.comp,
+// evaluated only at secondary surfaces outside the primary screen.
+vec3 optics_brdf(vec3 albedo,float metallic,float roughness,
+                 vec3 N,vec3 V,vec3 L)
+{
+    float nl=max(dot(N,L),0.0);
+    if(nl<=0.0)return vec3(0.0);
+    vec3 H=normalize(V+L);
+    float nv=max(dot(N,V),1e-4);
+    float nh=max(dot(N,H),0.0);
+    float vh=max(dot(V,H),0.0);
+    float a=roughness*roughness,a2=a*a;
+    float d=nh*nh*(a2-1.0)+1.0;
+    float D=a2/max(OPTICS_PI*d*d,1e-6);
+    float k=(roughness+1.0)*(roughness+1.0)*.125;
+    float G=(nv/(nv*(1.0-k)+k))*(nl/(nl*(1.0-k)+k));
+    vec3 F0=mix(vec3(.04),albedo,metallic);
+    float m=1.0-vh,m2=m*m;
+    vec3 F=F0+(vec3(1.0)-F0)*m2*m2*m;
+    return ((vec3(1.0)-F)*(1.0-metallic)*albedo/OPTICS_PI+
+            D*G*F/max(4.0*nv*nl,1e-4))*nl;
+}
 vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
 {
     OpticsFace f=optics_faces[hit.face_id];
@@ -245,9 +267,14 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
         albedo*=pow(max(textureLod(optics_atlas,atlas_uv,0.0).rgb,
                         vec3(0.0)),vec3(2.2));
     }
+    OpticsNormals material=optics_normals[hit.face_id];
+    float metallic=clamp(material.a.w,0.0,1.0);
+    float roughness=clamp(material.b.w,.045,1.0);
+    float ao=clamp(material.c.w,0.0,1.0);
     vec3 radiance=max(f.emission.rgb,vec3(0.0))+
-                  optics_photon_radiance(hit,albedo);
+                  optics_photon_radiance(hit,albedo)*(1.0-metallic)*ao;
     vec3 normal=hit.normal;
+    vec3 view_direction=normalize(-rd);
     for(uint i=0u;i<min(optics_light_count.x,16u);++i) {
         OpticsLight light=optics_lights[i];
         vec3 delta=light.position_radius.xyz-hit.position;
@@ -262,10 +289,12 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
         // point-light visibility, including opaque surfaces behind glass.
         if(optics_occluded(hit.position+hit.geometric_normal*.03,L,
                            distance-.06,hit.face_id))continue;
-        float fade=max(0.0,1.0-distance/radius);
-        radiance+=albedo*light.color_strength.rgb*
-            (light.color_strength.w*lambert*fade*fade/
-             (1.0+.12*dist2));
+        float q=clamp(distance/radius,0.0,1.0);
+        float attenuation=1.0-q*q*(3.0-2.0*q);
+        radiance+=optics_brdf(albedo,metallic,roughness,
+                             normal,view_direction,L)*
+                  light.color_strength.rgb*
+                  (light.color_strength.w*attenuation);
     }
     return radiance;
 }
