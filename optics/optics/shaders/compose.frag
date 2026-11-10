@@ -45,33 +45,38 @@ void main()
     vec3 incoming=normalize(P-camera.eye.xyz);
     if(dot(N,incoming)>0.0)N=-N;
     vec3 R=reflect(incoming,N);
-    // Both materials query the same BVH. An unreflective material does
-    // not need a reflection ray; preserve exact Fresnel on glass.
+    // Linear-HDR material composition. PCloud performs exactly this
+    // exposure/tonemap on its opaque pixels; optics does it once here.
     float strength=clamp(tint.a,0.0,1.0);
-    vec3 reflection=(mask.a<.75 || strength>.001) ?
-        optics_offscreen_glossy(P+N*.03,R,mattness) : vec3(0.0);
     float cosine=clamp(dot(-incoming,N),0.0,1.0);
-    float fresnel=.04+.96*pow(1.0-cosine,5.0);
+    vec3 radiance=vec3(0.0);
     if(mask.a<.75) {
-        // Transmit through the same BVH as mirrors. The previous
-        // displaced screen sample duplicated the first-person gun and
-        // skipped secondary glass and mirror surfaces.
-        // Thin-window transmission: keep the camera ray unchanged.
-        // Bending through thick cuboid geometry made the world look zoomed
-        // and distorted near the edges of the camera's field of view.
-        // A true refractive lens can be a separate optical material later.
-        float transmission=clamp(tint.a,0.0,1.0);
-        vec3 background=transmission>.001 ?
-            optics_offscreen_glossy(P+incoming*.03,incoming,mattness) :
-            vec3(0.0);
-        // At zero pass-through show opaque tinted glass, not a hole;
-        // at one show the unchanged camera perspective through it.
-        vec3 glass=mix(tint.rgb,background*mix(vec3(1.0),tint.rgb,.20),
-                       transmission);
-        color=vec4(mix(glass,reflection,fresnel),1.0);
+        float ior=max(texture(optic_material,uv).g,1.001);
+        float fresnel=optics_dielectric_fresnel(cosine,1.0,ior);
+        vec3 reflected=optics_offscreen_glossy(P+N*.012,R,mattness,
+                                               1.0,vec3(1.0));
+        vec3 transmitted=refract(incoming,N,1.0/ior);
+        vec3 tint_filter=clamp(tint.rgb,vec3(.001),vec3(1.0));
+        if(length(transmitted)>.001 && strength>.003) {
+            // Trace through actual backfaces. The outgoing ray is bent
+            // again on exit, so a parallel-sided slab has no fake zoom.
+            vec3 behind=optics_offscreen_glossy(
+                P-N*.012,normalize(transmitted),mattness,ior,tint_filter);
+            radiance+=behind*strength*(1.0-fresnel);
+        }
+        radiance+=reflected*fresnel;
+        // A deliberate opaque portion of the user-controlled material
+        // remains tinted, rather than becoming an empty cutout.
+        radiance+=tint_filter*(1.0-strength)*(1.0-fresnel);
     } else {
-        // Mirrors trace the software BVH even for off-screen geometry.
-        // Reflectivity is a material parameter, not alpha blending.
-        color=vec4(mix(tint.rgb*.10,reflection*tint.rgb,strength),1.0);
+        // Conductor Fresnel: RGB F0 is the mirror's tinted reflectivity.
+        // One initial ray for sharp mirrors; only rough ones get extras.
+        vec3 f0=clamp(tint.rgb*strength,vec3(0.0),vec3(1.0));
+        vec3 fresnel=f0+(vec3(1.0)-f0)*pow(1.0-cosine,5.0);
+        vec3 reflected=optics_offscreen_glossy(P+N*.012,R,mattness,
+                                               1.0,vec3(1.0));
+        radiance=reflected*fresnel+tint.rgb*.10*(1.0-strength);
     }
+    radiance=max(radiance,vec3(0.0))*max(camera.forward.w,0.0);
+    color=vec4(radiance/(vec3(1.0)+radiance),1.0);
 }
