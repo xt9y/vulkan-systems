@@ -31,13 +31,16 @@ void caustics::create(vk::Extent2D extent,const std::vector<vk::ImageView>& dept
             bindings[i].stageFlags=vk::ShaderStageFlagBits::eCompute;
         }
         sets_.create(bindings,static_cast<std::uint32_t>(depth.size()));
-        const std::array<vk::DescriptorSetLayoutBinding,2> resolve_bindings{{
-            {0,vk::DescriptorType::eStorageBuffer,1,
-                vk::ShaderStageFlagBits::eCompute},
-            {1,vk::DescriptorType::eStorageImage,1,
-                vk::ShaderStageFlagBits::eCompute}
-        }};
-        resolve_sets_.create(resolve_bindings,
+        std::vector<vk::DescriptorSetLayoutBinding> resolve_bindings(2);
+        resolve_bindings[0].binding=0;
+        resolve_bindings[0].descriptorType=vk::DescriptorType::eStorageBuffer;
+        resolve_bindings[1].binding=1;
+        resolve_bindings[1].descriptorType=vk::DescriptorType::eStorageImage;
+        for(auto& binding:resolve_bindings) {
+            binding.descriptorCount=1;
+            binding.stageFlags=vk::ShaderStageFlagBits::eCompute;
+        }
+        resolve_sets_.create(std::move(resolve_bindings),
                              static_cast<std::uint32_t>(depth.size()));
         vk::SamplerCreateInfo sampler{};
         sampler.magFilter=vk::Filter::eNearest;
