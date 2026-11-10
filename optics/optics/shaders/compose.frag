@@ -2,7 +2,8 @@
 #extension GL_GOOGLE_include_directive : require
 // Opaque/reflective material resolve. Every reflective pixel traces the
 // same GPU BVH as VulkanPMap, including geometry outside the viewport.
-// Glass is a thin non-magnifying material; transmission uses BVH rays.
+// Closed glass geometry refracts at both entry and exit; all optical
+// radiance is combined in linear HDR before the PCloud tone curve.
 layout(location=0) in vec2 uv_in;
 layout(location=0) out vec4 color;
 layout(set=0,binding=0) uniform sampler2D lit_image;
