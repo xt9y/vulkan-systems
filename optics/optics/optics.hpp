@@ -2,7 +2,6 @@
 #include <vk/vk.hpp>
 #include <gpu/descriptors.hpp>
 #include <gpu/buffer.hpp>
-#include <gpu/compute.hpp>
 #include <gpu/resource.hpp>
 #include <render/pipeline.hpp>
 #include <array>
@@ -28,6 +27,11 @@ struct face_uv {
     std::uint32_t texture_id=0;
     float alpha_cutoff=0.f;
 };
+// Each entry corresponds to one BVH face, including transport emitters.
+// Smooth normals are in world space and share the same vertex order as UVs.
+struct face_normals {
+    std::array<float,4> a{},b{},c{};
+};
 struct texture_rgba {
     std::uint32_t id=0,width=0,height=0;
     std::vector<std::uint8_t> pixels;
@@ -52,16 +56,13 @@ public:
     compositor& operator=(const compositor&)=delete;
     void create(vk::RenderPass pass, const std::vector<input>& frames,
                 const char* vertex="build/shaders/pcloud_fullscreen.vert.spv",
-                const char* fragment="build/shaders/optics_compose.frag.spv",
-                const char* cache_shader="build/shaders/optics_cache.comp.spv");
+                const char* fragment="build/shaders/optics_compose.frag.spv");
     // Share the photon mapper's static GPU BVH; the mapper must outlive
     // submitted rendering work. Empty geometry disables off-screen rays.
     void set_scene(geometry,const std::vector<light>&);
     void set_textures(const std::vector<face_uv>&,
                       const std::vector<texture_rgba>&);
-    // Once per geometry/light change: precompute diffuse irradiance on both
-    // sides of each BVH face; never repeat shadow/photon gathering per pixel.
-    void update_radiance(vk::CommandBuffer command,std::uint32_t frame);
+    void set_normals(const std::vector<face_normals>&);
     // Only emit fragments inside rasterized material bounds.
     void record(vk::CommandBuffer command,std::uint32_t frame,
                 const camera& view,const std::vector<vk::Rect2D>& regions,
@@ -70,10 +71,8 @@ public:
 private:
     gpu::descriptors descriptors_;
     render::pipeline pipeline_;
-    gpu::compute radiance_program_;
-    gpu::buffer empty_,lights_,face_uv_,radiance_;
-    std::uint32_t radiance_faces_=0;
-    bool radiance_dirty_=false;
+    gpu::buffer empty_,lights_,face_uv_,face_normals_;
+    std::uint32_t face_count_=0;
     gpu::owned_image atlas_;
     vk::ImageView atlas_view_{};
     vk::Sampler sampler_{},atlas_sampler_{};
