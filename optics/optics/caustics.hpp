@@ -22,7 +22,9 @@ public:
     caustics(const caustics&)=delete;
     caustics& operator=(const caustics&)=delete;
     void create(vk::Extent2D extent,const std::vector<vk::ImageView>& depth,
-                const char* shader="build/shaders/optics_project.comp.spv");
+                const std::vector<vk::ImageView>& hdr,
+                const char* shader="build/shaders/optics_project.comp.spv",
+                const char* resolve="build/shaders/optics_caustic_resolve.comp.spv");
     void set_photons(photons source);
     void record(vk::CommandBuffer command,std::uint32_t image,
                 const vk::util::math::mat4& view_projection);
@@ -31,8 +33,8 @@ public:
 private:
     vk::Extent2D extent_{};
     std::vector<std::unique_ptr<gpu::buffer>> outputs_;
-    gpu::compute program_;
-    gpu::descriptors sets_;
+    gpu::compute program_, resolve_;
+    gpu::descriptors sets_, resolve_sets_;
     vk::Sampler sampler_{};
     photons source_{};
 };
