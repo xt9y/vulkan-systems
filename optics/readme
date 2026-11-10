@@ -9,8 +9,9 @@ Reflective and glass faces are removed from the opaque G-buffer and
 composited from a separate front-surface material target. One shared
 software BVH traces ordered secondary hits through glass, other mirrors
 and ordinary geometry. Bounded ray-path branching handles Fresnel
-reflection, Snell transmission, internal reflection and absorption, with
-no compiler-side shader recursion.
+reflection and straight-through thin-glass transmission, with
+no compiler-side shader recursion. Glass does not bend viewing rays
+or magnify the background; tint and Fresnel reflection remain.
 
 Reflected/through-glass GLB base-color textures are sampled via a GPU
 RGBA8 texture atlas plus per-face triangle UV mappings. Alpha-cutout

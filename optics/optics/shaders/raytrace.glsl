@@ -232,26 +232,23 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
             float strength=clamp(surface.albedo.w,0.0,1.0);
             float ior=max(1.001,surface.emission.w);
             bool entering=dot(path.direction,surface.normal.xyz)<0.0;
-            float eta=entering?1.0/ior:ior;
             vec3 normal=hit.normal;
             float cosine=clamp(dot(-path.direction,normal),0.0,1.0);
             float r0=(ior-1.0)/(ior+1.0);
             r0*=r0;
             float fresnel=r0+(1.0-r0)*pow(1.0-cosine,5.0);
-            vec3 T=refract(path.direction,normal,eta);
-            bool total_internal=dot(T,T)<.00001;
-            if(total_internal)fresnel=1.0;
+            // Thin-window material: no angular refraction and no lensing.
+            // The direction remains the same at every material boundary.
             vec3 tint=max(surface.albedo.rgb,vec3(0.0));
             // Low pass-through still reveals the material itself and
             // keeps the edge visible in nested reflections/refractions.
-            // One visible Fresnel boundary, one invisible exit boundary.
-            // Repeated Fresnel reflection on every back-face made glass look
-            // like doubled panes. Exiting keeps refraction but has no extra
-            // tinted coat or secondary reflection except total internal reflection.
-            if(!entering && !total_internal) {
+            // An exiting surface does not bend or tint the ray a second time.
+            // This preserves the perspective of the original camera and
+            // avoids double surfaces on thick glass cubes.
+            if(!entering) {
                 if(queued<16)
                     pending[queued++]=OpticsPath(
-                        hit.position-normal*.012,normalize(T),
+                        hit.position+path.direction*.03,path.direction,
                         path.throughput,path.depth+1);
                 continue;
             }
@@ -264,12 +261,11 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
                     hit.position+normal*.012,
                     normalize(reflect(path.direction,normal)),
                     reflected,path.depth+1);
-            if(!total_internal && strength>.003) {
-                vec3 transmitted=path.throughput*(1.0-fresnel)*strength;
-                if(entering)transmitted*=tint;
+            if(strength>.003) {
+                vec3 transmitted=path.throughput*(1.0-fresnel)*strength*tint;
                 if(queued<16)
                     pending[queued++]=OpticsPath(
-                        hit.position-normal*.012,normalize(T),
+                        hit.position+path.direction*.03,path.direction,
                         transmitted,path.depth+1);
             }
             continue;
