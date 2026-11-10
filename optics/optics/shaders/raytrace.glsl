@@ -1,8 +1,8 @@
 // Reusable software-BVH reflection queries over Photon Mapping's scene
 // buffers. BVH leaf ordering and the 112-byte face layout match VulkanPMap.
-// Full-resolution reflected rays use the same triangle BVH as Photon
-// Mapping. Per-hit shadows, photon irradiance, UV texture, and smooth
-// vertex normals are evaluated without an interpolated radiance cache.
+// Full-resolution reflected and refracted rays use the same triangle BVH
+// as Photon Mapping. Per-hit shadows, PBR material parameters, photons,
+// textures and smooth normals avoid any low-resolution reflection cache.
 #ifndef OPTICS_RAYTRACE_GLSL
 #define OPTICS_RAYTRACE_GLSL
 const float OPTICS_PI=3.14159265358979;
