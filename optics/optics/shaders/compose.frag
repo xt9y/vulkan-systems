@@ -65,17 +65,21 @@ void main()
                                                1.0,vec3(1.0));
         vec3 transmitted=refract(incoming,N,1.0/ior);
         vec3 tint_filter=clamp(tint.rgb,vec3(.001),vec3(1.0));
-        if(length(transmitted)>.001 && strength>.003) {
-            // Trace through actual backfaces. The outgoing ray is bent
-            // again on exit, so a parallel-sided slab has no fake zoom.
+        if(dot(transmitted,transmitted)>1e-8 && strength>.003) {
+            // This ray starts *inside* the solid and finds the actual exit
+            // boundary using the shared scene BVH. No screen-space overlay.
+            vec3 extinction=mix(vec3(1.0),tint_filter,strength)*strength;
             vec3 behind=optics_offscreen_glossy(
-                P-N*.012,normalize(transmitted),mattness,ior,tint_filter);
-            radiance+=behind*strength*(1.0-fresnel);
+                P-N*.012,normalize(transmitted),mattness,ior,extinction);
+            radiance+=behind*(1.0-fresnel);
         }
         radiance+=reflected*fresnel;
-        // A deliberate opaque portion of the user-controlled material
-        // remains tinted, rather than becoming an empty cutout.
-        radiance+=tint_filter*(1.0-strength)*(1.0-fresnel);
+        // Light sources have zero geometric area in the server scene.
+        // Their GGX interface reflections must therefore be evaluated
+        // analytically: BVH rays cannot intersect an infinitesimal light.
+        float f0=(ior-1.0)/(ior+1.0);
+        radiance+=optics_interface_lighting(
+            P,N,normalize(-incoming),vec3(f0*f0),mattness);
     } else {
         // Conductor Fresnel: RGB F0 is the mirror's tinted reflectivity.
         // One initial ray for sharp mirrors; only rough ones get extras.
@@ -84,6 +88,8 @@ void main()
         vec3 reflected=optics_offscreen_glossy(P+N*.012,R,mattness,
                                                1.0,vec3(1.0));
         radiance=reflected*fresnel+tint.rgb*.10*(1.0-strength);
+        radiance+=optics_interface_lighting(
+            P,N,normalize(-incoming),f0,mattness);
     }
     radiance=max(radiance,vec3(0.0))*max(camera.forward.w,0.0);
     color=vec4(radiance/(vec3(1.0)+radiance),1.0);
