@@ -315,10 +315,12 @@ float optics_dielectric_fresnel(float cosine,float eta_i,float eta_t)
 }
 vec3 optics_absorption(vec3 transmittance,float travel)
 {
-    // Tint is the transmission over one scene metre. Beer-Lambert
-    // yields white short paths and naturally deeper colors in thick glass.
+    // RGB glass tint describes transmission over 12.5 scene metres.
+    // Old strongly colored editor presets remain visibly *clear* across
+    // typical 0.1-2 metre glass thicknesses. Beer-Lambert preserves
+    // depth-dependent absorption instead of painting a flat color layer.
     return pow(clamp(transmittance,vec3(.001),vec3(1.0)),
-               vec3(max(0.0,travel)));
+               vec3(max(0.0,travel)*.08));
 }
 struct OpticsPath {
     vec3 origin;
