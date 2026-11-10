@@ -34,6 +34,24 @@ glass transmission or mirror reflections: there is no color spill, caustic
 projection, or additional full-screen material-lighting correction.
 The optional caustics projector is not called by VulkanGame.
 
+Performance:
+- The compositor receives conservative material bounds and uses dynamic
+  scissor regions. Non-optical pixels are not submitted to the expensive
+  fullscreen BVH fragment shader.
+- Diffuse lighting is cached on both sides of every BVH triangle, with
+  three inset samples per side interpolated at hit positions. This GPU
+  compute pass runs once after the photon map is built or when authoritative
+  geometry or light state changes. Camera movement does not recompute
+  diffuse shadow tests or the 27-cell photon gather per reflection pixel.
+- Primary-view-visible hits still sample their exact shaded raster color,
+  retaining textures and dynamic rendering quality. Source textures/UVs
+  remain independent of the radiance cache and are reused across light-only
+  and transform-only updates.
+- A cached radiance sample approximates direct shadow gradients on very
+  large triangles; the primary camera's shading remains unchanged.
+- Nested reflections and glass continue to use exact software BVH
+  intersections. Sharp default mirrors do not use stochastic denoising.
+
 Known limitations: CPU-built Photon Mapping BVH positions currently
 represent the streamed mesh at its static/bind pose, not live skinned
 vertices. Off-screen point-light shading does not yet match every

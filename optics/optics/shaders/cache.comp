@@ -23,6 +23,11 @@ layout(std430,set=0,binding=12) readonly buffer Lights {
     uvec4 light_count;
     Light lights[16];
 };
+struct FaceUV {vec4 uv01,uv2_origin,rect;};
+layout(std430,set=0,binding=13) readonly buffer FaceCoordinates {
+    FaceUV uv_faces[];
+};
+layout(set=0,binding=14) uniform sampler2D color_atlas;
 layout(std430,set=0,binding=15) writeonly buffer Radiance {
     vec4 diffuse_light[];
 };
@@ -65,6 +70,18 @@ bool blocked(vec3 ro,vec3 direction,float limit,uint exclude)
             float v=q.x*f.metric.y+q.y*f.metric.z;
             if(u<-.0001 || v<-.0001 || u>1.0001 || v>1.0001 ||
                (f.normal.w>.5 && u+v>1.0001))continue;
+            // Preserve alpha-cutout visibility in cached point-light
+            // shadows; holes in vegetation/hair must not become slabs.
+            FaceUV mapping=uv_faces[face_id];
+            if(mapping.rect.z>.5 && mapping.rect.w>.0) {
+                vec2 uv=fract(mapping.uv01.xy*(1.0-u-v)+
+                    mapping.uv01.zw*u+mapping.uv2_origin.xy*v);
+                vec2 size=vec2(textureSize(color_atlas,0));
+                vec2 lo=mapping.uv2_origin.zw+.5/size;
+                vec2 hi=mapping.uv2_origin.zw+mapping.rect.xy-.5/size;
+                if(textureLod(color_atlas,mix(lo,hi,uv),0.0).a<
+                   mapping.rect.w)continue;
+            }
             if(f.albedo.w<=.001)return true; // opaque and reflective block
         }
         index=node.next;
