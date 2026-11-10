@@ -14,7 +14,6 @@ namespace optics {
 struct input {
     vk::ImageView lit{}, opaque_depth{};
     vk::ImageView normal{}, tint{}, material{}, material_depth{};
-    vk::ImageView opaque_normal{};
 };
 struct geometry {
     vk::Buffer faces{},nodes{},triangles{},scene_info{};

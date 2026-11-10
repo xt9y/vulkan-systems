@@ -18,8 +18,8 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
-        std::vector<vk::DescriptorSetLayoutBinding> bindings(16);
-        for(std::uint32_t i=0;i<16;++i) {
+        std::vector<vk::DescriptorSetLayoutBinding> bindings(15);
+        for(std::uint32_t i=0;i<15;++i) {
             bindings[i].binding=i;
             bindings[i].descriptorCount=1;
             bindings[i].descriptorType=(i>=6 && i<=13) ?
@@ -94,13 +94,6 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
                     vk::ImageLayout::eShaderReadOnlyOptimal;
                 descriptors_.write_image(i,binding,image);
             }
-            if(!f.opaque_normal)
-                throw std::invalid_argument("optics: missing opaque normal target");
-            vk::DescriptorImageInfo opaque_normal{};
-            opaque_normal.sampler=sampler_;
-            opaque_normal.imageView=f.opaque_normal;
-            opaque_normal.imageLayout=vk::ImageLayout::eShaderReadOnlyOptimal;
-            descriptors_.write_image(i,15,opaque_normal);
         }
         frame_count_=static_cast<std::uint32_t>(frames.size());
         set_textures({},{});
