@@ -298,19 +298,19 @@ void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
 {
     if(!cmd || !pipeline_.handle() || frame>=frame_count_)
         throw std::logic_error("optics: missing pipeline or invalid frame");
-    if(regions.empty())return;
+    // Scissor heuristics can reject visible refractive surfaces when a
+    // geometry bound intersects the camera's near plane. Always resolve
+    // the actual optical mask; non-optical pixels discard before tracing.
+    (void)regions;
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,pipeline_.handle());
     const vk::DescriptorSet set=descriptors_.set(frame);
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,layout_,0,{set},{});
     cmd.pushConstants(layout_,vk::ShaderStageFlagBits::eFragment,0,sizeof(camera),&view);
-    // Pipeline viewport and scissor are dynamic. Present only the visible
-    // optical material regions, then restore state for the editor overlay.
-    for(const auto& rectangle:regions) {
-        if(!rectangle.extent.width || !rectangle.extent.height)continue;
-        cmd.setScissor(0,{rectangle});
-        cmd.draw(3,1,0,0);
-    }
+    // Fullscreen optical-mask resolve: no missed fragments or overlapping
+    // scissor draws. The costly BVH path still executes only for glass
+    // and mirror pixels after the early mask discard.
     cmd.setScissor(0,{vk::Rect2D{{0,0},extent}});
+    cmd.draw(3,1,0,0);
 }
 void compositor::reset() noexcept
 {
