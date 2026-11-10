@@ -154,7 +154,8 @@ bool pm_closest(vec3 ro,vec3 rd,float limit,out Hit hit)
 // This is an inexpensive straight-line approximation: photon caustics
 // handle focused illumination separately, without treating glass as an
 // opaque shadow caster.
-vec3 pm_surface_dielectric(vec3 direction,Hit hit,Face face,inout uint seed)
+vec3 pm_surface_dielectric(vec3 direction,Hit hit,Face face,inout uint seed,
+                           out bool reflected)
 {
     // Fresnel and Snell law on arbitrary mesh faces, not a sphere shortcut.
     float ior=max(face.emission.w,1.001);
@@ -162,8 +163,9 @@ vec3 pm_surface_dielectric(vec3 direction,Hit hit,Face face,inout uint seed)
     float cosine=clamp(dot(-direction,hit.normal),0.0,1.0);
     float r0=(ior-1.0)/(ior+1.0);
     float fresnel=r0*r0+(1.0-r0*r0)*pow(1.0-cosine,5.0);
-    vec3 specular_direction=eta*eta*(1.0-cosine*cosine)>1.0 ||
-        pm_random(seed)<fresnel ? reflect(direction,hit.normal) :
+    reflected=eta*eta*(1.0-cosine*cosine)>1.0 ||
+        pm_random(seed)<fresnel;
+    vec3 specular_direction=reflected ? reflect(direction,hit.normal) :
         refract(direction,hit.normal,eta);
     // Matte transmission spreads specular energy into a small cone.
     float mattness=clamp(face.metric.w,0.0,1.0);

@@ -30,6 +30,18 @@ Individual photon deposits are NOT displayed. Photon data remains an
 invisible indirect-lighting cache. The optional caustics projector is
 not called by VulkanGame.
 
+Camera-visible point lights are not represented by photon-emitter quads:
+the source emitter face is excluded from all optics BVH camera-hit queries.
+Glass transmits through entry and exit geometry; the visible Fresnel coat
+is applied at entry, and the exit refracts without adding a second glossy
+reflection unless total internal reflection occurs.
+
+The optics resolve now evaluates colored direct-light transmission for
+opaque receivers under tinted glass. Refracted and mirror-reflected photon
+energy is reconstructed by a smooth world-space photon density estimator,
+not exposed as individual projected dots. No light source geometry is
+created by the material compositor.
+
 Known limitations: CPU-built Photon Mapping BVH positions currently
 represent the streamed mesh at its static/bind pose, not live skinned
 vertices. Off-screen point-light shading does not yet match every

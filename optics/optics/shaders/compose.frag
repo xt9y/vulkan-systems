@@ -11,6 +11,7 @@ layout(set=0,binding=2) uniform sampler2D optic_normal;
 layout(set=0,binding=3) uniform sampler2D optic_tint;
 layout(set=0,binding=4) uniform sampler2D optic_material;
 layout(set=0,binding=5) uniform sampler2D optic_depth;
+layout(set=0,binding=15) uniform sampler2D opaque_normal;
 layout(push_constant) uniform View {
     mat4 vp;
     vec4 eye, right, up, forward;
@@ -34,9 +35,23 @@ void main()
 {
     vec2 uv=gl_FragCoord.xy/vec2(textureSize(lit_image,0));
     vec4 mask=texture(optic_normal,uv);
-    if(mask.a<.25)discard;
-    float surface_depth=texture(optic_depth,uv).r;
     float scene_depth=texture(opaque_depth,uv).r;
+    if(mask.a<.25) {
+        // Colored direct transmission and broad photon irradiance apply
+        // to receivers, not just to the glass surface. The near-depth
+        // viewmodel and empty sky are deliberately excluded.
+        if(scene_depth<.1 || scene_depth>=.99999)discard;
+        vec3 position=world_position(uv,scene_depth);
+        vec3 receiver_normal=normalize(texture(opaque_normal,uv).rgb*2.0-1.0);
+        vec3 filter=optics_direct_color_filter(position,receiver_normal);
+        vec3 bounced=optics_smooth_specular_flux(position,receiver_normal);
+        if(all(greaterThanEqual(filter,vec3(.9999))) &&
+           max(bounced.r,max(bounced.g,bounced.b))<.00001)discard;
+        vec3 original=texture(lit_image,uv).rgb;
+        color=vec4(clamp(original*filter+bounced,vec3(0.0),vec3(1.0)),1.0);
+        return;
+    }
+    float surface_depth=texture(optic_depth,uv).r;
     if(surface_depth>scene_depth+.0003)discard;
     vec4 tint=texture(optic_tint,uv);
     float mattness=texture(optic_material,uv).r;

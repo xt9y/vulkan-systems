@@ -39,10 +39,14 @@ void main()
             continue;
         }
         Face surface=faces[hit.index];
-        if(surface.albedo.w>0.0) {
-            direction=pm_surface_dielectric(direction,hit,surface,seed);
-            // The transmitted event carries the material's spectral tint.
-            flux*=surface.albedo.rgb*clamp(surface.albedo.w,0.0,1.0);
+        if(surface.emission.w>1.0) {
+            bool reflected=false;
+            direction=pm_surface_dielectric(direction,hit,surface,seed,reflected);
+            // Only transmission through the *entry* face absorbs/tints
+            // photon energy. Reflecting or exiting must not apply the same
+            // colored filter a second time.
+            if(!reflected && hit.front)
+                flux*=surface.albedo.rgb*clamp(surface.albedo.w,0.0,1.0);
             origin=hit.point+direction*PM_EPS;
             caustic=true;
             continue;

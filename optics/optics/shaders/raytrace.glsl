@@ -99,7 +99,9 @@ bool optics_closest(vec3 ro,vec3 rd,float max_t,out OpticsHit result)
         uint first=node.first_and_count>>4u;
         for(uint k=0u;k<count;++k) {
             uint face_id=uint(optics_triangles[(first+k)*3u].w);
-            if(face_id>=optics_desc.x)continue;
+            // The light emitter is only a transport source. It must not
+            // appear as a white rectangular mesh in camera/reflection rays.
+            if(face_id>=optics_desc.x || face_id==optics_desc.y)continue;
             float t;
             if(optics_face_hit(ro,rd,optics_faces[face_id],face_id,result.t,t)) {
                 result.t=t;
@@ -145,6 +147,117 @@ vec3 optics_photon_radiance(OpticsHit hit,vec3 albedo)
     }
     return flux*albedo*(2.0/(OPTICS_PI*OPTICS_PI*radius2));
 }
+// Straight-line direct-light transmission: an incoming point-light ray is
+// colored once when it enters glass and survives the exit without another
+// artificial tint. For camera-visible pixels, the existing PCloud pass has
+// already handled hard opaque shadows, so only the optical color is applied.
+vec3 optics_segment_transmission(vec3 receiver,vec3 emitter,bool block_opaque)
+{
+    vec3 delta=emitter-receiver;
+    float distance=length(delta);
+    if(distance<=.03)return vec3(1.0);
+    vec3 ray=delta/distance;
+    vec3 p=receiver+ray*.018;
+    vec3 transmittance=vec3(1.0);
+    for(int step=0;step<12;++step) {
+        float remaining=dot(emitter-p,ray);
+        if(remaining<=.04)break;
+        OpticsHit hit;
+        if(!optics_closest(p,ray,remaining-.018,hit))break;
+        OpticsFace surface=optics_faces[hit.face_id];
+        if(surface.emission.w>1.0) {
+            bool entering=dot(ray,surface.normal.xyz)<0.0;
+            if(entering) {
+                float ior=max(surface.emission.w,1.001);
+                float cosine=clamp(abs(dot(ray,surface.normal.xyz)),0.0,1.0);
+                float r0=(ior-1.0)/(ior+1.0);
+                r0*=r0;
+                float reflectance=r0+(1.0-r0)*pow(1.0-cosine,5.0);
+                transmittance*=clamp(surface.albedo.rgb,vec3(0),vec3(1))*
+                    clamp(surface.albedo.w,0.0,1.0)*(1.0-reflectance);
+            }
+        } else {
+            // PointCloud has already shadow-tested opaque scene geometry.
+            return block_opaque?vec3(0):vec3(1);
+        }
+        if(max(transmittance.r,max(transmittance.g,
+                                   transmittance.b))<.001)
+            return vec3(0);
+        p=hit.position+ray*.045;
+    }
+    return transmittance;
+}
+// Color correction for the already-lit screen image. Use the same light
+// influence weights as PCloud; this corrects the unfiltered direct term
+// without introducing individual photon-projection splats.
+vec3 optics_direct_color_filter(vec3 position,vec3 normal)
+{
+    vec3 numerator=vec3(0);
+    vec3 denominator=vec3(0);
+    for(uint i=0u;i<min(optics_light_count.x,16u);++i) {
+        OpticsLight light=optics_lights[i];
+        vec3 delta=light.position_radius.xyz-position;
+        float distance2=dot(delta,delta);
+        float radius=max(light.position_radius.w,.0001);
+        if(distance2<=.000004 || distance2>=radius*radius)continue;
+        float distance=sqrt(distance2);
+        vec3 dir=delta/distance;
+        float lambert=max(dot(normal,dir),0.0);
+        if(lambert<=0.0)continue;
+        float q=clamp(distance/radius,0.0,1.0);
+        float attenuation=1.0-q*q*(3.0-2.0*q);
+        vec3 weight=max(light.color_strength.rgb,vec3(0))*
+            max(light.color_strength.w,0.0)*(attenuation*lambert);
+        if(max(weight.r,max(weight.g,weight.b))<.00001)continue;
+        vec3 filter=optics_segment_transmission(
+            position+normal*.009,light.position_radius.xyz,false);
+        numerator+=weight*filter;
+        denominator+=weight;
+    }
+    vec3 corrected=vec3(1.0);
+    if(denominator.r>.00001)corrected.r=clamp(numerator.r/denominator.r,0.0,1.0);
+    if(denominator.g>.00001)corrected.g=clamp(numerator.g/denominator.g,0.0,1.0);
+    if(denominator.b>.00001)corrected.b=clamp(numerator.b/denominator.b,0.0,1.0);
+    return corrected;
+}
+// Diffuse receiver reconstruction from specularly transported photon flux.
+// Smooth spatial density estimate; no discrete point splats are projected
+// into screen pixels. Colored mirror bounce and glass transmission both
+// contribute to the irradiance at the actual receiver.
+vec3 optics_smooth_specular_flux(vec3 position,vec3 normal)
+{
+    if(optics_desc.x==0u)return vec3(0);
+    float radius=max(.7,optics_grid.w*1.8);
+    float radius2=radius*radius;
+    ivec3 center=ivec3(floor((position-optics_grid.xyz)/
+                              max(optics_grid.w,.0001)));
+    vec3 irradiance=vec3(0);
+    for(int z=-1;z<=1;++z)
+    for(int y=-1;y<=1;++y)
+    for(int x=-1;x<=1;++x) {
+        ivec3 cell=center+ivec3(x,y,z);
+        if(any(lessThan(cell,ivec3(0))) ||
+           any(greaterThanEqual(cell,ivec3(16))))continue;
+        uint index=uint(cell.x+16*(cell.y+16*cell.z));
+        uint begin=optics_offsets[index];
+        uint end=min(optics_offsets[index+1u],begin+48u);
+        for(uint i=begin;i<end;++i) {
+            OpticsPhoton p=optics_photons[i];
+            if(p.link.z==0u)continue; // only glass/mirror-caused paths
+            vec3 delta=p.position.xyz-position;
+            float tangential=dot(delta,normal);
+            if(abs(tangential)>.2*radius)continue;
+            float distance2=dot(delta,delta);
+            if(distance2>=radius2)continue;
+            float weight=1.0-distance2/radius2;
+            irradiance+=max(p.power.rgb,vec3(0))*weight*weight;
+        }
+    }
+    // Energy per unit surface area, compressed to the display's LDR range.
+    vec3 energy=irradiance*(1.0/(OPTICS_PI*radius2));
+    return clamp(energy/(vec3(1.0)+energy),vec3(0),vec3(.20));
+}
+
 vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
 {
     OpticsFace f=optics_faces[hit.face_id];
@@ -188,14 +301,12 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
         vec3 L=delta/distance;
         float lambert=max(dot(normal,L),0.0);
         if(lambert<=0.0)continue;
-        // The reflected view must preserve actual hard shadowing.
-        OpticsHit blocker;
-        bool occluded=optics_closest(hit.position+normal*.03,L,
-                                    distance-.06,blocker);
-        if(occluded && optics_faces[blocker.face_id].albedo.w<=.001)
+        vec3 visibility=optics_segment_transmission(
+            hit.position+normal*.02,light.position_radius.xyz,true);
+        if(max(visibility.r,max(visibility.g,visibility.b))<.0001)
             continue;
         float fade=max(0.0,1.0-distance/radius);
-        radiance+=albedo*light.color_strength.rgb*
+        radiance+=albedo*light.color_strength.rgb*visibility*
             (light.color_strength.w*lambert*fade*fade/
              (1.0+.12*dist2));
     }
@@ -225,7 +336,7 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
         if(!optics_closest(path.origin,path.direction,1000.0,hit))
             continue; // Outside the real scene: no cubemap/sky substitute.
         OpticsFace surface=optics_faces[hit.face_id];
-        if(surface.albedo.w>.001) {
+        if(surface.emission.w>1.0) {
             float strength=clamp(surface.albedo.w,0.0,1.0);
             float ior=max(1.001,surface.emission.w);
             bool entering=dot(path.direction,surface.normal.xyz)<0.0;
@@ -241,6 +352,17 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
             vec3 tint=max(surface.albedo.rgb,vec3(0.0));
             // Low pass-through still reveals the material itself and
             // keeps the edge visible in nested reflections/refractions.
+            // One visible Fresnel boundary, one invisible exit boundary.
+            // Repeated Fresnel reflection on every back-face made glass look
+            // like doubled panes. Exiting keeps refraction but has no extra
+            // tinted coat or secondary reflection except total internal reflection.
+            if(!entering && !total_internal) {
+                if(queued<16)
+                    pending[queued++]=OpticsPath(
+                        hit.position-normal*.012,normalize(T),
+                        path.throughput,path.depth+1);
+                continue;
+            }
             if(entering)
                 accumulated+=path.throughput*tint*(1.0-strength)*
                              (1.0-fresnel);
