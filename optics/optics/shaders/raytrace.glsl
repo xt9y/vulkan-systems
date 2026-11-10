@@ -209,9 +209,9 @@ vec3 optics_direct_color_filter(vec3 position,vec3 normal)
         vec3 weight=max(light.color_strength.rgb,vec3(0))*
             max(light.color_strength.w,0.0)*(attenuation*lambert);
         if(max(weight.r,max(weight.g,weight.b))<.00001)continue;
-        vec3 filter=optics_segment_transmission(
+        vec3 transmission_color=optics_segment_transmission(
             position+normal*.009,light.position_radius.xyz,false);
-        numerator+=weight*filter;
+        numerator+=weight*transmission_color;
         denominator+=weight;
     }
     vec3 corrected=vec3(1.0);

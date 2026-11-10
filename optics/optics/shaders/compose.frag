@@ -43,12 +43,12 @@ void main()
         if(scene_depth<.1 || scene_depth>=.99999)discard;
         vec3 position=world_position(uv,scene_depth);
         vec3 receiver_normal=normalize(texture(opaque_normal,uv).rgb*2.0-1.0);
-        vec3 filter=optics_direct_color_filter(position,receiver_normal);
+        vec3 transmission_color=optics_direct_color_filter(position,receiver_normal);
         vec3 bounced=optics_smooth_specular_flux(position,receiver_normal);
-        if(all(greaterThanEqual(filter,vec3(.9999))) &&
+        if(all(greaterThanEqual(transmission_color,vec3(.9999))) &&
            max(bounced.r,max(bounced.g,bounced.b))<.00001)discard;
         vec3 original=texture(lit_image,uv).rgb;
-        color=vec4(clamp(original*filter+bounced,vec3(0.0),vec3(1.0)),1.0);
+        color=vec4(clamp(original*transmission_color+bounced,vec3(0.0),vec3(1.0)),1.0);
         return;
     }
     float surface_depth=texture(optic_depth,uv).r;
