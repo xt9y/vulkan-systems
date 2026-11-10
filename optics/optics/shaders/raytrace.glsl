@@ -298,6 +298,48 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
     }
     return radiance;
 }
+// Direct specular response to point lights. Ideal specular paths cannot
+// intersect a zero-area light by ray tracing; the microfacet BRDF supplies
+// their physically meaningful highlights without fake environment images.
+vec3 optics_interface_lighting(vec3 point,vec3 normal,vec3 view,
+                                vec3 f0,float roughness)
+{
+    float nv=max(dot(normal,view),1e-5);
+    if(nv<=1e-5)return vec3(0.0);
+    float alpha=max(.045,roughness*roughness);
+    float alpha2=alpha*alpha;
+    float k=(roughness+1.0)*(roughness+1.0)*.125;
+    vec3 result=vec3(0.0);
+    for(uint i=0u;i<min(optics_light_count.x,16u);++i) {
+        OpticsLight light=optics_lights[i];
+        vec3 delta=light.position_radius.xyz-point;
+        float dist2=dot(delta,delta);
+        float radius=max(light.position_radius.w,.001);
+        if(dist2>=radius*radius || dist2<1e-5)continue;
+        float distance=sqrt(dist2);
+        vec3 L=delta/distance;
+        float nl=max(dot(normal,L),0.0);
+        if(nl<=0.0)continue;
+        vec3 H=normalize(view+L);
+        float nh=max(dot(normal,H),0.0);
+        float vh=max(dot(view,H),0.0);
+        float d=nh*nh*(alpha2-1.0)+1.0;
+        float D=alpha2/max(OPTICS_PI*d*d,1e-6);
+        // Skip negligible highlight lobes before the costly shadow BVH.
+        if(D<.001)continue;
+        float G=(nv/(nv*(1.0-k)+k))*(nl/(nl*(1.0-k)+k));
+        float m=1.0-vh,m2=m*m;
+        vec3 F=f0+(vec3(1.0)-f0)*m2*m2*m;
+        vec3 specular=D*G*F/max(4.0*nv,1e-5);
+        float q=clamp(distance/radius,0.0,1.0);
+        float attenuation=1.0-q*q*(3.0-2.0*q);
+        if(optics_occluded(point+normal*.03,L,distance-.06,0xffffffffu))
+            continue;
+        result+=specular*light.color_strength.rgb*
+                 (light.color_strength.w*attenuation);
+    }
+    return result;
+}
 // Unpolarized Fresnel for the actual incident and transmitted IORs.
 // Unlike Schlick, this also handles total internal reflection exactly.
 float optics_dielectric_fresnel(float cosine,float eta_i,float eta_t)
@@ -364,7 +406,13 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction,
             float cosine=clamp(dot(-path.direction,normal),0.0,1.0);
             float fresnel=optics_dielectric_fresnel(cosine,eta_i,eta_t);
             vec3 tint=clamp(surface.albedo.rgb,vec3(.001),vec3(1.0));
-            // Reflection remains in the incident medium.
+            // Reflection remains in the incident medium. Direct light
+            // highlights are evaluated only once per encountered interface.
+            float f0=(eta_t-eta_i)/(eta_t+eta_i);
+            f0*=f0;
+            accumulated+=path.throughput*optics_interface_lighting(
+                hit.position,hit.normal,normalize(-path.direction),
+                vec3(f0),clamp(surface.metric.w,0.0,1.0));
             vec3 reflected=path.throughput*fresnel;
             if(queued<16 && max(reflected.r,max(reflected.g,reflected.b))>.003)
                 pending[queued++]=OpticsPath(
@@ -373,16 +421,20 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction,
                     reflected,path.depth+1,path.medium_ior,path.medium_tint);
             vec3 transmission=refract(path.direction,normal,eta_i/eta_t);
             if(dot(transmission,transmission)>1e-8 && strength>.003) {
-                vec3 transmitted=path.throughput*(1.0-fresnel)*strength;
+                vec3 transmitted=path.throughput*(1.0-fresnel);
+                // A material's transmission parameter is the attenuation
+                // per unit distance, not a surface alpha-blend coefficient.
+                vec3 volume_tint=mix(vec3(1.0),tint,strength);
+                volume_tint*=strength;
                 if(queued<16)
                     pending[queued++]=OpticsPath(
                         hit.position-hit.geometric_normal*.012,
                         normalize(transmission),transmitted,path.depth+1,
-                        eta_t,entering?tint:vec3(1.0));
+                        eta_t,entering?volume_tint:vec3(1.0));
             }
-            if(entering)
-                accumulated+=path.throughput*tint*(1.0-strength)*
-                             (1.0-fresnel);
+            // Transmission is volumetric, not blended with an opaque tint.
+            // A strength below one increases extinction; it must not draw a
+            // flat colored surface in front of the refracted scene.
             continue;
         }
         if(surface.emission.w<-.001) {
@@ -390,6 +442,9 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction,
             vec3 tint=clamp(surface.albedo.rgb,vec3(0.0),vec3(1.0));
             float cosine=clamp(dot(-path.direction,hit.normal),0.0,1.0);
             vec3 f0=tint*reflectivity;
+            accumulated+=path.throughput*optics_interface_lighting(
+                hit.position,hit.normal,normalize(-path.direction),
+                f0,clamp(surface.metric.w,0.0,1.0));
             vec3 f=f0+(vec3(1.0)-f0)*pow(1.0-cosine,5.0);
             accumulated+=path.throughput*tint*.10*(1.0-reflectivity);
             path.throughput*=f;
