@@ -293,15 +293,13 @@ void compositor::set_textures(const std::vector<face_uv>& faces,
 }
 
 void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
-                        const camera& view,const std::vector<vk::Rect2D>& regions,
-                        vk::Extent2D extent) const
+                        const camera& view,vk::Extent2D extent) const
 {
     if(!cmd || !pipeline_.handle() || frame>=frame_count_)
         throw std::logic_error("optics: missing pipeline or invalid frame");
     // Scissor heuristics can reject visible refractive surfaces when a
     // geometry bound intersects the camera's near plane. Always resolve
     // the actual optical mask; non-optical pixels discard before tracing.
-    (void)regions;
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,pipeline_.handle());
     const vk::DescriptorSet set=descriptors_.set(frame);
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,layout_,0,{set},{});
