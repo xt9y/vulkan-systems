@@ -56,8 +56,10 @@ public:
     void set_scene(geometry,const std::vector<light>&);
     void set_textures(const std::vector<face_uv>&,
                       const std::vector<texture_rgba>&);
+    // Only emit fragments inside rasterized material bounds.
     void record(vk::CommandBuffer command,std::uint32_t frame,
-                const camera& view) const;
+                const camera& view,const std::vector<vk::Rect2D>& regions,
+                vk::Extent2D extent) const;
     void reset() noexcept;
 private:
     gpu::descriptors descriptors_;

@@ -257,15 +257,25 @@ void compositor::set_textures(const std::vector<face_uv>& faces,
     }
 }
 
-void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,const camera& view) const
+void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
+                        const camera& view,const std::vector<vk::Rect2D>& regions,
+                        vk::Extent2D extent) const
 {
     if(!cmd || !pipeline_.handle() || frame>=frame_count_)
         throw std::logic_error("optics: missing pipeline or invalid frame");
+    if(regions.empty())return;
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,pipeline_.handle());
     const vk::DescriptorSet set=descriptors_.set(frame);
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,layout_,0,{set},{});
     cmd.pushConstants(layout_,vk::ShaderStageFlagBits::eFragment,0,sizeof(camera),&view);
-    cmd.draw(3,1,0,0);
+    // Pipeline viewport and scissor are dynamic. Present only the visible
+    // optical material regions, then restore state for the editor overlay.
+    for(const auto& rectangle:regions) {
+        if(!rectangle.extent.width || !rectangle.extent.height)continue;
+        cmd.setScissor(0,{rectangle});
+        cmd.draw(3,1,0,0);
+    }
+    cmd.setScissor(0,{vk::Rect2D{{0,0},extent}});
 }
 void compositor::reset() noexcept
 {
