@@ -1,5 +1,6 @@
 #include "caustics.hpp"
 #include <array>
+#include <algorithm>
 #include <cstring>
 #include <utility>
 #include <stdexcept>
