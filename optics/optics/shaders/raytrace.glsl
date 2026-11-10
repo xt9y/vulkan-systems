@@ -131,9 +131,9 @@ bool optics_closest(vec3 ro,vec3 rd,float max_t,out OpticsHit result)
         vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
         result.bary=vec2(q.x*f.metric.x+q.y*f.metric.y,
                          q.x*f.metric.y+q.y*f.metric.z);
-        OpticsNormals smooth=optics_normals[result.face_id];
-        vec3 n=smooth.a.xyz*(1.0-result.bary.x-result.bary.y)+
-               smooth.b.xyz*result.bary.x+smooth.c.xyz*result.bary.y;
+        OpticsNormals hit_normals=optics_normals[result.face_id];
+        vec3 n=hit_normals.a.xyz*(1.0-result.bary.x-result.bary.y)+
+               hit_normals.b.xyz*result.bary.x+hit_normals.c.xyz*result.bary.y;
         vec3 geometric=normalize(f.normal.xyz);
         if(dot(n,n)<1e-8)n=geometric;
         else n=normalize(n);
