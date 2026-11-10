@@ -12,10 +12,9 @@
 
 namespace optics {
 void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
-                        const char* vertex,const char* fragment,
-                        const char* cache_shader)
+                        const char* vertex,const char* fragment)
 {
-    if(!pass || frames.empty() || !vertex || !fragment || !cache_shader)
+    if(!pass || frames.empty() || !vertex || !fragment)
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
@@ -41,9 +40,10 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         face_uv_.create(48,vk::BufferUsageFlagBits::eStorageBuffer,host);
         const std::array<std::uint8_t,48> empty_uv{};
         face_uv_.upload(empty_uv.data(),empty_uv.size());
-        radiance_.create(6u*sizeof(std::array<float,4>),
-            vk::BufferUsageFlagBits::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eDeviceLocal);
+        face_normals_.create(3u*sizeof(std::array<float,4>),
+            vk::BufferUsageFlagBits::eStorageBuffer,host);
+        const std::array<float,12> empty_normals{};
+        face_normals_.upload(empty_normals.data(),sizeof(empty_normals));
         vk::SamplerCreateInfo sampler_info{};
         sampler_info.magFilter=vk::Filter::eNearest;
         sampler_info.minFilter=vk::Filter::eNearest;
@@ -79,8 +79,6 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             {vk::ShaderStageFlagBits::eVertex,vertex},
             {vk::ShaderStageFlagBits::eFragment,fragment}
         });
-        radiance_program_.create(cache_shader,{descriptors_.layout()},
-                                 sizeof(std::array<std::uint32_t,4>));
         for(std::uint32_t i=0;i<frames.size();++i) {
             const auto& f=frames[i];
             const std::array<vk::ImageView,6> views{
@@ -90,7 +88,7 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
                 descriptors_.write_buffer(i,binding,empty_.descriptor());
             descriptors_.write_buffer(i,12,lights_.descriptor());
             descriptors_.write_buffer(i,13,face_uv_.descriptor());
-            descriptors_.write_buffer(i,15,radiance_.descriptor());
+            descriptors_.write_buffer(i,15,face_normals_.descriptor());
             for(std::uint32_t binding=0;binding<views.size();++binding) {
                 if(!views[binding])throw std::invalid_argument("optics: missing input view");
                 vk::DescriptorImageInfo image{};
@@ -110,17 +108,7 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
 void compositor::set_scene(geometry g,const std::vector<light>& lights)
 {
     if(!frame_count_)throw std::logic_error("optics: compositor not initialized");
-    if(radiance_faces_!=g.face_count) {
-        radiance_.reset();
-        radiance_.create(vk::DeviceSize(std::max(g.face_count,1u))*6u*
-                         sizeof(std::array<float,4>),
-                         vk::BufferUsageFlagBits::eStorageBuffer,
-                         vk::MemoryPropertyFlagBits::eDeviceLocal);
-    }
-    radiance_faces_=g.face_count;
-    radiance_dirty_=g.face_count!=0;
-    for(std::uint32_t i=0;i<frame_count_;++i)
-        descriptors_.write_buffer(i,15,radiance_.descriptor());
+    face_count_=g.face_count;
     const std::array<vk::Buffer,6> buffers{
         g.faces,g.nodes,g.triangles,g.scene_info,g.photons,g.offsets
     };
@@ -152,6 +140,26 @@ void compositor::set_scene(geometry g,const std::vector<light>& lights)
         x.color_strength={l.color.x,l.color.y,l.color.z,l.strength};
     }
     lights_.upload(&packet,sizeof(packet));
+}
+
+void compositor::set_normals(const std::vector<face_normals>& normals)
+{
+    if(!frame_count_ || normals.size()!=face_count_)
+        throw std::invalid_argument("optics: face normals are not BVH aligned");
+    // Like set_scene(), this is called only with previous GPU work idle.
+    static_assert(sizeof(face_normals)==48);
+    const auto host=vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent;
+    face_normals_.reset();
+    face_normals_.create(std::max<std::size_t>(1,normals.size())*
+                         sizeof(face_normals),
+                         vk::BufferUsageFlagBits::eStorageBuffer,host);
+    const face_normals empty{};
+    face_normals_.upload(normals.empty()?&empty:normals.data(),
+                         std::max<std::size_t>(1,normals.size())*
+                         sizeof(face_normals));
+    for(std::uint32_t frame=0;frame<frame_count_;++frame)
+        descriptors_.write_buffer(frame,15,face_normals_.descriptor());
 }
 
 void compositor::set_textures(const std::vector<face_uv>& faces,
@@ -276,17 +284,6 @@ void compositor::set_textures(const std::vector<face_uv>& faces,
     }
 }
 
-void compositor::update_radiance(vk::CommandBuffer cmd,std::uint32_t frame)
-{
-    if(!radiance_dirty_ || !radiance_faces_)return;
-    if(!cmd || frame>=frame_count_)
-        throw std::invalid_argument("optics: invalid radiance update");
-    const std::array<std::uint32_t,4> parameters{radiance_faces_,0,0,0};
-    radiance_program_.dispatch(cmd,(radiance_faces_+63u)/64u,1,1,
-        {descriptors_.set(frame)},&parameters,sizeof(parameters));
-    radiance_dirty_=false;
-}
-
 void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
                         const camera& view,const std::vector<vk::Rect2D>& regions,
                         vk::Extent2D extent) const
@@ -309,7 +306,6 @@ void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
 }
 void compositor::reset() noexcept
 {
-    radiance_program_.reset();
     pipeline_.reset();
     if(layout_)vk::device::get()->handle.destroyPipelineLayout(layout_);
     layout_=nullptr;
@@ -317,9 +313,8 @@ void compositor::reset() noexcept
     empty_.reset();
     lights_.reset();
     face_uv_.reset();
-    radiance_.reset();
-    radiance_faces_=0;
-    radiance_dirty_=false;
+    face_normals_.reset();
+    face_count_=0;
     if(atlas_view_)vk::image_view::destroy(atlas_view_);
     atlas_view_=nullptr;
     atlas_.reset();
