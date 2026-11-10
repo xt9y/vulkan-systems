@@ -37,5 +37,7 @@ private:
     gpu::descriptors sets_, resolve_sets_;
     vk::Sampler sampler_{};
     photons source_{};
+    std::vector<vk::util::math::mat4> cached_views_;
+    std::vector<std::uint8_t> valid_views_;
 };
 }
