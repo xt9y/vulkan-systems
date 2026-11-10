@@ -799,6 +799,11 @@ namespace pc
         return get().frames.at(image).ldr.view;
     }
 
+    vk::ImageView hdr_view(std::uint32_t image)
+    {
+        return get().frames.at(image).hdr.view;
+    }
+
     vk::RenderPass presentation_pass()
     {
         return get().presentation->pass();
