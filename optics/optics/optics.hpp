@@ -12,7 +12,7 @@ namespace optics {
 // Source images are owned by the host. Recreate when its swapchain or
 // material targets change; recording requires an active compatible render pass.
 struct input {
-    vk::ImageView lit{}, opaque_depth{};
+    vk::ImageView lit{}, opaque_depth{}, hdr{};
     vk::ImageView normal{}, tint{}, material{}, material_depth{};
 };
 struct geometry {
