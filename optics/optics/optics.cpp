@@ -293,7 +293,8 @@ void compositor::set_textures(const std::vector<face_uv>& faces,
 }
 
 void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
-                        const camera& view,vk::Extent2D extent) const
+                        const camera& view,const std::vector<vk::Rect2D>& regions,
+                        vk::Extent2D extent) const
 {
     if(!cmd || !pipeline_.handle() || frame>=frame_count_)
         throw std::logic_error("optics: missing pipeline or invalid frame");
