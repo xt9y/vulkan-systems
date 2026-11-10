@@ -68,7 +68,8 @@ namespace pm
                                sizeof(float));
             return key;
         }
-        acceleration make_acceleration(const scene& source,float photon_radius)
+        acceleration make_acceleration(const scene& source,float photon_radius,
+                                       bool transport_only)
         {
             if(source.surfaces.empty() || source.surfaces.size()>100000u ||
                source.emitter>=source.surfaces.size())
@@ -136,7 +137,8 @@ namespace pm
                     high=max3(high,q+f.v);
                 }
             }
-            if(squared(source.surfaces[source.emitter].emission)<=0.f)
+            if(!transport_only &&
+               squared(source.surfaces[source.emitter].emission)<=0.f)
                 throw std::invalid_argument("pm: selected emitter has no emission");
             result.nodes=bvh::build_stackless(result.triangles);
             if(result.nodes.empty())
@@ -248,7 +250,8 @@ namespace pm
         void create(scene input,vk::Extent2D dimensions,configuration config)
         {
             validate(config,dimensions);
-            acceleration accel=make_acceleration(input,config.photon_radius);
+            acceleration accel=make_acceleration(input,config.photon_radius,
+                                                   config.transport_only);
             cfg=std::move(config);
             world=std::move(input);
             extent=cfg.transport_only ? vk::Extent2D{1,1} : dimensions;
