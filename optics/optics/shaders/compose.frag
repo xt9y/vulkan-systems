@@ -39,13 +39,6 @@ void main()
     float surface_depth=texture(optic_depth,uv).r;
     float scene_depth=texture(opaque_depth,uv).r;
     if(surface_depth>scene_depth+.0003)discard;
-    // OPTICS_DEBUG_MASK=1: cyan glass / magenta mirrors means the real
-    // raster mask and its depth test reached the optical compositor.
-    if(camera.eye.w>1.5) {
-        color=vec4(mask.a<.75?vec3(.05,1.0,1.0):
-                                vec3(1.0,.05,1.0),1.0);
-        return;
-    }
     vec4 tint=texture(optic_tint,uv);
     float mattness=texture(optic_material,uv).r;
     vec3 N=normalize(mask.rgb*2.0-1.0);
