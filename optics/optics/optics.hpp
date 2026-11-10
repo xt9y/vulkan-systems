@@ -63,9 +63,10 @@ public:
     void set_textures(const std::vector<face_uv>&,
                       const std::vector<texture_rgba>&);
     void set_normals(const std::vector<face_normals>&);
-    // Fullscreen resolve masks all non-optical fragments before BVH tracing.
+    // Restrict BVH shading to projected material rectangles.
     void record(vk::CommandBuffer command,std::uint32_t frame,
-                const camera& view,vk::Extent2D extent) const;
+                const camera& view,const std::vector<vk::Rect2D>& regions,
+                vk::Extent2D extent) const;
     void reset() noexcept;
 private:
     gpu::descriptors descriptors_;
