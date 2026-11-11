@@ -221,7 +221,7 @@ namespace pm
         bool have_output=false;
         f4 last_eye{},last_right{},last_up{};
         gpu::buffer faces,raw,counts,counter,sorted,offsets,cursors;
-        gpu::buffer nodes,triangles,previous_camera,scene_info,cutouts;
+        gpu::buffer nodes,triangles,face_ids,previous_camera,scene_info,cutouts;
         gpu::buffer direct_moments,direct_filtered;
         std::array<gpu::image,2> history,positions;
         gpu::image temporal,scratch,indirect,direct;
@@ -247,7 +247,8 @@ namespace pm
         {
             if(updates.empty())
                 return {faces.handle(),nodes.handle(),triangles.handle(),
-                        scene_info.handle(),sorted.handle(),offsets.handle()};
+                        scene_info.handle(),sorted.handle(),offsets.handle(),
+                        face_ids.handle()};
             if(image>=16)throw std::out_of_range("pm: invalid animation frame");
             if(animated.size()<=image)animated.resize(image+1);
             auto& slot=animated[image];
@@ -331,7 +332,7 @@ namespace pm
                                    slot->vertex_data.size()*sizeof(f4));
             return {slot->faces.handle(),slot->nodes.handle(),
                     slot->triangles.handle(),scene_info.handle(),
-                    sorted.handle(),offsets.handle()};
+                    sorted.handle(),offsets.handle(),face_ids.handle()};
         }
 
         void create(scene input,vk::Extent2D dimensions,configuration config)
@@ -360,6 +361,14 @@ namespace pm
             upload(faces,accel.faces.data(),accel.faces.size()*sizeof(gpu_face));
             upload(nodes,accel.nodes.data(),accel.nodes.size()*sizeof(bvh::stackless_node));
             upload(triangles,accel.triangles.data(),accel.triangles.size()*sizeof(f4));
+            // Optical traversal needs only a face ID per ordered triangle;
+            // the photon kernels still use the original triangle positions.
+            std::vector<std::uint32_t> compact_ids;
+            compact_ids.reserve(accel.triangles.size()/3);
+            for(std::size_t i=0;i+2<accel.triangles.size();i+=3)
+                compact_ids.push_back(std::uint32_t(accel.triangles[i][3]));
+            upload(face_ids,compact_ids.data(),
+                   compact_ids.size()*sizeof(std::uint32_t));
             upload(scene_info,&accel.parameters,sizeof(scene_parameters));
             upload(cutouts,accel.cutouts.data(),
                    accel.cutouts.size()*sizeof(std::array<std::uint32_t,4>));
