@@ -101,6 +101,8 @@ namespace pc
     void toggle_probes();
     targets images(std::uint32_t);
     vk::ImageView ldr_view(std::uint32_t);
+    vk::ImageView probe_view(std::uint32_t);
+    std::array<float,4> probe_space();
     vk::RenderPass presentation_pass();
     void cloud(vk::CommandBuffer,std::uint32_t);
     void gi(vk::CommandBuffer,std::uint32_t);
