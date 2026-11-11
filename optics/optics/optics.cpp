@@ -9,6 +9,8 @@
 #include <cstring>
 #include <cmath>
 #include <vector>
+#include <cstdlib>
+#include <iostream>
 
 namespace optics {
 void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
@@ -134,6 +136,10 @@ void compositor::set_scene(geometry g,const std::vector<light>& lights,
         throw std::invalid_argument("optics: missing sorted face IDs");
     face_count_=g.face_count;
     contains_glass_=contains_glass || !g.face_count;
+    if(g.face_count)
+        std::clog<<"optics: shader="
+                 <<(contains_glass_?"full-glass":"mirror-only")
+                 <<" faces="<<g.face_count<<"\n";
     const std::array<vk::Buffer,6> buffers{
         g.faces,g.nodes,g.face_ids,g.scene_info,g.photons,g.offsets
     };
@@ -393,8 +399,13 @@ void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
        frame>=frame_count_)
         throw std::logic_error("optics: missing pipeline or invalid frame");
     if(regions.empty())return;
+    // A/B control: compare the exact same mirror scene with the original
+    // general shader, without changing geometry or visual settings.
+    static const bool force_general=
+        std::getenv("OPTICS_PROFILE_GENERAL")!=nullptr;
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
-                     contains_glass_?pipeline_.handle():mirror_pipeline_.handle());
+                     (contains_glass_||force_general)?
+                     pipeline_.handle():mirror_pipeline_.handle());
     const vk::DescriptorSet set=descriptors_.set(frame);
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,layout_,0,{set},{});
     cmd.pushConstants(layout_,vk::ShaderStageFlagBits::eFragment,0,sizeof(camera),&view);
