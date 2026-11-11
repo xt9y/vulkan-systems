@@ -401,6 +401,31 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
     }
     return accumulated;
 }
+// Hot path for 100% mirrors: no Fresnel branches, queue, or per-bounce
+// throughput state when the reflected scene contains only opaque surfaces
+// and other perfect mirrors. Exact same closest-hit, normals and shading.
+// If a glass boundary is reached, replay with the original general tracer
+// so nested dielectric reflections keep the same depth/energy accounting.
+vec3 optics_perfect_mirror(vec3 origin,vec3 direction)
+{
+    vec3 start_origin=origin;
+    vec3 start_direction=direction;
+    vec3 ray=normalize(direction);
+    for(int depth=0;depth<10;++depth) {
+        OpticsHit hit;
+        if(!optics_closest(origin,ray,1000.0,hit))return vec3(0.0);
+        OpticsFace surface=optics_faces[hit.face_id];
+        if(surface.emission.w>1.0)
+            return optics_offscreen_radiance(start_origin,start_direction);
+        if(surface.emission.w<-.001) {
+            origin=hit.position+hit.geometric_normal*.012;
+            ray=normalize(reflect(ray,hit.normal));
+            continue;
+        }
+        return optics_surface_radiance(hit,ray);
+    }
+    return vec3(0.0);
+}
 vec3 optics_offscreen_glossy(vec3 origin,vec3 direction,float mattness)
 {
     vec3 center=optics_offscreen_radiance(origin,direction);
