@@ -424,17 +424,49 @@ namespace pc
     {
         auto& data=get();
         if(!data.snapshot || !data.lights.handle ||
-           lights.size()!=data.snapshot->lights.size() ||
+           lights.size()!=data.live_lights.size() ||
            lights.size()!=data.light_count)
             throw std::invalid_argument("pc: light update requires identical scene topology");
         const auto active=[](const light& l){return l.strength>0.f;};
+        std::array<std::uint32_t,3> lower{
+            data.grid_extent.width,data.grid_extent.height,data.grid_extent.depth};
+        std::array<std::uint32_t,3> upper{};
         for(std::size_t i=0;i<lights.size();++i) {
-            const auto& a=data.snapshot->lights[i];
+            const auto& a=data.live_lights[i];
             const auto& b=lights[i];
             if(a.position.x!=b.position.x || a.position.y!=b.position.y ||
                a.position.z!=b.position.z || a.radius!=b.radius ||
                active(a)!=active(b))
                 throw std::invalid_argument("pc: light topology changed");
+            if(!active(b) ||
+               (a.color.x==b.color.x && a.color.y==b.color.y &&
+                a.color.z==b.color.z && a.strength==b.strength))
+                continue;
+            // A light can affect an indirect grid cell only through
+            // a source point inside its radius and the 2.6 m GI gather.
+            // The bounding cube is conservative, so no changed cell is
+            // omitted and all untouched grid values stay bit-identical.
+            const float reach=b.radius+bounce_reach+data.grid_spacing;
+            const float center[3]{b.position.x,b.position.y,b.position.z};
+            const float origin[3]{
+                data.grid_origin.x,data.grid_origin.y,data.grid_origin.z};
+            const std::uint32_t extent[3]{
+                data.grid_extent.width,data.grid_extent.height,
+                data.grid_extent.depth};
+            for(int axis=0;axis<3;++axis) {
+                const auto clamp_cell=[&](double x) {
+                    return std::uint32_t(std::clamp(
+                        x,0.0,double(extent[axis])));
+                };
+                const double first=std::floor(
+                    (double(center[axis])-reach-origin[axis])/
+                    data.grid_spacing);
+                const double last=std::ceil(
+                    (double(center[axis])+reach-origin[axis])/
+                    data.grid_spacing)+1.0;
+                lower[axis]=std::min(lower[axis],clamp_cell(first));
+                upper[axis]=std::max(upper[axis],clamp_cell(last));
+            }
         }
         std::vector<point_light> packed;
         packed.reserve(lights.size());
@@ -446,10 +478,24 @@ namespace pc
         if(!packed.empty())
             vk::buffer::write(data.lights,packed.data(),
                               packed.size()*sizeof(point_light));
-        // The CPU tile culler only reads position, radius and whether
-        // strength is zero; those remain unchanged. Avoid copying the
-        // entire immutable triangle world for a color/intensity edit.
-        for(auto& frame:data.frames)frame.dirty=true;
+        data.live_lights=lights;
+        if(lower[0]>=upper[0] || lower[1]>=upper[1] ||
+           lower[2]>=upper[2])return;
+        for(auto& frame:data.frames) {
+            if(!frame.dirty) {
+                frame.partial_grid=true;
+                frame.grid_first=lower;
+                frame.grid_end=upper;
+                frame.dirty=true;
+            } else if(frame.partial_grid) {
+                for(int axis=0;axis<3;++axis) {
+                    frame.grid_first[axis]=std::min(frame.grid_first[axis],lower[axis]);
+                    frame.grid_end[axis]=std::max(frame.grid_end[axis],upper[axis]);
+                }
+            }
+            // A pending full-grid update remains full. This handles scene
+            // updates before the swapchain image's first completed frame.
+        }
     }
 
     void synchronize_scene()
