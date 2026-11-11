@@ -18,7 +18,7 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
-        std::vector<vk::DescriptorSetLayoutBinding> bindings(18);
+        std::vector<vk::DescriptorSetLayoutBinding> bindings(19);
         for(std::uint32_t i=0;i<18;++i) {
             bindings[i].binding=i;
             bindings[i].descriptorCount=1;
