@@ -21,6 +21,8 @@ struct geometry {
     vk::Buffer faces{},nodes{},triangles{},scene_info{};
     vk::Buffer photons{},offsets{};
     std::uint32_t face_count=0;
+    // Packed 32-bit face indices in the exact PMap BVH leaf order.
+    vk::Buffer face_ids{};
 };
 // Per-BVH-face UV triangles stay index-aligned with VulkanPMap surfaces.
 // The texture atlas is built and owned by VulkanOptics, not the game.
