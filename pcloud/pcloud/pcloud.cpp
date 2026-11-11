@@ -798,6 +798,16 @@ namespace pc
     {
         return get().frames.at(image).ldr.view;
     }
+    vk::ImageView probe_view(std::uint32_t image)
+    {
+        return get().frames.at(image).grid_view;
+    }
+    std::array<float,4> probe_space()
+    {
+        const auto& g=get();
+        return {g.grid_origin.x,g.grid_origin.y,g.grid_origin.z,
+                g.grid_spacing};
+    }
 
     vk::RenderPass presentation_pass()
     {
