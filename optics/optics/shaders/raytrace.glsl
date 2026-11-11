@@ -100,10 +100,10 @@ bool optics_face_hit(vec3 ro,vec3 rd,OpticsFace f,uint face_id,
     if(u<-.0001 || v<-.0001 || u>1.0001 || v>1.0001 ||
        (f.normal.w>.5 && u+v>1.0001))return false;
     OpticsUV mapping=optics_uv[face_id];
-    if(mapping.rect.z>.5 && mapping.rect.w>.0) {
+    if(mapping.rect.x>0.0 && mapping.rect.w>0.0) {
         vec2 address=optics_atlas_coord(mapping,vec2(u,v));
-        if(textureLod(optics_atlas,address,0.0).a<mapping.rect.w)
-            return false;
+        float alpha=textureLod(optics_atlas,address,0.0).a*mapping.rect.z;
+        if(alpha<mapping.rect.w)return false;
     }
     t=dist;
     return true;
@@ -240,11 +240,13 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
             albedo=((tile.x+tile.y)&1)!=0 ?
                 vec3(1.0,0.0,1.0):vec3(0.0);
         } else {
-            ivec2 tile=ivec2(floor(bary*4.0));
+            vec2 texcoord=mapping.uv01.xy*(1.0-bary.x-bary.y)+
+                mapping.uv01.zw*bary.x+mapping.uv2_origin.xy*bary.y;
+            ivec2 tile=ivec2(floor(texcoord*4.0));
             albedo*=((tile.x+tile.y)&1)!=0?1.0:.08;
         }
     }
-    if(mapping.rect.z>.5)
+    if(mapping.rect.x>0.0)
         albedo*=pow(max(textureLod(optics_atlas,
             optics_atlas_coord(mapping,bary),0.0).rgb,vec3(0.0)),
             vec3(2.2));
