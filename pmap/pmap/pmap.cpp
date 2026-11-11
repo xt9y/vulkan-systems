@@ -770,7 +770,8 @@ namespace pm
         if(!state_)throw std::logic_error("pm: mapper not created");
         return {state_->faces.handle(),state_->nodes.handle(),
                 state_->triangles.handle(),state_->scene_info.handle(),
-                state_->sorted.handle(),state_->offsets.handle()};
+                state_->sorted.handle(),state_->offsets.handle(),
+                state_->face_ids.handle()};
     }
     geometry_output mapper::refit_geometry(
         std::uint32_t frame,const std::vector<geometry_update>& updates)
