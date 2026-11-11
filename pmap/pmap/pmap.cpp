@@ -246,6 +246,109 @@ namespace pm
         gpu::compute direct_pass,direct_filter,gather,temporal_pass,denoise;
         std::uint32_t node_count=0;
         std::uint32_t current=0;
+        acceleration base_accel;
+        // World-space geometry may be animated without rebuilding pipelines,
+        // photon maps, UV atlases or the sorted triangle/BVH topology.
+        struct animated_frame {
+            gpu::buffer faces,nodes,triangles;
+            std::vector<gpu_face> face_data;
+            std::vector<bvh::stackless_node> bounds;
+            std::vector<f4> vertex_data;
+        };
+        std::vector<std::unique_ptr<animated_frame>> animated;
+        std::vector<std::uint32_t> face_triangle;
+
+        geometry_output refit_geometry(
+            std::uint32_t image,const std::vector<geometry_update>& updates)
+        {
+            if(updates.empty())
+                return {faces.handle(),nodes.handle(),triangles.handle(),
+                        scene_info.handle(),sorted.handle(),offsets.handle()};
+            if(image>=16)throw std::out_of_range("pm: invalid animation frame");
+            if(animated.size()<=image)animated.resize(image+1);
+            auto& slot=animated[image];
+            if(!slot) {
+                slot=std::make_unique<animated_frame>();
+                slot->face_data=base_accel.faces;
+                slot->bounds=base_accel.nodes;
+                slot->vertex_data=base_accel.triangles;
+                const auto usage=vk::BufferUsageFlagBits::eStorageBuffer;
+                const auto memory=vk::MemoryPropertyFlagBits::eHostVisible |
+                                  vk::MemoryPropertyFlagBits::eHostCoherent;
+                slot->faces.create(slot->face_data.size()*sizeof(gpu_face),
+                                   usage,memory);
+                slot->nodes.create(slot->bounds.size()*sizeof(bvh::stackless_node),
+                                   usage,memory);
+                slot->triangles.create(slot->vertex_data.size()*sizeof(f4),
+                                       usage,memory);
+            }
+            for(const auto& edit:updates) {
+                if(edit.face>=slot->face_data.size() ||
+                   edit.face>=face_triangle.size() ||
+                   face_triangle[edit.face]==UINT32_MAX ||
+                   !edit.value.triangle)
+                    throw std::invalid_argument("pm: invalid skinned face");
+                const auto& f=edit.value;
+                const float a=squared(f.u),b=vk::util::math::dot(f.u,f.v),
+                            c=squared(f.v),det=a*c-b*b;
+                if(!(det>1e-10f) || !std::isfinite(det))continue;
+                auto& face=slot->face_data[edit.face];
+                const vec3 n=vk::util::math::normalize(
+                    vk::util::math::cross(f.u,f.v));
+                face.origin=pack(f.origin);
+                face.u=pack(f.u);
+                face.v=pack(f.v);
+                face.normal=pack(n,1.f);
+                face.metric[0]=c/det;
+                face.metric[1]=-b/det;
+                face.metric[2]=a/det;
+                const auto tri=std::size_t(face_triangle[edit.face])*3u;
+                slot->vertex_data[tri]=pack(f.origin,float(edit.face));
+                slot->vertex_data[tri+1]=pack(f.origin+f.u);
+                slot->vertex_data[tri+2]=pack(f.origin+f.v);
+            }
+            // Refit leaf bounds and then internal bounds bottom-up.
+            // No SAH partitioning, Morton sort or GPU pipeline rebuild.
+            for(std::size_t j=slot->bounds.size();j-- >0;) {
+                auto& node=slot->bounds[j];
+                const float inf=std::numeric_limits<float>::infinity();
+                vec3 lo{inf,inf,inf},hi{-inf,-inf,-inf};
+                const auto add=[&](vec3 p) {
+                    lo=min3(lo,p);
+                    hi=max3(hi,p);
+                };
+                const auto count=node.first_and_count&15u;
+                if(count) {
+                    const auto first=node.first_and_count>>4u;
+                    for(std::uint32_t k=0;k<count;++k)
+                        for(std::uint32_t v=0;v<3;++v) {
+                            const auto& p=slot->vertex_data[(first+k)*3u+v];
+                            add({p[0],p[1],p[2]});
+                        }
+                } else {
+                    // In the stackless topology each child subtree ends at
+                    // its escape index, and children are sequential.
+                    for(std::uint32_t child=std::uint32_t(j)+1u;
+                        child<node.next;child=slot->bounds[child].next) {
+                        const auto& sub=slot->bounds[child];
+                        add({sub.minimum[0],sub.minimum[1],sub.minimum[2]});
+                        add({sub.maximum[0],sub.maximum[1],sub.maximum[2]});
+                    }
+                }
+                if(!std::isfinite(lo.x))continue;
+                node.minimum={lo.x-.0001f,lo.y-.0001f,lo.z-.0001f};
+                node.maximum={hi.x+.0001f,hi.y+.0001f,hi.z+.0001f};
+            }
+            slot->faces.upload(slot->face_data.data(),
+                               slot->face_data.size()*sizeof(gpu_face));
+            slot->nodes.upload(slot->bounds.data(),
+                               slot->bounds.size()*sizeof(bvh::stackless_node));
+            slot->triangles.upload(slot->vertex_data.data(),
+                                   slot->vertex_data.size()*sizeof(f4));
+            return {slot->faces.handle(),slot->nodes.handle(),
+                    slot->triangles.handle(),scene_info.handle(),
+                    sorted.handle(),offsets.handle()};
+        }
 
         void create(scene input,vk::Extent2D dimensions,configuration config)
         {
@@ -276,6 +379,13 @@ namespace pm
             upload(scene_info,&accel.parameters,sizeof(scene_parameters));
             upload(cutouts,accel.cutouts.data(),
                    accel.cutouts.size()*sizeof(std::array<std::uint32_t,4>));
+            base_accel=std::move(accel);
+            face_triangle.assign(base_accel.faces.size(),UINT32_MAX);
+            for(std::size_t i=0;i+2<base_accel.triangles.size();i+=3) {
+                const auto face=std::uint32_t(base_accel.triangles[i][3]);
+                if(face<face_triangle.size() && face_triangle[face]==UINT32_MAX)
+                    face_triangle[face]=std::uint32_t(i/3);
+            }
             previous_camera.create(sizeof(f4)*3u,storage,coherent);
             raw.create(vk::DeviceSize(photon_capacity)*photon_bytes,storage,local);
             sorted.create(vk::DeviceSize(photon_capacity)*photon_bytes,storage,local);
@@ -668,6 +778,12 @@ namespace pm
         return {state_->faces.handle(),state_->nodes.handle(),
                 state_->triangles.handle(),state_->scene_info.handle(),
                 state_->sorted.handle(),state_->offsets.handle()};
+    }
+    geometry_output mapper::refit_geometry(
+        std::uint32_t frame,const std::vector<geometry_update>& updates)
+    {
+        if(!state_)throw std::logic_error("pm: mapper not created");
+        return state_->refit_geometry(frame,updates);
     }
     image_output mapper::output() const
     {
