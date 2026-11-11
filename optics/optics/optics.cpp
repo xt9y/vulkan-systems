@@ -416,7 +416,7 @@ void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
     static const bool force_general=
         std::getenv("OPTICS_PROFILE_GENERAL")!=nullptr;
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
-                     view.eye.w>1.5f?planar_pipeline_.handle():
+                     (view.eye.w>1.5f && view.eye.w<2.5f)?planar_pipeline_.handle():
                      (contains_glass_||force_general)?
                      pipeline_.handle():mirror_pipeline_.handle());
     const vk::DescriptorSet set=descriptors_.set(frame);
