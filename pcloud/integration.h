@@ -195,17 +195,26 @@ static int pc_build_compile_shaders(pc_build_paths paths,const char* out_dir)
         const int n=snprintf(binary,sizeof(binary),"%s/pcloud_%s.spv",
                              out_dir,names[i]);
         if(n<0 || (size_t)n>=sizeof(binary))return -1;
-        struct stat input_info,output_info;
+        struct stat input_info,output_info,common_info;
+        char shared[1200];
+        if(pc_build_join(shared,sizeof(shared),shader_dir,"lighting_shared.glsl"))
+            return -1;
+        const int shared_shader=strcmp(names[i],"light.comp")==0 ||
+                                strcmp(names[i],"tone.comp")==0;
+        if(shared_shader && stat(shared,&common_info))return -1;
         if(stat(source,&input_info)!=0)
         {
             fprintf(stderr,"pc: missing shader %s\n",source);
             return -1;
         }
         if(stat(binary,&output_info)==0 &&
-           output_info.st_mtime>=input_info.st_mtime)continue;
+           output_info.st_mtime>=input_info.st_mtime &&
+           (!shared_shader || output_info.st_mtime>=common_info.st_mtime))
+            continue;
         if(strchr(source,'"') || strchr(binary,'"'))return -1;
         const int length=snprintf(command,sizeof(command),
-              "glslangValidator -V \"%s\" -o \"%s\"",source,binary);
+              "glslangValidator -V -I\"%s\" \"%s\" -o \"%s\"",
+              shader_dir,source,binary);
         if(length<0 || (size_t)length>=sizeof(command) || system(command)!=0)
         {
             fprintf(stderr,"pc: shader compilation failed for %s\n",source);
