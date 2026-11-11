@@ -53,6 +53,10 @@ namespace pc
         std::vector<surface> surfaces;
     };
     struct camera_frame {vec3 eye{};float yaw=0.f,pitch=0.f,fov=1.0471976f;};
+    struct view_basis {
+        vec3 eye{},forward{},right{},up{};
+        float fov=1.0471976f;
+    };
     // Shader contract: {albedo, normal, material, depth}. All views must
     // already be shader-readable when pc::record is called. Packed normals
     // are N*0.5+0.5; material channels are roughness, metallic, AO.
@@ -99,6 +103,15 @@ namespace pc
     // Update light color/intensity without rebuilding unchanged scene geometry.
     // Position, radius, active mask and light count must be unchanged.
     void update_lights(const std::vector<light>&);
+    // Render the same opaque PCloud lighting from a mirrored raster camera.
+    // Uses a second full-resolution G-buffer, existing probe field and shadow
+    // BVH, and a separate per-image HDR/LDR target. No ray-traced primary hit.
+    void create_reflection(const std::vector<gbuffer>&);
+    void reflection_lighting(vk::CommandBuffer,std::uint32_t,const view_basis&);
+    void reflection_tonemap(vk::CommandBuffer,std::uint32_t);
+    vk::ImageView reflection_ldr_view(std::uint32_t);
+    targets reflection_images(std::uint32_t);
+
     void updated(std::uint32_t);
     void set_exposure(float);
     void toggle_probes();
