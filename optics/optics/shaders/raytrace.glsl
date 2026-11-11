@@ -100,9 +100,14 @@ bool optics_face_hit(vec3 ro,vec3 rd,OpticsFace f,uint face_id,
     if(u<-.0001 || v<-.0001 || u>1.0001 || v>1.0001 ||
        (f.normal.w>.5 && u+v>1.0001))return false;
     OpticsUV mapping=optics_uv[face_id];
-    if(mapping.rect.x>0.0 && mapping.rect.w>0.0) {
-        vec2 address=optics_atlas_coord(mapping,vec2(u,v));
-        float alpha=textureLod(optics_atlas,address,0.0).a*mapping.rect.z;
+    if(mapping.rect.w>0.0) {
+        // Match the raster alpha test for textured *and* untextured
+        // Mermaid cards. Previously untextured masked faces never clipped,
+        // producing ghost geometry that hid correctly textured surfaces.
+        float alpha=mapping.rect.z;
+        if(mapping.rect.x>0.0)
+            alpha*=textureLod(optics_atlas,
+                optics_atlas_coord(mapping,vec2(u,v)),0.0).a;
         if(alpha<mapping.rect.w)return false;
     }
     t=dist;
