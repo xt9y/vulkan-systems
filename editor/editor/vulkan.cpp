@@ -44,7 +44,7 @@ namespace editor::vulkan
             std::string ui_directory="build/editor-hell2024/"
                 "Hell2024/Hell2024/res/textures/ui";
             std::array<glyph,128> glyphs;
-            std::array<sprite,9> sprites;
+            std::array<sprite,10> sprites;
             bool ready=false;
         };
         font_data& font()
