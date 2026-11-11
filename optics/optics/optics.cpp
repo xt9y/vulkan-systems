@@ -124,6 +124,8 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
 void compositor::set_scene(geometry g,const std::vector<light>& lights)
 {
     if(!frame_count_)throw std::logic_error("optics: compositor not initialized");
+    if(g.face_count && !g.face_ids)
+        throw std::invalid_argument("optics: missing sorted face IDs");
     face_count_=g.face_count;
     const std::array<vk::Buffer,6> buffers{
         g.faces,g.nodes,g.face_ids,g.scene_info,g.photons,g.offsets
@@ -165,7 +167,7 @@ void compositor::set_lights(const std::vector<light>& lights)
 
 void compositor::set_geometry_frame(std::uint32_t frame,geometry g)
 {
-    if(frame>=frame_count_ || !g.faces || !g.nodes || !g.triangles ||
+    if(frame>=frame_count_ || !g.faces || !g.nodes || !g.face_ids ||
        g.face_count!=face_count_)
         throw std::invalid_argument("optics: mismatched animated geometry");
     descriptors_.write_buffer(frame,6,
