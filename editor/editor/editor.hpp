@@ -64,7 +64,7 @@ namespace editor
     {
         // Geometry matches Hell2024's 960x540 PRESENT_WIDTH/HEIGHT canvas.
         enum class type { rectangle,text,image } kind=type::rectangle;
-        enum class texture { menu_bg,border_horizontal,border_vertical,corner_tl,corner_tr,corner_bl,corner_br,light_icon,cube_icon,label_plate } image=texture::menu_bg;
+        enum class texture { menu_bg,border_horizontal,border_vertical,corner_tl,corner_tr,corner_bl,corner_br,label_plate } image=texture::menu_bg;
         enum class alignment { left,center,right } text_alignment=alignment::left;
         int x=0,y=0,width=0,height=0,scale=1;
         color tint{};
