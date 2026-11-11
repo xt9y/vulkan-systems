@@ -67,7 +67,8 @@ public:
     void create(vk::RenderPass pass, const std::vector<input>& frames,
                 const char* vertex="build/shaders/pcloud_fullscreen.vert.spv",
                 const char* fragment="build/shaders/optics_compose.frag.spv",
-                const char* mirror_fragment="build/shaders/optics_compose_mirror.frag.spv");
+                const char* mirror_fragment="build/shaders/optics_compose_mirror.frag.spv",
+                const char* planar_fragment="build/shaders/optics_compose_planar.frag.spv");
     // Share the photon mapper's static GPU BVH; the mapper must outlive
     // submitted rendering work. Empty geometry disables off-screen rays.
     void set_scene(geometry,const std::vector<light>&,
@@ -89,7 +90,7 @@ public:
     void reset() noexcept;
 private:
     gpu::descriptors descriptors_;
-    render::pipeline pipeline_,mirror_pipeline_;
+    render::pipeline pipeline_,mirror_pipeline_,planar_pipeline_;
     gpu::buffer empty_,lights_,face_uv_,face_normals_,probe_space_;
     struct animated_normals {
         gpu::buffer buffer;
