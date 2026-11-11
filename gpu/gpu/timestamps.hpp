@@ -96,7 +96,10 @@ namespace gpu
                    std::uint32_t interval) const
         {
             if(image<pools_.size() && interval<intervals_)
-                command.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe,
+                // A top-of-pipe start can run ahead of earlier raster
+                // commands. The optical interval lives inside presentation:
+                // bottom-of-pipe establishes a finished prior-work boundary.
+                command.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe,
                                        pools_[image],interval*2);
         }
 
