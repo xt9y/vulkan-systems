@@ -419,6 +419,106 @@ namespace pc
         }
     }
 
+    void create_reflection(const std::vector<gbuffer>& gbuffers)
+    {
+        auto& data=get();
+        const auto count=std::uint32_t(data.frames.size());
+        if(!count || gbuffers.size()!=count || !data.reflections.empty())
+            throw std::invalid_argument("pc: invalid reflected G-buffer count");
+        data.reflection_targets=std::make_unique<::render::postprocess_targets>();
+        data.reflection_targets->create(count,data.output.extent);
+        const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
+        const auto host=vk::MemoryPropertyFlagBits::eHostVisible |
+                        vk::MemoryPropertyFlagBits::eHostCoherent;
+        data.reflections.resize(count);
+        for(std::uint32_t i=0;i<count;++i) {
+            auto& current=data.reflections[i];
+            const auto target=data.reflection_targets->at(i);
+            current.hdr={target.hdr,target.hdr_view};
+            current.ldr={target.ldr,target.ldr_view};
+            current.lighting=data.lighting_sets->set(i+count);
+            current.tone=data.tone_sets->set(i+count);
+            current.tile_lights=gpu::create_buffer(
+                std::size_t(data.tile_columns)*data.tile_rows*light_slot_width*
+                sizeof(std::uint32_t),storage,host);
+            const auto& g=gbuffers[i];
+            for(std::uint32_t j=0;j<g.size();++j) {
+                vk::DescriptorImageInfo descriptor{};
+                descriptor.sampler=data.sampler;
+                descriptor.imageView=g[j];
+                descriptor.imageLayout=j==3?
+                    vk::ImageLayout::eDepthStencilReadOnlyOptimal:
+                    vk::ImageLayout::eShaderReadOnlyOptimal;
+                data.lighting_sets->write_image(i+count,j,descriptor);
+            }
+            vk::DescriptorImageInfo grid{};
+            grid.sampler=data.sampler;
+            grid.imageView=data.frames[i].grid_view;
+            grid.imageLayout=vk::ImageLayout::eGeneral;
+            data.lighting_sets->write_image(i+count,4,grid);
+            vk::DescriptorImageInfo hdr{};
+            hdr.imageView=current.hdr.view;
+            hdr.imageLayout=vk::ImageLayout::eGeneral;
+            data.lighting_sets->write_image(i+count,5,hdr);
+            data.lighting_sets->write_buffer(i+count,6,
+                vk::buffer::descriptor(data.lights));
+            data.lighting_sets->write_buffer(i+count,7,
+                vk::buffer::descriptor(data.triangles));
+            data.lighting_sets->write_buffer(i+count,8,
+                vk::buffer::descriptor(data.nodes));
+            data.lighting_sets->write_buffer(i+count,9,
+                vk::buffer::descriptor(current.tile_lights));
+            data.lighting_sets->write_buffer(i+count,10,
+                vk::buffer::descriptor(data.shadow_light_ranges));
+            vk::DescriptorImageInfo tone{};
+            tone.sampler=data.sampler;
+            tone.imageView=current.hdr.view;
+            tone.imageLayout=vk::ImageLayout::eGeneral;
+            data.tone_sets->write_image(i+count,0,tone);
+            tone.imageView=current.ldr.view;
+            data.tone_sets->write_image(i+count,1,tone);
+        }
+    }
+
+    void reflection_lighting(vk::CommandBuffer command,std::uint32_t image,
+                             const view_basis& view)
+    {
+        const auto& data=get();
+        const auto& current=data.reflections.at(image);
+        const auto extent=data.output.extent;
+        const float tangent=std::tan(view.fov*.5f);
+        const float aspect=float(extent.width)/float(extent.height);
+        const push controls{
+            exposure_value.load(std::memory_order_relaxed),{},
+            {view.eye.x,view.eye.y,view.eye.z,.1f},
+            {view.forward.x,view.forward.y,view.forward.z,1000.f},
+            {view.right.x,view.right.y,view.right.z,tangent*aspect},
+            {view.up.x,view.up.y,view.up.z,tangent},
+            {float(data.light_count),0.f,float(data.vertex_count),
+             float(data.node_count)},
+            {data.grid_origin.x,data.grid_origin.y,data.grid_origin.z,
+             data.grid_spacing}
+        };
+        data.lighting_program->dispatch(command,
+            (extent.width+7)/8,(extent.height+7)/8,1,
+            {current.lighting},&controls,sizeof(controls));
+    }
+    void reflection_tonemap(vk::CommandBuffer command,std::uint32_t image)
+    {
+        const auto& data=get();
+        compute(command,*data.tone_program,data.reflections.at(image).tone,
+                camera_frame{});
+    }
+    vk::ImageView reflection_ldr_view(std::uint32_t image)
+    {
+        return get().reflections.at(image).ldr.view;
+    }
+    targets reflection_images(std::uint32_t image)
+    {
+        const auto& r=get().reflections.at(image);
+        return {{},{},r.hdr.image,r.ldr.image};
+    }
+
     // Rogue derives its point cloud from static floor/wall geometry.
     // Reuse the server's world-space collision surfaces without expanding
     // arbitrary imported mesh polygons into brute-force visibility rays.
