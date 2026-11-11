@@ -21,8 +21,8 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
-        std::vector<vk::DescriptorSetLayoutBinding> bindings(19);
-        for(std::uint32_t i=0;i<19;++i) {
+        std::vector<vk::DescriptorSetLayoutBinding> bindings(20);
+        for(std::uint32_t i=0;i<20;++i) {
             bindings[i].binding=i;
             bindings[i].descriptorCount=1;
             bindings[i].descriptorType=(i>=6 && i<=13) || i==15 || i==17 ?
@@ -112,6 +112,12 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             hdr.imageView=f.hdr;
             hdr.imageLayout=vk::ImageLayout::eGeneral;
             descriptors_.write_image(i,18,hdr);
+            if(!f.reflection)throw std::invalid_argument("optics: missing planar reflection image");
+            vk::DescriptorImageInfo mirror{};
+            mirror.sampler=sampler_;
+            mirror.imageView=f.reflection;
+            mirror.imageLayout=vk::ImageLayout::eGeneral;
+            descriptors_.write_image(i,19,mirror);
             for(std::uint32_t binding=0;binding<views.size();++binding) {
                 if(!views[binding])throw std::invalid_argument("optics: missing input view");
                 vk::DescriptorImageInfo image{};
