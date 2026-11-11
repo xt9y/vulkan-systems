@@ -68,6 +68,8 @@ public:
     // Share the photon mapper's static GPU BVH; the mapper must outlive
     // submitted rendering work. Empty geometry disables off-screen rays.
     void set_scene(geometry,const std::vector<light>&);
+    // Update reflected direct lighting without replacing BVH or photon buffers.
+    void set_lights(const std::vector<light>&);
     void set_textures(const std::vector<face_uv>&,
                       const std::vector<texture_rgba>&);
     void set_normals(const std::vector<face_normals>&);
