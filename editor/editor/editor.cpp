@@ -201,9 +201,12 @@ namespace editor
         {
             // Deletion is deliberately deferred until closing the selected
             // object's inspector; simply toggling TRUE changes no world state.
-            if(menu_==menu::properties && delete_armed_ && selected_object_)
+            if(menu_==menu::properties && delete_armed_ && selected_object_) {
                 pending_.push_back({action_kind::remove,"",
                                     selected_object_,"",0});
+                local_edits_.erase(selected_object_);
+                properties_.erase(selected_object_);
+            }
             menu_=menu::none;
             selected_object_=0;
             dragging_menu_=false;
