@@ -135,6 +135,11 @@ void compositor::set_scene(geometry g,const std::vector<light>& lights)
             };
             descriptors_.write_buffer(i,6+j,resource);
         }
+    set_lights(lights);
+}
+void compositor::set_lights(const std::vector<light>& lights)
+{
+    if(!frame_count_)throw std::logic_error("optics: compositor not initialized");
     struct alignas(16) gpu_light {
         std::array<float,4> position_radius{},color_strength{};
     };
