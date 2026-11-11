@@ -414,25 +414,25 @@ namespace pc
         get().incoming=std::move(value);
     }
 
-    void update_lights(std::shared_ptr<const world> source)
+    void update_lights(const std::vector<light>& lights)
     {
         auto& data=get();
-        if(!source || !data.snapshot || !data.lights.handle ||
-           source->lights.size()!=data.snapshot->lights.size() ||
-           source->lights.size()!=data.light_count)
+        if(!data.snapshot || !data.lights.handle ||
+           lights.size()!=data.snapshot->lights.size() ||
+           lights.size()!=data.light_count)
             throw std::invalid_argument("pc: light update requires identical scene topology");
         const auto active=[](const light& l){return l.strength>0.f;};
-        for(std::size_t i=0;i<source->lights.size();++i) {
+        for(std::size_t i=0;i<lights.size();++i) {
             const auto& a=data.snapshot->lights[i];
-            const auto& b=source->lights[i];
+            const auto& b=lights[i];
             if(a.position.x!=b.position.x || a.position.y!=b.position.y ||
                a.position.z!=b.position.z || a.radius!=b.radius ||
                active(a)!=active(b))
                 throw std::invalid_argument("pc: light topology changed");
         }
         std::vector<point_light> packed;
-        packed.reserve(source->lights.size());
-        for(const auto& l:source->lights)
+        packed.reserve(lights.size());
+        for(const auto& l:lights)
             packed.push_back({
                 {l.position.x,l.position.y,l.position.z,l.radius},
                 {l.color.x,l.color.y,l.color.z,l.strength}
@@ -440,8 +440,9 @@ namespace pc
         if(!packed.empty())
             vk::buffer::write(data.lights,packed.data(),
                               packed.size()*sizeof(point_light));
-        data.snapshot=source;
-        data.incoming=std::move(source);
+        // The CPU tile culler only reads position, radius and whether
+        // strength is zero; those remain unchanged. Avoid copying the
+        // entire immutable triangle world for a color/intensity edit.
         for(auto& frame:data.frames)frame.dirty=true;
     }
 
