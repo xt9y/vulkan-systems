@@ -383,10 +383,9 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
         }
         if(surface.emission.w<-.001) {
             float reflectivity=clamp(-surface.emission.w,0.0,1.0);
-            // A perfect mirror is not a tinted metal or a diffuse surface.
-            // Keep *all* incoming radiance, including nested reflection hits.
-            // Reflectivity/mattness editor controls are ignored for mirrors.
-            // All mirror surface values trace the same energy-preserving ray.
+            // Mirror reflectivity remains full strength, but the material
+            // color acts as a per-channel filter at each nested bounce.
+            path.throughput*=clamp(surface.albedo.rgb,vec3(0.0),vec3(1.0));
             path.origin=hit.position+hit.geometric_normal*.012;
             path.direction=normalize(reflect(path.direction,hit.normal));
             path.depth++;
@@ -412,6 +411,7 @@ vec3 optics_perfect_mirror(vec3 origin,vec3 direction)
 {
     vec3 start_origin=origin;
     vec3 start_direction=direction;
+    vec3 throughput=vec3(1.0);
     vec3 ray=normalize(direction);
     for(int depth=0;depth<10;++depth) {
         OpticsHit hit;
@@ -427,11 +427,12 @@ vec3 optics_perfect_mirror(vec3 origin,vec3 direction)
 #endif
         }
         if(surface.emission.w<-.001) {
+            throughput*=clamp(surface.albedo.rgb,vec3(0.0),vec3(1.0));
             origin=hit.position+hit.geometric_normal*.012;
             ray=normalize(reflect(ray,hit.normal));
             continue;
         }
-        return optics_surface_radiance(hit,ray);
+        return throughput*optics_surface_radiance(hit,ray);
     }
     return vec3(0.0);
 }
