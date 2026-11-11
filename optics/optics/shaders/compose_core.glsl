@@ -14,6 +14,7 @@ layout(push_constant) uniform View {
     vec4 eye, right, up, forward;
 } camera;
 #include "raytrace.glsl"
+layout(set=0,binding=19) uniform sampler2D planar_reflection;
 
 vec3 world_position(vec2 uv,float depth)
 {
@@ -48,8 +49,16 @@ void main()
     float strength=clamp(tint.a,0.0,1.0);
     bool glass=mask.a<.75;
 #ifdef OPTICS_ONLY_MIRRORS
-    vec3 reflection=optics_perfect_mirror(P+N*.012,R);
-    color=vec4(shared_tonemap(reflection,camera.forward.w),1.0);
+    if(camera.eye.w>1.5) {
+        // Rasterized from the reflected camera, with horizontal sign
+        // correction for the mirror's handedness. Same textures, shadow
+        // BVH, PCloud GI, exposure and HDR transfer as the real scene.
+        color=vec4(textureLod(planar_reflection,
+            vec2(1.0-uv.x,uv.y),0.0).rgb,1.0);
+    } else {
+        vec3 reflection=optics_perfect_mirror(P+N*.012,R);
+        color=vec4(shared_tonemap(reflection,camera.forward.w),1.0);
+    }
 #else
     vec3 reflection=glass ?
         optics_offscreen_glossy(P+N*.03,R,mattness):
