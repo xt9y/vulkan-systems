@@ -356,15 +356,13 @@ namespace editor
             const rect r=label_rect(label,width,height);
             const bool selected=menu_==menu::properties && label.object==selected_object_;
             const bool highlighted=selected || label.object==hovered_object;
-            const auto sprite=label.text=="LIGHT"?
-                draw_command::texture::light_icon:label.text=="CUBE"?
-                draw_command::texture::cube_icon:
-                draw_command::texture::label_plate;
-            image(out,sprite,r);
+            // All world labels use the same blank shaded plate and font.
+            // Previously LIGHT/CUBE contained baked lettering while other
+            // labels used the CP437 font, so their appearance never matched.
+            image(out,draw_command::texture::label_plate,r);
             if(highlighted)out.back().tint={1.f,.25f,.25f,1.f};
-            if(sprite==draw_command::texture::label_plate)
-                text(out,r.x+r.w/2,r.y+3,label.text,
-                     draw_command::alignment::center);
+            text(out,r.x+r.w/2,r.y+3,label.text,
+                 draw_command::alignment::center);
         }
 
         // FPS/frame time on the right, separate from Hell's floating menus.
