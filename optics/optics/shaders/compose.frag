@@ -71,12 +71,10 @@ void main()
         vec3 glass=mix(tint.rgb,background*mix(vec3(1.0),tint.rgb,.20),
                        transmission);
         vec3 radiance=mix(glass,reflection,fresnel);
-        vec3 exposed=max(radiance*camera.forward.w,vec3(0.0));
-        color=vec4(exposed/(1.0+exposed),1.0);
+        color=vec4(shared_tonemap(radiance,camera.forward.w),1.0);
     } else {
         // 100% untinted sharp reflection of the real world at every
         // angle, even when the editor's legacy tint/roughness is nonzero.
-        vec3 exposed=max(reflection*camera.forward.w,vec3(0.0));
-        color=vec4(exposed/(1.0+exposed),1.0);
+        color=vec4(shared_tonemap(reflection,camera.forward.w),1.0);
     }
 }
