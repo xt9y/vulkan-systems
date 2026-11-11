@@ -385,34 +385,12 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
             if(queued<16)pending[queued++]=path;
             continue;
         }
-        // Reuse the *exact* lit raster color when this hit is visible
-        // in the primary camera, preserving textures and animation.
-        vec4 projected=camera.vp*vec4(hit.position,1.0);
-        bool from_screen=false;
-        if(projected.w>.00001) {
-            vec3 ndc=projected.xyz/projected.w;
-            vec2 screen=ndc.xy*.5+.5;
-            if(all(greaterThanEqual(screen,vec2(.001))) &&
-               all(lessThanEqual(screen,vec2(.999))) &&
-               ndc.z>=0.0 && ndc.z<=1.0) {
-                float expected_depth=.1+.9*ndc.z;
-                float actual_depth=textureLod(opaque_depth,screen,0.0).r;
-                // Exclude near-depth first-person weapon pixels.
-                float optical_front=textureLod(optic_depth,screen,0.0).r;
-                bool covered_by_optics=
-                    textureLod(optic_normal,screen,0.0).a>.25 &&
-                    optical_front<actual_depth-.0003;
-                if(!covered_by_optics && actual_depth>=.1 &&
-                   abs(actual_depth-expected_depth)<.0004) {
-                    accumulated+=path.throughput*
-                        textureLod(hdr_image,screen,0.0).rgb;
-                    from_screen=true;
-                }
-            }
-        }
-        if(!from_screen)
-            accumulated+=path.throughput*
-                         optics_surface_radiance(hit,path.direction);
+        // Always shade the traced surface with its own triangle UVs.
+        // Switching between a screen-space HDR lookup and the atlas when a
+        // hit crosses the FOV/depth threshold changes textures abruptly:
+        // transparent Mermaid cards can flicker or disappear entirely.
+        accumulated+=path.throughput*
+                     optics_surface_radiance(hit,path.direction);
     }
     return accumulated;
 }
