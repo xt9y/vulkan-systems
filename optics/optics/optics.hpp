@@ -28,7 +28,7 @@ struct face_uv {
     std::uint32_t texture_id=0;
     std::uint32_t metallic_roughness_texture=0,normal_texture=0;
     std::uint32_t occlusion_texture=0,emissive_texture=0;
-    float alpha_cutoff=0.f;
+    float alpha_cutoff=0.f,base_alpha=1.f;
 };
 // Each entry corresponds to one BVH face, including transport emitters.
 // Smooth normals are in world space and share the same vertex order as UVs.
