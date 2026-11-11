@@ -314,6 +314,7 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
     }
     return radiance;
 }
+#ifndef OPTICS_ONLY_MIRRORS
 struct OpticsPath {
     vec3 origin;
     vec3 direction;
@@ -401,6 +402,7 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
     }
     return accumulated;
 }
+#endif
 // Hot path for 100% mirrors: no Fresnel branches, queue, or per-bounce
 // throughput state when the reflected scene contains only opaque surfaces
 // and other perfect mirrors. Exact same closest-hit, normals and shading.
@@ -415,8 +417,15 @@ vec3 optics_perfect_mirror(vec3 origin,vec3 direction)
         OpticsHit hit;
         if(!optics_closest(origin,ray,1000.0,hit))return vec3(0.0);
         OpticsFace surface=optics_faces[hit.face_id];
-        if(surface.emission.w>1.0)
+        if(surface.emission.w>1.0) {
+#ifndef OPTICS_ONLY_MIRRORS
             return optics_offscreen_radiance(start_origin,start_direction);
+#else
+            // The mirror-only variant is selected only when the authored
+            // scene contains no dielectric faces; this is unreachable.
+            return vec3(0.0);
+#endif
+        }
         if(surface.emission.w<-.001) {
             origin=hit.position+hit.geometric_normal*.012;
             ray=normalize(reflect(ray,hit.normal));
@@ -426,6 +435,7 @@ vec3 optics_perfect_mirror(vec3 origin,vec3 direction)
     }
     return vec3(0.0);
 }
+#ifndef OPTICS_ONLY_MIRRORS
 vec3 optics_offscreen_glossy(vec3 origin,vec3 direction,float mattness)
 {
     vec3 center=optics_offscreen_radiance(origin,direction);
@@ -441,4 +451,5 @@ vec3 optics_offscreen_glossy(vec3 origin,vec3 direction,float mattness)
     vec3 b=optics_offscreen_radiance(origin,normalize(direction-offset));
     return (center*2.0+a+b)*.25;
 }
+#endif
 #endif
