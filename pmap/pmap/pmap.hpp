@@ -78,6 +78,10 @@ namespace pm
         vk::Buffer faces{}, nodes{}, triangles{}, scene_info{};
         vk::Buffer photons{}, offsets{};
     };
+    struct geometry_update {
+        std::uint32_t face=0;
+        surface value{};
+    };
     struct image_output
     {
         vk::Image image{};
@@ -117,6 +121,11 @@ namespace pm
         photon_output record_transport(vk::CommandBuffer);
         photon_output photon_buffers() const;
         geometry_output geometry_buffers() const;
+        // Scene topology stays fixed. Refit world-space surfaces with
+        // skinned animation in independent per-swapchain-image buffers.
+        // Call after acquiring the image and waiting for its fence.
+        geometry_output refit_geometry(std::uint32_t image,
+                                      const std::vector<geometry_update>&);
         image_output output() const;
         image_output surface_positions() const;
         progress status() const;
