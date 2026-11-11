@@ -50,8 +50,15 @@ namespace pc
             vk::DescriptorSet presentation{};
         };
 
+        struct reflection_frame {
+            image_target hdr,ldr;
+            gpu::owned_buffer tile_lights;
+            vk::DescriptorSet lighting{},tone{};
+        };
         struct state {
             std::vector<frame> frames;
+            std::vector<reflection_frame> reflections;
+            std::unique_ptr<::render::postprocess_targets> reflection_targets;
             std::vector<gpu::graph> frame_graphs;
             vk::Sampler sampler{};
             gpu::owned_buffer lights;
@@ -281,9 +288,9 @@ namespace pc
             data.gi_sets=std::make_unique<gpu::descriptors>();
             data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,6),count);
             data.lighting_sets=std::make_unique<gpu::descriptors>();
-            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,5),count);
+            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,5),count*2);
             data.tone_sets=std::make_unique<gpu::descriptors>();
-            data.tone_sets->create(bindings(1,1,vk::ShaderStageFlagBits::eCompute),count);
+            data.tone_sets->create(bindings(1,1,vk::ShaderStageFlagBits::eCompute),count*2);
             data.present_sets=std::make_unique<gpu::descriptors>();
             data.present_sets->create(bindings(1,0,vk::ShaderStageFlagBits::eFragment),count);
             data.present_layout=pipeline_layout(data.present_sets->layout());
@@ -768,6 +775,8 @@ namespace pc
                 data.gi_sets->write_image(i,0,gi);
                 gi.sampler=data.sampler;
                 data.lighting_sets->write_image(i,4,gi);
+                if(!data.reflections.empty())
+                    data.lighting_sets->write_image(i+std::uint32_t(data.frames.size()),4,gi);
             }
         }
         std::clog << "clt: light-driven GI volume: "
@@ -835,9 +844,35 @@ namespace pc
             data.gi_sets->write_buffer(i,5,vk::buffer::descriptor(data.neighborhood_offsets));
             data.gi_sets->write_buffer(i,6,vk::buffer::descriptor(data.neighborhood_indices));
             data.lighting_sets->write_buffer(i,8,vk::buffer::descriptor(data.nodes));
+            if(!data.reflections.empty()) {
+                const auto secondary=i+std::uint32_t(data.frames.size());
+                data.lighting_sets->write_buffer(secondary,7,
+                    vk::buffer::descriptor(data.triangles));
+                data.lighting_sets->write_buffer(secondary,8,
+                    vk::buffer::descriptor(data.nodes));
+            }
         }
         data.snapshot=source;
         data.live_lights=source?source->lights:std::vector<light>{};
+        // The reflected view has its own conservative all-light lists.
+        // In the single-planar-mirror path there are at most two
+        // light emitters, so updating their screen tiles every frame
+        // would be more expensive than using the exact full list.
+        for(auto& reflected:data.reflections) {
+            std::vector<std::uint32_t> tiles(
+                std::size_t(data.tile_columns)*data.tile_rows*light_slot_width,0u);
+            for(std::size_t tile=0;tile<std::size_t(data.tile_columns)*data.tile_rows;++tile) {
+                const auto base=tile*light_slot_width;
+                for(std::uint32_t id=0;id<data.live_lights.size() &&
+                                        id<light_slot_width-1;++id) {
+                    const auto& l=data.live_lights[id];
+                    if(l.radius>0.f && l.strength>0.f)
+                        tiles[base+1+tiles[base]++]=id;
+                }
+            }
+            vk::buffer::write(reflected.tile_lights,tiles.data(),
+                              tiles.size()*sizeof(std::uint32_t));
+        }
         // The scene update can replace grid images and point buffers.
         // The caller already guaranteed all old GPU submissions are idle.
         for(auto& graph:data.frame_graphs)graph.clear_states();
@@ -857,6 +892,8 @@ namespace pc
             frame.grid_view=vk::ImageView{};
         }
         data.frames.clear();
+        data.reflections.clear();
+        data.reflection_targets.reset();
         data.frame_graphs.clear();
         data.cloud_program.reset();
         data.gi_program.reset();
