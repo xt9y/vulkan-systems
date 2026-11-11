@@ -18,11 +18,11 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
-        std::vector<vk::DescriptorSetLayoutBinding> bindings(16);
-        for(std::uint32_t i=0;i<16;++i) {
+        std::vector<vk::DescriptorSetLayoutBinding> bindings(18);
+        for(std::uint32_t i=0;i<18;++i) {
             bindings[i].binding=i;
             bindings[i].descriptorCount=1;
-            bindings[i].descriptorType=(i>=6 && i<=13) || i==15 ?
+            bindings[i].descriptorType=(i>=6 && i<=13) || i==15 || i==17 ?
                 vk::DescriptorType::eStorageBuffer :
                 vk::DescriptorType::eCombinedImageSampler;
             bindings[i].stageFlags=vk::ShaderStageFlagBits::eFragment |
@@ -42,6 +42,9 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         face_uv_.upload(empty_uv.data(),empty_uv.size());
         face_normals_.create(3u*sizeof(std::array<float,4>),
             vk::BufferUsageFlagBits::eStorageBuffer,host);
+        probe_space_.create(16,vk::BufferUsageFlagBits::eStorageBuffer,host);
+        const std::array<float,4> empty_probe{};
+        probe_space_.upload(empty_probe.data(),16);
         const std::array<float,12> empty_normals{};
         face_normals_.upload(empty_normals.data(),sizeof(empty_normals));
         vk::SamplerCreateInfo sampler_info{};
@@ -89,6 +92,13 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             descriptors_.write_buffer(i,12,lights_.descriptor());
             descriptors_.write_buffer(i,13,face_uv_.descriptor());
             descriptors_.write_buffer(i,15,face_normals_.descriptor());
+            descriptors_.write_buffer(i,17,probe_space_.descriptor());
+            if(!f.probes)throw std::invalid_argument("optics: missing PCloud probe view");
+            vk::DescriptorImageInfo probes{};
+            probes.sampler=sampler_;
+            probes.imageView=f.probes;
+            probes.imageLayout=vk::ImageLayout::eGeneral;
+            descriptors_.write_image(i,16,probes);
             for(std::uint32_t binding=0;binding<views.size();++binding) {
                 if(!views[binding])throw std::invalid_argument("optics: missing input view");
                 vk::DescriptorImageInfo image{};
@@ -142,6 +152,10 @@ void compositor::set_scene(geometry g,const std::vector<light>& lights)
     lights_.upload(&packet,sizeof(packet));
 }
 
+void compositor::set_probe_space(const std::array<float,4>& space)
+{
+    probe_space_.upload(space.data(),sizeof(space));
+}
 void compositor::set_normals(const std::vector<face_normals>& normals)
 {
     if(!frame_count_ || normals.size()!=face_count_)
@@ -326,6 +340,7 @@ void compositor::reset() noexcept
     lights_.reset();
     face_uv_.reset();
     face_normals_.reset();
+    probe_space_.reset();
     face_count_=0;
     if(atlas_view_)vk::image_view::destroy(atlas_view_);
     atlas_view_=nullptr;
