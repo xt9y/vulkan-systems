@@ -1,6 +1,6 @@
 // Opaque/reflective material resolve. Every reflective pixel traces the
 // same GPU BVH as VulkanPMap, including geometry outside the viewport.
-// Glass is a thin non-magnifying material; transmission uses BVH rays.
+// Single-glass transmission reuses HDR; nested optics retain BVH rays.
 layout(location=0) in vec2 uv_in;
 layout(location=0) out vec4 color;
 layout(set=0,binding=0) uniform sampler2D lit_image;
@@ -14,6 +14,7 @@ layout(push_constant) uniform View {
     vec4 eye, right, up, forward;
 } camera;
 #include "raytrace.glsl"
+layout(set=0,binding=18) uniform sampler2D scene_hdr;
 layout(set=0,binding=19) uniform sampler2D planar_reflection;
 
 vec3 world_position(vec2 uv,float depth)
@@ -54,29 +55,32 @@ void main()
         // correction for the mirror's handedness. Same textures, shadow
         // BVH, PCloud GI, exposure and HDR transfer as the real scene.
         color=vec4(textureLod(planar_reflection,
-            vec2(1.0-uv.x,uv.y),0.0).rgb,1.0);
+            vec2(1.0-uv.x,uv.y),0.0).rgb*tint.rgb,1.0);
     } else {
         vec3 reflection=optics_perfect_mirror(P+N*.012,R);
-        color=vec4(shared_tonemap(reflection,camera.forward.w),1.0);
+        color=vec4(shared_tonemap(reflection*tint.rgb,camera.forward.w),1.0);
     }
 #else
+    // Sharp glass reflection uses the non-branching mirror tracer;
+    // matte glass retains the existing glossy path.
     vec3 reflection=glass ?
-        optics_offscreen_glossy(P+N*.03,R,mattness):
+        (mattness<=.35 ?
+            optics_perfect_mirror(P+N*.03,R) :
+            optics_offscreen_glossy(P+N*.03,R,mattness)) :
         optics_perfect_mirror(P+N*.012,R);
     float cosine=clamp(dot(-incoming,N),0.0,1.0);
     float fresnel=.04+.96*pow(1.0-cosine,5.0);
     if(mask.a<.75) {
-        // Transmit through the same BVH as mirrors. The previous
-        // displaced screen sample duplicated the first-person gun and
-        // skipped secondary glass and mirror surfaces.
-        // Thin-window transmission: keep the camera ray unchanged.
-        // Bending through thick cuboid geometry made the world look zoomed
-        // and distorted near the edges of the camera's field of view.
-        // A true refractive lens can be a separate optical material later.
+        // A single glass object has no additional optical layers.
+        // Reuse the same-pixel opaque HDR image instead of another BVH ray;
+        // no UV displacement, duplicated weapon, or lens distortion.
+        // Multiple optical objects retain exact nested BVH transmission.
         float transmission=clamp(tint.a,0.0,1.0);
-        vec3 background=transmission>.001 ?
-            optics_offscreen_glossy(P+incoming*.03,incoming,mattness) :
-            vec3(0.0);
+        vec3 background=vec3(0.0);
+        if(transmission>.001)
+            background=camera.eye.w>2.5 ?
+                textureLod(scene_hdr,uv,0.0).rgb :
+                optics_offscreen_glossy(P+incoming*.03,incoming,mattness);
         // At zero pass-through show opaque tinted glass, not a hole;
         // at one show the unchanged camera perspective through it.
         vec3 glass=mix(tint.rgb,background*mix(vec3(1.0),tint.rgb,.20),
@@ -84,9 +88,8 @@ void main()
         vec3 radiance=mix(glass,reflection,fresnel);
         color=vec4(shared_tonemap(radiance,camera.forward.w),1.0);
     } else {
-        // 100% untinted sharp reflection of the real world at every
-        // angle, even when the editor's legacy tint/roughness is nonzero.
-        color=vec4(shared_tonemap(reflection,camera.forward.w),1.0);
+        // Full-strength reflection through the editor's RGB color filter.
+        color=vec4(shared_tonemap(reflection*tint.rgb,camera.forward.w),1.0);
     }
 #endif
 }
