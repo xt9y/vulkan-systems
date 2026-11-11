@@ -27,9 +27,8 @@ layout(std430,set=0,binding=12) readonly buffer OpticalLights {
 // A face maps its three source UVs onto a subrectangle of the packed
 // RGBA8 atlas. Face indices match the Photon Mapping BVH exactly.
 struct OpticsUV {
-    vec4 uv01;
-    vec4 uv2_origin;
-    vec4 rect;
+    vec4 uv01,uv2_origin,rect;
+    vec4 metallic_rect,normal_rect,occlusion_rect,emissive_rect;
 };
 layout(std430,set=0,binding=13) readonly buffer OpticalUV {
     OpticsUV optics_uv[];
@@ -66,15 +65,20 @@ bool optics_aabb(vec3 ro,vec3 safe,vec3 lo,vec3 hi,float max_t)
     float far_t=min(min(maximum.x,maximum.y),min(maximum.z,max_t));
     return near_t<=far_t;
 }
-vec2 optics_atlas_coord(OpticsUV mapping,vec2 bary)
+vec2 optics_atlas_coord(OpticsUV mapping,vec2 bary,vec4 area)
 {
     vec2 uv=fract(mapping.uv01.xy*(1.0-bary.x-bary.y)+
                   mapping.uv01.zw*bary.x+
                   mapping.uv2_origin.xy*bary.y);
     vec2 size=vec2(textureSize(optics_atlas,0));
-    vec2 lo=mapping.uv2_origin.zw+.5/size;
-    vec2 hi=mapping.uv2_origin.zw+mapping.rect.xy-.5/size;
+    vec2 lo=area.xy+.5/size;
+    vec2 hi=area.xy+area.zw-.5/size;
     return mix(lo,hi,uv);
+}
+vec2 optics_atlas_coord(OpticsUV mapping,vec2 bary)
+{
+    return optics_atlas_coord(mapping,bary,
+        vec4(mapping.uv2_origin.zw,mapping.rect.xy));
 }
 bool optics_face_hit(vec3 ro,vec3 rd,OpticsFace f,uint face_id,
                      float limit,out float t)
@@ -214,57 +218,101 @@ vec3 optics_photon_radiance(OpticsHit hit,vec3 albedo)
     }
     return flux*albedo*(2.0/(OPTICS_PI*OPTICS_PI*radius2));
 }
+// Exactly the direct-light GGX/Smith/Schlick BRDF used by
+// pcloud/shaders/light.comp, with the same attenuation and color space.
+vec3 optics_brdf(vec3 albedo,float metallic,float roughness,
+                 vec3 N,vec3 V,vec3 L)
+{
+    float nl=max(dot(N,L),0.0);
+    if(nl<=0.0)return vec3(0.0);
+    vec3 H=normalize(V+L);
+    float nv=max(dot(N,V),1e-4);
+    float nh=max(dot(N,H),0.0);
+    float vh=max(dot(V,H),0.0);
+    float a=roughness*roughness,a2=a*a;
+    float d=nh*nh*(a2-1.0)+1.0;
+    float D=a2/max(OPTICS_PI*d*d,1e-6);
+    float k=(roughness+1.0)*(roughness+1.0)*.125;
+    float G=(nv/(nv*(1.0-k)+k))*(nl/(nl*(1.0-k)+k));
+    vec3 F0=mix(vec3(.04),albedo,metallic);
+    float m=1.0-clamp(vh,0.0,1.0),m2=m*m;
+    vec3 F=F0+(1.0-F0)*m2*m2*m;
+    return ((1.0-F)*(1.0-metallic)*albedo/OPTICS_PI+
+            D*G*F/max(4.0*nv*nl,1e-4))*nl;
+}
 vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
 {
     OpticsFace f=optics_faces[hit.face_id];
+    OpticsUV mapping=optics_uv[hit.face_id];
+    OpticsNormals material=optics_normals[hit.face_id];
     vec3 albedo=max(f.albedo.rgb,vec3(0.0));
+    vec2 bary=hit.bary;
+    float metallic=clamp(material.a.w,0.0,1.0);
+    float roughness=clamp(material.b.w,.045,1.0);
+    float ao=clamp(material.c.w,0.0,1.0);
     if(f.emission.w>.1 && f.emission.w<.75) {
         if(f.emission.w<.375) {
-            // Same 0.5-metre world-space magenta checker as shd/mesh.frag.
             ivec2 tile=ivec2(floor(hit.position.xz*2.0));
             albedo=((tile.x+tile.y)&1)!=0 ?
-                   vec3(1.0,0.0,1.0):vec3(0.0);
+                vec3(1.0,0.0,1.0):vec3(0.0);
         } else {
-            // Cube editor's four local squares across each material face.
-            vec3 d=hit.position-f.origin.xyz;
-            vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
-            vec2 uv=vec2(q.x*f.metric.x+q.y*f.metric.y,
-                          q.x*f.metric.y+q.y*f.metric.z);
-            ivec2 tile=ivec2(floor(uv*4.0));
+            ivec2 tile=ivec2(floor(bary*4.0));
             albedo*=((tile.x+tile.y)&1)!=0?1.0:.08;
         }
     }
-    OpticsUV mapping=optics_uv[hit.face_id];
-    if(mapping.rect.z>.5) {
-        vec3 d=hit.position-f.origin.xyz;
-        vec2 q=vec2(dot(d,f.u.xyz),dot(d,f.v.xyz));
-        vec2 bary=vec2(q.x*f.metric.x+q.y*f.metric.y,
-                       q.x*f.metric.y+q.y*f.metric.z);
-        vec2 atlas_uv=optics_atlas_coord(mapping,bary);
-        albedo*=pow(max(textureLod(optics_atlas,atlas_uv,0.0).rgb,
-                        vec3(0.0)),vec3(2.2));
+    if(mapping.rect.z>.5)
+        albedo*=pow(max(textureLod(optics_atlas,
+            optics_atlas_coord(mapping,bary),0.0).rgb,vec3(0.0)),
+            vec3(2.2));
+    if(mapping.metallic_rect.z>0.0) {
+        vec4 mr=textureLod(optics_atlas,
+            optics_atlas_coord(mapping,bary,mapping.metallic_rect),0.0);
+        roughness*=mr.g;
+        metallic*=mr.b;
     }
-    vec3 radiance=max(f.emission.rgb,vec3(0.0))+
-                  optics_photon_radiance(hit,albedo);
-    vec3 normal=hit.normal;
+    roughness=clamp(roughness,.045,1.0);
+    vec3 N=hit.normal;
+    if(mapping.normal_rect.z>0.0) {
+        vec2 du=mapping.uv01.zw-mapping.uv01.xy;
+        vec2 dv=mapping.uv2_origin.xy-mapping.uv01.xy;
+        float det=du.x*dv.y-du.y*dv.x;
+        if(abs(det)>1e-7) {
+            vec3 T=normalize((f.u.xyz*dv.y-f.v.xyz*du.y)/det);
+            vec3 B=normalize((f.v.xyz*du.x-f.u.xyz*dv.x)/det);
+            vec3 tex_normal=textureLod(optics_atlas,
+                optics_atlas_coord(mapping,bary,mapping.normal_rect),
+                0.0).xyz*2.0-1.0;
+            N=normalize(mat3(T,B,N)*tex_normal);
+            if(dot(N,hit.geometric_normal)<0.0)N=-N;
+        }
+    }
+    if(mapping.occlusion_rect.z>0.0)
+        ao*=textureLod(optics_atlas,
+            optics_atlas_coord(mapping,bary,mapping.occlusion_rect),0.0).r;
+    vec3 emission=max(f.emission.rgb,vec3(0.0));
+    if(mapping.emissive_rect.z>0.0)
+        emission*=pow(max(textureLod(optics_atlas,
+            optics_atlas_coord(mapping,bary,mapping.emissive_rect),
+            0.0).rgb,vec3(0.0)),vec3(2.2));
+    vec3 radiance=emission+
+        optics_photon_radiance(hit,albedo)*(1.0-metallic)*ao;
+    vec3 V=normalize(-rd);
     for(uint i=0u;i<min(optics_light_count.x,16u);++i) {
         OpticsLight light=optics_lights[i];
-        vec3 delta=light.position_radius.xyz-hit.position;
-        float dist2=dot(delta,delta);
+        vec3 to_light=light.position_radius.xyz-hit.position;
         float radius=max(light.position_radius.w,.001);
-        if(dist2>=radius*radius || dist2<.0001)continue;
+        float dist2=dot(to_light,to_light);
+        if(dist2<.000004 || dist2>=radius*radius ||
+           dot(N,to_light)<=0.0)continue;
         float distance=sqrt(dist2);
-        vec3 L=delta/distance;
-        float lambert=max(dot(normal,L),0.0);
-        if(lambert<=0.0)continue;
-        // Early-out any-opaque traversal is exact for straight-line
-        // point-light visibility, including opaque surfaces behind glass.
-        if(optics_occluded(hit.position+hit.geometric_normal*.03,L,
-                           distance-.06,hit.face_id))continue;
-        float fade=max(0.0,1.0-distance/radius);
-        radiance+=albedo*light.color_strength.rgb*
-            (light.color_strength.w*lambert*fade*fade/
-             (1.0+.12*dist2));
+        vec3 L=to_light/distance;
+        if(optics_occluded(hit.position+N*.004,L,
+                           distance-.008,hit.face_id))continue;
+        float q=clamp(distance/radius,0.0,1.0);
+        float attenuation=1.0-q*q*(3.0-2.0*q);
+        radiance+=optics_brdf(albedo,metallic,roughness,N,V,L)*
+            light.color_strength.rgb*
+            (light.color_strength.w*attenuation);
     }
     return radiance;
 }
