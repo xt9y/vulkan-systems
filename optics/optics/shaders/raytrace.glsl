@@ -62,10 +62,12 @@ vec3 optics_safe_direction(vec3 rd)
         abs(rd.y)<1e-8?(rd.y<0.0?-1e-8:1e-8):rd.y,
         abs(rd.z)<1e-8?(rd.z<0.0?-1e-8:1e-8):rd.z);
 }
-bool optics_aabb(vec3 ro,vec3 safe,vec3 lo,vec3 hi,float max_t)
+bool optics_aabb(vec3 ro,vec3 inv_direction,vec3 lo,vec3 hi,float max_t)
 {
-    vec3 lo_t=(lo-ro)/safe;
-    vec3 hi_t=(hi-ro)/safe;
+    // One reciprocal per ray, not six divisions for every BVH node.
+    // The slab endpoints and acceptance bounds are unchanged.
+    vec3 lo_t=(lo-ro)*inv_direction;
+    vec3 hi_t=(hi-ro)*inv_direction;
     vec3 minimum=min(lo_t,hi_t),maximum=max(lo_t,hi_t);
     float near_t=max(max(minimum.x,minimum.y),max(minimum.z,.025));
     float far_t=min(min(maximum.x,maximum.y),min(maximum.z,max_t));
@@ -121,10 +123,10 @@ bool optics_closest(vec3 ro,vec3 rd,float max_t,out OpticsHit result)
     result.t=max_t;
     bool found=false;
     uint index=0u;
-    vec3 safe=optics_safe_direction(rd);
+    vec3 inv_direction=1.0/optics_safe_direction(rd);
     for(uint steps=0u;index<total_nodes && steps<total_nodes*2u;++steps) {
         OpticsNode node=optics_nodes[index];
-        if(!optics_aabb(ro,safe,node.minimum,node.maximum,result.t)) {
+        if(!optics_aabb(ro,inv_direction,node.minimum,node.maximum,result.t)) {
             index=node.next;
             continue;
         }
@@ -178,10 +180,10 @@ bool optics_occluded(vec3 ro,vec3 rd,float limit,uint source)
     uint total=optics_nodes[0].next;
     if(total==0u || total>1000000u)return false;
     uint index=0u;
-    vec3 safe=optics_safe_direction(rd);
+    vec3 inv_direction=1.0/optics_safe_direction(rd);
     for(uint step=0u;index<total && step<total*2u;++step) {
         OpticsNode node=optics_nodes[index];
-        if(!optics_aabb(ro,safe,node.minimum,node.maximum,limit)) {
+        if(!optics_aabb(ro,inv_direction,node.minimum,node.maximum,limit)) {
             index=node.next;
             continue;
         }
