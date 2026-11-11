@@ -98,7 +98,7 @@ namespace pc
     void synchronize_scene();
     // Update light color/intensity without rebuilding unchanged scene geometry.
     // Position, radius, active mask and light count must be unchanged.
-    void update_lights(std::shared_ptr<const world>);
+    void update_lights(const std::vector<light>&);
     void updated(std::uint32_t);
     void set_exposure(float);
     void toggle_probes();
