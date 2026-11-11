@@ -47,8 +47,8 @@ void main()
     vec3 R=reflect(incoming,N);
     // Reflection rays return linear HDR. The renderer uses the same
     // exposure and monotonic tonemap curve for primary and reflected color.
-    const float strength=clamp(tint.a,0.0,1.0);
-    const bool glass=mask.a<.75;
+    float strength=clamp(tint.a,0.0,1.0);
+    bool glass=mask.a<.75;
     vec3 reflection=glass ?
         optics_offscreen_glossy(P+N*.03,R,mattness):
         optics_offscreen_radiance(P+N*.012,R);
