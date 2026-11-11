@@ -158,6 +158,44 @@ void compositor::set_scene(geometry g,const std::vector<light>& lights)
     lights_.upload(&packet,sizeof(packet));
 }
 
+void compositor::set_geometry_frame(std::uint32_t frame,geometry g)
+{
+    if(frame>=frame_count_ || !g.faces || !g.nodes || !g.triangles ||
+       g.face_count!=face_count_)
+        throw std::invalid_argument("optics: mismatched animated geometry");
+    descriptors_.write_buffer(frame,6,
+        vk::DescriptorBufferInfo{g.faces,0,VK_WHOLE_SIZE});
+    descriptors_.write_buffer(frame,7,
+        vk::DescriptorBufferInfo{g.nodes,0,VK_WHOLE_SIZE});
+    descriptors_.write_buffer(frame,8,
+        vk::DescriptorBufferInfo{g.triangles,0,VK_WHOLE_SIZE});
+}
+void compositor::update_normals(
+    std::uint32_t frame,const std::vector<face_normal_update>& updates)
+{
+    if(frame>=frame_count_ || original_normals_.size()!=face_count_)
+        throw std::invalid_argument("optics: invalid animated normals");
+    if(updates.empty())return;
+    if(frame_normals_.size()<=frame)frame_normals_.resize(frame+1);
+    auto& state=frame_normals_[frame];
+    if(!state) {
+        state=std::make_unique<animated_normals>();
+        state->faces=original_normals_;
+        const auto memory=vk::MemoryPropertyFlagBits::eHostVisible |
+                          vk::MemoryPropertyFlagBits::eHostCoherent;
+        state->buffer.create(state->faces.size()*sizeof(face_normals),
+                             vk::BufferUsageFlagBits::eStorageBuffer,memory);
+    }
+    for(const auto& change:updates) {
+        if(change.face>=state->faces.size())
+            throw std::out_of_range("optics: skinned face out of range");
+        state->faces[change.face]=change.value;
+    }
+    state->buffer.upload(state->faces.data(),
+                         state->faces.size()*sizeof(face_normals));
+    descriptors_.write_buffer(frame,15,state->buffer.descriptor());
+}
+
 void compositor::set_probe_space(const std::array<float,4>& space)
 {
     probe_space_.upload(space.data(),sizeof(space));
@@ -177,6 +215,8 @@ void compositor::set_probe_views(const std::vector<vk::ImageView>& views)
 }
 void compositor::set_normals(const std::vector<face_normals>& normals)
 {
+    original_normals_=normals;
+    frame_normals_.clear();
     if(!frame_count_ || normals.size()!=face_count_)
         throw std::invalid_argument("optics: face normals are not BVH aligned");
     // Like set_scene(), this is called only with previous GPU work idle.
@@ -358,6 +398,8 @@ void compositor::reset() noexcept
     empty_.reset();
     lights_.reset();
     face_uv_.reset();
+    frame_normals_.clear();
+    original_normals_.clear();
     face_normals_.reset();
     probe_space_.reset();
     face_count_=0;
