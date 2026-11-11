@@ -45,6 +45,7 @@ layout(set=0,binding=16) uniform sampler3D optics_probes;
 layout(std430,set=0,binding=17) readonly buffer OpticalProbeSpace {
     vec4 optics_probe_space;
 };
+layout(set=0,binding=18) uniform sampler2D hdr_image;
 struct OpticsHit {
     vec3 position,normal,geometric_normal;
     float t;
@@ -419,9 +420,10 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
         }
         if(surface.emission.w<-.001) {
             float reflectivity=clamp(-surface.emission.w,0.0,1.0);
-            vec3 tint=max(surface.albedo.rgb,vec3(0.0));
-            accumulated+=path.throughput*tint*.10*(1.0-reflectivity);
-            path.throughput*=tint*reflectivity;
+            // A perfect mirror is not a tinted metal or a diffuse surface.
+            // Keep *all* incoming radiance, including nested reflection hits.
+            // Reflectivity/mattness editor controls are ignored for mirrors.
+            // All mirror surface values trace the same energy-preserving ray.
             path.origin=hit.position+hit.geometric_normal*.012;
             path.direction=normalize(reflect(path.direction,hit.normal));
             path.depth++;
@@ -448,18 +450,14 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
                 if(!covered_by_optics && actual_depth>=.1 &&
                    abs(actual_depth-expected_depth)<.0004) {
                     accumulated+=path.throughput*
-                        textureLod(lit_image,screen,0.0).rgb;
+                        textureLod(hdr_image,screen,0.0).rgb;
                     from_screen=true;
                 }
             }
         }
-        if(!from_screen) {
-            vec3 radiance=optics_surface_radiance(hit,path.direction);
-            // Match the main scene's output transfer for off-screen hits.
-            vec3 exposed=max(radiance*max(camera.forward.w,0.0),vec3(0.0));
+        if(!from_screen)
             accumulated+=path.throughput*
-                (exposed/(vec3(1.0)+exposed));
-        }
+                         optics_surface_radiance(hit,path.direction);
     }
     return accumulated;
 }
