@@ -34,6 +34,7 @@ layout(push_constant) uniform Settings {
     uint node_count;
     uint light_count;
     vec4 grid_origin_spacing;
+    uvec4 region_first;
 } pc;
 
 bool triangle_hit(vec3 origin,vec3 ray,float far_distance,vec3 a,vec3 e1,vec3 e2)
@@ -97,7 +98,7 @@ bool any_hit(vec3 origin,vec3 ray,float distance)
 }
 void main()
 {
-    ivec3 cell=ivec3(gl_GlobalInvocationID.xyz);
+    ivec3 cell=ivec3(gl_GlobalInvocationID.xyz+pc.region_first.xyz);
     if(any(greaterThanEqual(cell,imageSize(grid))))return;
     vec3 position=pc.grid_origin_spacing.xyz+
                   vec3(cell)*pc.grid_origin_spacing.w;
