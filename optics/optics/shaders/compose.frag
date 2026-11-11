@@ -45,11 +45,13 @@ void main()
     vec3 incoming=normalize(P-camera.eye.xyz);
     if(dot(N,incoming)>0.0)N=-N;
     vec3 R=reflect(incoming,N);
-    // Both materials query the same BVH. An unreflective material does
-    // not need a reflection ray; preserve exact Fresnel on glass.
-    float strength=clamp(tint.a,0.0,1.0);
-    vec3 reflection=(mask.a<.75 || strength>.001) ?
-        optics_offscreen_glossy(P+N*.03,R,mattness) : vec3(0.0);
+    // Reflection rays return linear HDR. The renderer uses the same
+    // exposure and monotonic tonemap curve for primary and reflected color.
+    const float strength=clamp(tint.a,0.0,1.0);
+    const bool glass=mask.a<.75;
+    vec3 reflection=glass ?
+        optics_offscreen_glossy(P+N*.03,R,mattness):
+        optics_offscreen_radiance(P+N*.012,R);
     float cosine=clamp(dot(-incoming,N),0.0,1.0);
     float fresnel=.04+.96*pow(1.0-cosine,5.0);
     if(mask.a<.75) {
@@ -68,10 +70,13 @@ void main()
         // at one show the unchanged camera perspective through it.
         vec3 glass=mix(tint.rgb,background*mix(vec3(1.0),tint.rgb,.20),
                        transmission);
-        color=vec4(mix(glass,reflection,fresnel),1.0);
+        vec3 radiance=mix(glass,reflection,fresnel);
+        vec3 exposed=max(radiance*camera.forward.w,vec3(0.0));
+        color=vec4(exposed/(1.0+exposed),1.0);
     } else {
-        // Mirrors trace the software BVH even for off-screen geometry.
-        // Reflectivity is a material parameter, not alpha blending.
-        color=vec4(mix(tint.rgb*.10,reflection*tint.rgb,strength),1.0);
+        // 100% untinted sharp reflection of the real world at every
+        // angle, even when the editor's legacy tint/roughness is nonzero.
+        vec3 exposed=max(reflection*camera.forward.w,vec3(0.0));
+        color=vec4(exposed/(1.0+exposed),1.0);
     }
 }
