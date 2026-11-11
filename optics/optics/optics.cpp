@@ -15,9 +15,11 @@
 namespace optics {
 void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
                         const char* vertex,const char* fragment,
-                        const char* mirror_fragment)
+                        const char* mirror_fragment,
+                        const char* planar_fragment)
 {
-    if(!pass || frames.empty() || !vertex || !fragment || !mirror_fragment)
+    if(!pass || frames.empty() || !vertex || !fragment ||
+       !mirror_fragment || !planar_fragment)
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
@@ -88,6 +90,10 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         mirror_pipeline_.create(raster,{
             {vk::ShaderStageFlagBits::eVertex,vertex},
             {vk::ShaderStageFlagBits::eFragment,mirror_fragment}
+        });
+        planar_pipeline_.create(raster,{
+            {vk::ShaderStageFlagBits::eVertex,vertex},
+            {vk::ShaderStageFlagBits::eFragment,planar_fragment}
         });
         for(std::uint32_t i=0;i<frames.size();++i) {
             const auto& f=frames[i];
@@ -402,7 +408,7 @@ void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
                         vk::Extent2D extent) const
 {
     if(!cmd || !pipeline_.handle() || !mirror_pipeline_.handle() ||
-       frame>=frame_count_)
+       !planar_pipeline_.handle() || frame>=frame_count_)
         throw std::logic_error("optics: missing pipeline or invalid frame");
     if(regions.empty())return;
     // A/B control: compare the exact same mirror scene with the original
@@ -410,6 +416,7 @@ void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
     static const bool force_general=
         std::getenv("OPTICS_PROFILE_GENERAL")!=nullptr;
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                     view.eye.w>1.5f?planar_pipeline_.handle():
                      (contains_glass_||force_general)?
                      pipeline_.handle():mirror_pipeline_.handle());
     const vk::DescriptorSet set=descriptors_.set(frame);
@@ -426,6 +433,7 @@ void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
 }
 void compositor::reset() noexcept
 {
+    planar_pipeline_.reset();
     mirror_pipeline_.reset();
     pipeline_.reset();
     contains_glass_=true;
