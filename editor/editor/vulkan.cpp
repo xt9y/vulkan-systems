@@ -44,7 +44,7 @@ namespace editor::vulkan
             std::string ui_directory="build/editor-hell2024/"
                 "Hell2024/Hell2024/res/textures/ui";
             std::array<glyph,128> glyphs;
-            std::array<sprite,10> sprites;
+            std::array<sprite,8> sprites;
             bool ready=false;
         };
         font_data& font()
@@ -52,22 +52,8 @@ namespace editor::vulkan
             static font_data data;
             return data;
         }
-        // Times New Roman Bold coverage matching the original light sign.
-        constexpr std::uint8_t cube_letters[10][34]={
-            {0,0,0,0,16,32,0,0,0,0,0,0,16,32,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-            {0,0,112,208,240,224,224,128,0,0,16,192,240,224,224,112,0,32,192,240,240,240,240,208,80,32,192,240,240,224,240,240,240,0},
-            {0,128,240,224,32,0,16,176,80,0,160,240,176,0,16,208,64,0,48,240,240,16,96,240,240,48,48,240,240,32,0,64,240,32},
-            {0,240,240,112,0,0,0,0,0,0,208,240,112,0,0,112,112,0,32,240,240,0,32,240,240,96,32,240,240,32,176,0,112,48},
-            {64,240,240,48,0,0,0,0,0,0,224,240,96,0,0,80,128,0,32,240,240,64,160,240,224,0,32,240,240,128,240,0,0,0},
-            {64,240,240,48,0,0,0,0,0,0,224,240,96,0,0,80,128,0,32,240,240,224,240,240,80,0,32,240,240,224,240,0,0,0},
-            {0,240,240,96,0,0,0,32,80,0,224,240,96,0,0,80,128,0,32,240,240,0,144,240,224,0,32,240,240,32,208,0,64,0},
-            {0,144,240,192,0,0,0,176,128,0,224,240,96,0,0,80,128,0,32,240,240,0,96,240,240,0,32,240,240,32,64,48,176,0},
-            {0,0,144,240,208,128,192,240,128,64,240,240,176,32,32,176,208,32,128,240,240,160,240,240,128,0,128,240,240,144,144,240,176,0},
-            {0,0,0,16,96,112,64,32,48,64,80,80,80,32,32,80,80,48,80,80,80,80,64,32,0,16,80,80,80,80,80,80,48,0}
-        };
-
         sprite load_sprite(const std::string& filename,int w,int h,
-                           bool cube_plate=false,bool empty_plate=false)
+                           bool label_plate=false)
         {
             int sw=0,sh=0,channels=0;
             stbi_uc* pixels=stbi_load(filename.c_str(),&sw,&sh,&channels,4);
@@ -84,7 +70,7 @@ namespace editor::vulkan
             {
                 // Reuse the light sign's blank edge texture for other labels,
                 // retaining the original end caps and the textured row colors.
-                const int source_x=(cube_plate || empty_plate) && x>=8 && x<w-8 ?
+                const int source_x=label_plate && x>=8 && x<w-8 ?
                     2+(x-8)%6 : x;
                 const int px=std::min(sw-1,source_x*sw/w);
                 const int py=std::min(sh-1,y*sh/h);
@@ -94,13 +80,9 @@ namespace editor::vulkan
                 if(alpha<64)return std::uint32_t(0);
                 // Quantize to original 16-color-channel steps to reduce
                 // Vulkan clear attachment color changes.
-                const int ink_x=x*68/w-17,ink_y=y*33/h-11;
-                const unsigned ink=cube_plate && ink_x>=0 && ink_x<34 && ink_y>=0 && ink_y<10
-                    ?cube_letters[ink_y][ink_x]:0u;
                 const auto channel=[&](int k)
                 {
-                    const unsigned value=(unsigned(pixels[i+k])*(255u-ink)+224u*ink)/255u;
-                    return (value*alpha/255u)&0xf0u;
+                    return (unsigned(pixels[i+k])*alpha/255u)&0xf0u;
                 };
                 return std::uint32_t(0xff000000u|
                     (channel(0)<<16)|(channel(1)<<8)|channel(2));
@@ -195,22 +177,20 @@ namespace editor::vulkan
                 loaded[character]=std::move(entry);
             }
             stbi_image_free(pixels);
-            const std::array<const char*,10> names{{
+            const std::array<const char*,8> names{{
                 "MenuBG.png","MenuBorderHorizontal.png",
                 "MenuBorderVertical.png","MenuBorderCornerTL.png",
                 "MenuBorderCornerTR.png","MenuBorderCornerBL.png",
-                "MenuBorderCornerBR.png","Icon_Light.jpg","Icon_Light.jpg",
-                "Icon_Light.jpg"
+                "MenuBorderCornerBR.png","Icon_Light.jpg"
             }};
-            const std::array<std::array<int,2>,10> sizes{{
+            const std::array<std::array<int,2>,8> sizes{{
                 {{200,245}},{{200,3}},{{3,245}},
-                {{4,4}},{{4,4}},{{4,4}},{{4,4}},{{62,22}},{{62,22}},{{62,22}}
+                {{4,4}},{{4,4}},{{4,4}},{{4,4}},{{62,22}}
             }};
-            std::array<sprite,10> ui{};
+            std::array<sprite,8> ui{};
             for(std::size_t i=0;i<names.size();++i)
                 ui[i]=load_sprite(atlas.ui_directory+"/"+names[i],
                     sizes[i][0],sizes[i][1],
-                    i==static_cast<std::size_t>(draw_command::texture::cube_icon),
                     i==static_cast<std::size_t>(draw_command::texture::label_plate));
 
             atlas.glyphs=std::move(loaded);
@@ -343,9 +323,7 @@ namespace editor::vulkan
                               0.069f+0.22f*luma,
                               0.104f+0.24f*luma,1.0f};
                     }
-                    else if(item.image!=draw_command::texture::light_icon &&
-                            item.image!=draw_command::texture::cube_icon &&
-                            item.image!=draw_command::texture::label_plate)
+                    else if(item.image!=draw_command::texture::label_plate)
                     {
                         // Borders and corners should be grey rather than
                         // bright white, without modifying their geometry.
@@ -353,18 +331,9 @@ namespace editor::vulkan
                         tint.g*=0.80f;
                         tint.b*=0.82f;
                     }
-                    // Apply hover/selection tint to sign backgrounds while
-                    // keeping their baked light lettering readable.
-                    const bool sign=item.image==draw_command::texture::light_icon ||
-                                    item.image==draw_command::texture::cube_icon ||
-                                    item.image==draw_command::texture::label_plate;
-                    const bool lettering=sign && std::min({tint.r,tint.g,tint.b})>0.6f;
-                    if(!lettering)
-                    {
-                        tint.r*=item.tint.r;
-                        tint.g*=item.tint.g;
-                        tint.b*=item.tint.b;
-                    }
+                    tint.r*=item.tint.r;
+                    tint.g*=item.tint.g;
+                    tint.b*=item.tint.b;
                     rectangle(item.x+span.x*image_x,
                               item.y+span.y*image_y,
                               span.length*image_x,image_y,tint);
