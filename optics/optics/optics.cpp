@@ -323,12 +323,14 @@ void compositor::set_textures(const std::vector<face_uv>& faces,
         m.uv01={f.a[0],f.a[1],f.b[0],f.b[1]};
         m.uv2_origin[0]=f.c[0];
         m.uv2_origin[1]=f.c[1];
+        m.extent[2]=std::clamp(f.base_alpha,0.f,1.f);
+        m.extent[3]=std::clamp(f.alpha_cutoff,0.f,1.f);
         if(f.texture_id) {
             const auto base=rect_for(f.texture_id);
             m.uv2_origin[2]=base[0];
             m.uv2_origin[3]=base[1];
-            m.extent={base[2],base[3],std::clamp(f.base_alpha,0.f,1.f),
-                      std::clamp(f.alpha_cutoff,0.f,1.f)};
+            m.extent[0]=base[2];
+            m.extent[1]=base[3];
         }
         m.metallic_rect=rect_for(f.metallic_roughness_texture);
         m.normal_rect=rect_for(f.normal_texture);
