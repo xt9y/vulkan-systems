@@ -76,7 +76,7 @@ namespace pm
     // Exactly the same BVH and face data used by photon tracing.
     struct geometry_output {
         vk::Buffer faces{}, nodes{}, triangles{}, scene_info{};
-        vk::Buffer photons{}, offsets{};
+        vk::Buffer photons{}, offsets{},face_ids{};
     };
     struct geometry_update {
         std::uint32_t face=0;
