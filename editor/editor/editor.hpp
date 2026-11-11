@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -15,7 +16,8 @@ namespace editor
     {
         bool question=false,tab=false,enter=false,escape=false;
         bool up=false,down=false,left=false,right=false,click=false;
-        bool shift=false; // Hold Shift to change numeric properties by 10 steps.
+        bool shift=false; // Shift: 10 steps. Command: 100 steps (10x Shift).
+        bool command=false;
         bool mouse_down=false; // Held button for dragging floating panels
         int mouse_x=0,mouse_y=0;
         int viewport_width=0,viewport_height=0; // Framebuffer pixel coordinates
@@ -62,7 +64,7 @@ namespace editor
     {
         // Geometry matches Hell2024's 960x540 PRESENT_WIDTH/HEIGHT canvas.
         enum class type { rectangle,text,image } kind=type::rectangle;
-        enum class texture { menu_bg,border_horizontal,border_vertical,corner_tl,corner_tr,corner_bl,corner_br,light_icon,cube_icon } image=texture::menu_bg;
+        enum class texture { menu_bg,border_horizontal,border_vertical,corner_tl,corner_tr,corner_bl,corner_br,light_icon,cube_icon,label_plate } image=texture::menu_bg;
         enum class alignment { left,center,right } text_alignment=alignment::left;
         int x=0,y=0,width=0,height=0,scale=1;
         color tint{};
@@ -79,6 +81,7 @@ namespace editor
         void set_catalog(std::vector<object_type> types);
         void set_labels(std::vector<screen_label> labels);
         void set_properties(std::uint64_t object,std::vector<property> values);
+        void reset();
         void handle(const input& events);
         // Host reports CPU frame presentation interval (not GPU pass time).
         void set_frame_time(double milliseconds);
@@ -109,6 +112,11 @@ namespace editor
         std::vector<object_type> catalog_;
         std::vector<screen_label> labels_;
         std::unordered_map<std::uint64_t,std::vector<property>> properties_;
+        struct local_edit {
+            double value=0;
+            std::chrono::steady_clock::time_point updated{};
+        };
+        std::unordered_map<std::uint64_t,std::unordered_map<std::string,local_edit>> local_edits_;
         std::vector<action> pending_;
     };
 
