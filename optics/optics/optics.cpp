@@ -19,7 +19,7 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
     reset();
     try {
         std::vector<vk::DescriptorSetLayoutBinding> bindings(19);
-        for(std::uint32_t i=0;i<18;++i) {
+        for(std::uint32_t i=0;i<19;++i) {
             bindings[i].binding=i;
             bindings[i].descriptorCount=1;
             bindings[i].descriptorType=(i>=6 && i<=13) || i==15 || i==17 ?
@@ -99,6 +99,12 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             probes.imageView=f.probes;
             probes.imageLayout=vk::ImageLayout::eGeneral;
             descriptors_.write_image(i,16,probes);
+            if(!f.hdr)throw std::invalid_argument("optics: missing linear HDR view");
+            vk::DescriptorImageInfo hdr{};
+            hdr.sampler=sampler_;
+            hdr.imageView=f.hdr;
+            hdr.imageLayout=vk::ImageLayout::eGeneral;
+            descriptors_.write_image(i,18,hdr);
             for(std::uint32_t binding=0;binding<views.size();++binding) {
                 if(!views[binding])throw std::invalid_argument("optics: missing input view");
                 vk::DescriptorImageInfo image{};
