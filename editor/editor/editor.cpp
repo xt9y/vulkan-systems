@@ -75,10 +75,8 @@ namespace editor
             const int label_width=std::max(62,
                 int(label.text.size())*8+12);
             constexpr int label_height=22;
-            // Hell2024's Icon_Light uses Alignment::CENTERED: its visual
-            // center must coincide with the light's projected 3D position.
-            const bool sign=label.text=="LIGHT" || label.text=="CUBE";
-            const int top=sign?cy-label_height/2:cy-20;
+            // All textured world signs share the same centered anchor.
+            const int top=cy-label_height/2;
             return {std::clamp(cx-label_width/2,0,
                      std::max(0,virtual_width-label_width)),
                     std::clamp(top,0,virtual_height-label_height),
@@ -128,10 +126,39 @@ namespace editor
     void session::set_properties(std::uint64_t object,std::vector<property> values)
     {
         std::lock_guard<std::mutex> guard(mutex_);
+        if(auto edits=local_edits_.find(object);edits!=local_edits_.end())
+        {
+            const auto now=std::chrono::steady_clock::now();
+            for(auto& p:values)
+            {
+                const auto it=edits->second.find(p.id);
+                if(it==edits->second.end())continue;
+                const double tolerance=std::max(1e-4,p.step*.05);
+                if(std::abs(p.value-it->second.value)<=tolerance ||
+                   now-it->second.updated>std::chrono::seconds(3))
+                    edits->second.erase(it);
+                else
+                    p.value=it->second.value;
+            }
+            if(edits->second.empty())local_edits_.erase(edits);
+        }
         properties_[object]=std::move(values);
         if(menu_==menu::properties && selected_object_==object)
             selected_row_=std::clamp(selected_row_,0,
                 int(properties_[object].size()));
+    }
+
+    void session::reset()
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        visible_=cursor_free_=dragging_menu_=delete_armed_=false;
+        menu_=menu::none;
+        selected_row_=scroll_first_=0;
+        selected_object_=0;
+        labels_.clear();
+        properties_.clear();
+        local_edits_.clear();
+        pending_.clear();
     }
 
     void session::set_font_metrics(std::array<int,128> widths,int line_height)
@@ -248,7 +275,8 @@ namespace editor
                         // Right/Left change one host-defined unit, or ten
                         // with Shift. Colors may use e.g. percentage units.
                         const double unit=p.step>0?p.step:1.0;
-                        const double delta=unit*(events.shift?10.0:1.0);
+                        const double delta=unit*(events.command?100.0:
+                                                  events.shift?10.0:1.0);
                         p.value=std::clamp(before+
                             (events.right?delta:-delta),
                             std::min(p.minimum,upper),
@@ -258,8 +286,12 @@ namespace editor
                             p.value=std::round(p.value);
                     }
                     if(p.value!=before)
+                    {
+                        local_edits_[selected_object_][p.id]={
+                            p.value,std::chrono::steady_clock::now()};
                         pending_.push_back({action_kind::edit,"",
                             selected_object_,p.id,p.value});
+                    }
                 }
             }
         }
@@ -321,22 +353,15 @@ namespace editor
             const rect r=label_rect(label,width,height);
             const bool selected=menu_==menu::properties && label.object==selected_object_;
             const bool highlighted=selected || label.object==hovered_object;
-            if(label.text=="LIGHT")
-            {
-                image(out,draw_command::texture::light_icon,r);
-                if(highlighted)out.back().tint={1.f,0.25f,0.25f,1.f};
-            }
-            else if(label.text=="CUBE")
-            {
-                image(out,draw_command::texture::cube_icon,r);
-                if(highlighted)out.back().tint={1.f,0.25f,0.25f,1.f};
-            }
-            else
-            {
-                rectangle(out,r,highlighted?red:teal);
-                text(out,r.x+r.w/2,r.y+4,label.text,
+            const auto sprite=label.text=="LIGHT"?
+                draw_command::texture::light_icon:label.text=="CUBE"?
+                draw_command::texture::cube_icon:
+                draw_command::texture::label_plate;
+            image(out,sprite,r);
+            if(highlighted)out.back().tint={1.f,.25f,.25f,1.f};
+            if(sprite==draw_command::texture::label_plate)
+                text(out,r.x+r.w/2,r.y+3,label.text,
                      draw_command::alignment::center);
-            }
         }
 
         // FPS/frame time on the right, separate from Hell's floating menus.
