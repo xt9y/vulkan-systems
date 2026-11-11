@@ -13,7 +13,7 @@ struct OpticsPhoton {vec4 position,power;uvec4 link;};
 struct OpticsLight {vec4 position_radius,color_strength;};
 layout(std430,set=0,binding=6) readonly buffer OpticalFaces {OpticsFace optics_faces[];};
 layout(std430,set=0,binding=7) readonly buffer OpticalNodes {OpticsNode optics_nodes[];};
-layout(std430,set=0,binding=8) readonly buffer OpticalTriangles {vec4 optics_triangles[];};
+layout(std430,set=0,binding=8) readonly buffer OpticalFaceIds {uint optics_face_ids[];};
 layout(std430,set=0,binding=9) readonly buffer OpticalScene {
     uvec4 optics_desc;
     vec4 optics_grid;
@@ -134,7 +134,7 @@ bool optics_closest(vec3 ro,vec3 rd,float max_t,out OpticsHit result)
         if(count==0u) {++index;continue;}
         uint first=node.first_and_count>>4u;
         for(uint k=0u;k<count;++k) {
-            uint face_id=uint(optics_triangles[(first+k)*3u].w);
+            uint face_id=optics_face_ids[first+k];
             // The light emitter is only a transport source. It must not
             // appear as a white rectangular mesh in camera/reflection rays.
             if(face_id>=optics_desc.x || face_id==optics_desc.y)continue;
@@ -191,7 +191,7 @@ bool optics_occluded(vec3 ro,vec3 rd,float limit,uint source)
         if(count==0u){++index;continue;}
         uint first=node.first_and_count>>4u;
         for(uint k=0u;k<count;++k) {
-            uint id=uint(optics_triangles[(first+k)*3u].w);
+            uint id=optics_face_ids[first+k];
             if(id>=optics_desc.x || id==optics_desc.y || id==source)continue;
             OpticsFace f=optics_faces[id];
             if(f.albedo.w>.001)continue;
