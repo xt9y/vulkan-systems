@@ -1,0 +1,65 @@
+VulkanOptics (optics::)
+======================
+
+Reusable Vulkan material compositor. The host owns rasterization,
+G-buffers, swapchain, photon-transport lifetime and command buffers.
+No hardware ray-tracing extensions, cubemap/probe substitutes or second BVH.
+
+Reflective and glass faces are removed from the opaque G-buffer and
+composited from a separate front-surface material target. One shared
+software BVH traces ordered secondary hits through glass, other mirrors
+and ordinary geometry. Bounded ray-path branching handles Fresnel
+reflection and straight-through thin-glass transmission, with
+no compiler-side shader recursion. Glass does not bend viewing rays
+or magnify the background; tint and Fresnel reflection remain.
+
+Reflected/through-glass GLB base-color textures are sampled via a GPU
+RGBA8 texture atlas plus per-face triangle UV mappings. Alpha-cutout
+textures are also tested during BVH intersections. The host supplies
+the decoded textures and UVs using compositor::set_textures(). Textures
+are packed with 1-pixel duplicated borders and uploaded only when the
+streamed scene changes; a single atlas is bounded at 8192x8192 pixels.
+
+When an opaque hit is directly camera-visible, its fully lit rasterized
+pixel is sampled, preserving material and animation details. Otherwise
+the BVH hit is shaded from its source texture, procedural checker material,
+scene lights and the existing photon-grid radiance. No shifted
+screen-image refraction is performed, preventing duplicate first-person
+weapons. Viewmodel geometry is not included in the world BVH.
+
+Individual photon deposits are NOT displayed. Photon data remains an
+invisible indirect-lighting cache for shading reflected off-screen hits.
+The optics compositor does not modify ordinary scene lighting based on
+glass transmission or mirror reflections: there is no color spill, caustic
+projection, or additional full-screen material-lighting correction.
+The optional caustics projector is not called by VulkanGame.
+
+Performance:
+- The compositor receives conservative material bounds and uses dynamic
+  scissor regions. Non-optical pixels are not submitted to the expensive
+  fullscreen BVH fragment shader.
+- Each ray hit evaluates its own point-light visibility and photon
+  irradiance at the true intersection, avoiding the previous three-sample
+  per-triangle radiance interpolation and its missing shadow detail.
+- Direct-light shadows use an early-terminating opaque-any-hit BVH walk,
+  skipping transparent glass and alpha-cutout holes without finding
+  an unnecessary closest intersection.
+- Per-vertex world normals are interpolated on BVH hits (including curved
+  mirrors and reflective spheres) while triangle normals retain geometric
+  ray-origin offsets. Primary reflections keep exact rasterized normals.
+- Primary-view-visible hits still sample their shaded raster color,
+  retaining textures and dynamic rendering quality. Source texture atlases
+  are reused across light-only and transform-only updates.
+- Nested reflections and glass continue to use exact software BVH
+  intersections. Sharp default mirrors do not use stochastic denoising.
+
+Known limitations: CPU-built Photon Mapping BVH positions currently
+represent the streamed mesh at its static/bind pose, not live skinned
+vertices. Off-screen point-light shading does not yet match every
+material channel of the primary PCloud renderer (e.g. metallic-roughness
+and normal maps). View-dependent recursion is bounded to 10 surface
+interactions; large mirror coverage needs further profiling. The
+texture atlas has a finite 8192x8192 upper bound. Performance and shading parity still require testing on M2.
+
+Public API: optics/optics.hpp, optics/caustics.hpp.
+Shaders: optics/shaders/compose.frag, raytrace.glsl.

@@ -14,10 +14,17 @@ void main()
               ^ 0x9e3779b9u;
     pm_random_bits(seed);
     Face lamp=faces[scene_desc.y];
-    vec3 origin=pm_light_point(vec2(pm_random(seed),pm_random(seed)));
-    vec3 direction=pm_hemisphere(lamp.normal.xyz,seed);
-    origin+=lamp.normal.xyz*PM_EPS;
-    vec3 flux=lamp.emission.rgb*(PM_PI*lamp.metric.w/float(camera.config.x));
+    bool omni=extra.y!=0u;
+    vec3 origin=omni?lamp.origin.xyz:
+        pm_light_point(vec2(pm_random(seed),pm_random(seed)));
+    float z=pm_random(seed)*2.0-1.0;
+    float angle=2.0*PM_PI*pm_random(seed);
+    float radius=sqrt(max(0.0,1.0-z*z));
+    vec3 direction=omni?vec3(radius*cos(angle),z,radius*sin(angle)):
+        pm_hemisphere(lamp.normal.xyz,seed);
+    if(!omni)origin+=lamp.normal.xyz*PM_EPS;
+    vec3 flux=lamp.emission.rgb*
+        ((omni?4.0*PM_PI:PM_PI*lamp.metric.w)/float(camera.config.x));
     bool caustic=false;
     uint diffuse_hits=0u;
     for(uint bounce=0u;bounce<clamp(camera.params.w,2u,6u);++bounce)
@@ -32,6 +39,25 @@ void main()
             continue;
         }
         Face surface=faces[hit.index];
+        if(surface.emission.w>1.0) {
+            bool reflected=false;
+            direction=pm_surface_dielectric(direction,hit,surface,seed,reflected);
+            // Only transmission through the *entry* face absorbs/tints
+            // photon energy. Reflecting or exiting must not apply the same
+            // colored filter a second time.
+            if(!reflected && hit.front)
+                flux*=surface.albedo.rgb*clamp(surface.albedo.w,0.0,1.0);
+            origin=hit.point+direction*PM_EPS;
+            caustic=true;
+            continue;
+        }
+        if(surface.emission.w<0.0) {
+            direction=pm_surface_conductor(direction,hit,surface,seed);
+            flux*=surface.albedo.rgb*clamp(-surface.emission.w,0.0,1.0);
+            origin=hit.point+direction*PM_EPS;
+            caustic=true;
+            continue;
+        }
         if(any(greaterThan(surface.emission.rgb,vec3(0.0))))break;
         if(diffuse_hits>0u || caustic)
         {

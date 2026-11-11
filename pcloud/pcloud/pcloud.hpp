@@ -13,7 +13,8 @@ namespace pc
     struct light {vec3 position{};float radius=1.f;vec3 color{1.f,1.f,1.f};float strength=1.f;};
     struct collision_box {vec3 minimum{},maximum{};};
     struct triangle {vec3 a{},b{},c{};};
-    struct surface_face {vec3 base{},u{},v{},normal{};};
+    // Optional world-space probe faces for editable/rotated box surfaces.
+    struct surface {vec3 base{},u{},v{},normal{};};
 
     // The same conservative light-range test as the BVH builder. Hosts
     // may use it while flattening millions of meshes to avoid creating
@@ -49,7 +50,7 @@ namespace pc
         std::vector<light> lights;
         std::vector<collision_box> collision_boxes;
         std::vector<triangle> triangles;
-        std::vector<surface_face> probe_faces;
+        std::vector<surface> surfaces;
     };
     struct camera_frame {vec3 eye{};float yaw=0.f,pitch=0.f,fov=1.0471976f;};
     // Shader contract: {albedo, normal, material, depth}. All views must
@@ -99,6 +100,8 @@ namespace pc
     void set_exposure(float);
     void toggle_probes();
     targets images(std::uint32_t);
+    vk::ImageView ldr_view(std::uint32_t);
+    vk::RenderPass presentation_pass();
     void cloud(vk::CommandBuffer,std::uint32_t);
     void gi(vk::CommandBuffer,std::uint32_t);
     void lighting(vk::CommandBuffer,std::uint32_t,const camera_frame&);

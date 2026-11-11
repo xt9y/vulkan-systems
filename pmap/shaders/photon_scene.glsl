@@ -70,7 +70,8 @@ bool pm_intersect_face(vec3 ro,vec3 rd,Face f,float limit,
                        float min_t,out float distance)
 {
     float denom=dot(f.normal.xyz,rd);
-    if(denom>=-0.000001)return false;
+    bool optical=f.albedo.w>0.0 || f.emission.w<0.0;
+    if(optical ? abs(denom)<0.000001 : denom>=-0.000001)return false;
     float t=dot(f.origin.xyz-ro,f.normal.xyz)/denom;
     if(t<=min_t || t>=limit)return false;
     vec3 d=ro+rd*t-f.origin.xyz;
@@ -153,8 +154,39 @@ bool pm_closest(vec3 ro,vec3 rd,float limit,out Hit hit)
 // This is an inexpensive straight-line approximation: photon caustics
 // handle focused illumination separately, without treating glass as an
 // opaque shadow caster.
+vec3 pm_surface_dielectric(vec3 direction,Hit hit,Face face,inout uint seed,
+                           out bool reflected)
+{
+    // Fresnel and Snell law on arbitrary mesh faces, not a sphere shortcut.
+    float ior=max(face.emission.w,1.001);
+    float eta=hit.front?1.0/ior:ior;
+    float cosine=clamp(dot(-direction,hit.normal),0.0,1.0);
+    float r0=(ior-1.0)/(ior+1.0);
+    float fresnel=r0*r0+(1.0-r0*r0)*pow(1.0-cosine,5.0);
+    reflected=eta*eta*(1.0-cosine*cosine)>1.0 ||
+        pm_random(seed)<fresnel;
+    vec3 specular_direction=reflected ? reflect(direction,hit.normal) :
+        refract(direction,hit.normal,eta);
+    // Matte transmission spreads specular energy into a small cone.
+    float mattness=clamp(face.metric.w,0.0,1.0);
+    return normalize(mix(specular_direction,pm_hemisphere(normalize(specular_direction),seed),
+                         mattness*mattness));
+}
+vec3 pm_surface_conductor(vec3 direction,Hit hit,Face face,inout uint seed)
+{
+    vec3 specular_direction=reflect(direction,hit.normal);
+    float mattness=clamp(face.metric.w,0.0,1.0);
+    return normalize(mix(specular_direction,pm_hemisphere(normalize(specular_direction),seed),
+                         mattness*mattness));
+}
+// Occluded diffuse geometry blocks the light completely. The glass
+// sphere instead transmits light (Schlick Fresnel through two surfaces).
+// This is an inexpensive straight-line approximation: photon caustics
+// handle focused illumination separately, without treating glass as an
+// opaque shadow caster.
 float pm_shadow_visibility(vec3 ro,vec3 rd,float limit)
 {
+    float visibility=1.0;
     uint index=0u;
     for(uint steps=0u;index<camera.config.w && steps<camera.config.w*2u;++steps)
     {
@@ -173,22 +205,31 @@ float pm_shadow_visibility(vec3 ro,vec3 rd,float limit)
             if(face_id>=scene_desc.x)continue;
             float distance;
             if(pm_intersect_face(ro,rd,faces[face_id],limit,
-                                 PM_SHADOW_MIN_T,distance))
-                return 0.0;
+                                 PM_SHADOW_MIN_T,distance)) {
+                Face surface=faces[face_id];
+                if(surface.albedo.w<=0.0)return 0.0;
+                float ior=max(surface.emission.w,1.001);
+                float f0=(ior-1.0)/(ior+1.0);
+                f0*=f0;
+                float c=abs(dot(rd,surface.normal.xyz));
+                float fresnel=f0+(1.0-f0)*pow(1.0-c,5.0);
+                visibility*=surface.albedo.w*(1.0-fresnel);
+                if(visibility<0.0001)return 0.0;
+            }
         }
         index=n.next;
     }
     float radius=camera.sphere.w;
-    if(radius<=0.0)return 1.0;
+    if(radius<=0.0)return visibility;
     vec3 delta=ro-camera.sphere.xyz;
     float b=dot(delta,rd);
     float determinant=b*b-dot(delta,delta)+radius*radius;
-    if(determinant<=0.0)return 1.0;
+    if(determinant<=0.0)return visibility;
     float root=sqrt(determinant);
     float near_t=-b-root,far_t=-b+root;
-    if(far_t<=PM_SHADOW_MIN_T || near_t>=limit)return 1.0;
+    if(far_t<=PM_SHADOW_MIN_T || near_t>=limit)return visibility;
     float thickness=max(0.0,min(far_t,limit)-max(near_t,0.0));
-    if(thickness<=0.0)return 1.0;
+    if(thickness<=0.0)return visibility;
     float cosine=clamp(root/radius,0.0,1.0);
     float ior=max(camera.material.x,1.001);
     float f0=(ior-1.0)/(ior+1.0);
@@ -198,7 +239,7 @@ float pm_shadow_visibility(vec3 ro,vec3 rd,float limit)
     float inside_cosine=sqrt(max(0.0,1.0-eta*eta*
                                  (1.0-cosine*cosine)));
     float leave=f0+(1.0-f0)*pow(1.0-inside_cosine,5.0);
-    return (1.0-enter)*(1.0-leave);
+    return visibility*(1.0-enter)*(1.0-leave);
 }
 vec3 pm_dielectric(vec3 direction,Hit hit,inout uint seed)
 {

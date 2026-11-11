@@ -514,18 +514,15 @@ namespace pc
                 const float du=lu/float(nu),dv=lv/float(nv);
                 const auto interval=[&](vec3 axis,float step,int count)
                 {
-                    const vec3 low{
-                        axis.x>=0.f?origin.x:limit.x,
-                        axis.y>=0.f?origin.y:limit.y,
-                        axis.z>=0.f?origin.z:limit.z
-                    };
-                    const vec3 high{
-                        axis.x>=0.f?limit.x:origin.x,
-                        axis.y>=0.f?limit.y:origin.y,
-                        axis.z>=0.f?limit.z:origin.z
-                    };
-                    const float lo=dot(low-base,axis);
-                    const float hi=dot(high-base,axis);
+                    // Project the complete probe AABB onto this face axis.
+                    // Opposite corners alone miss parts of rotated faces.
+                    const vec3 center=(origin+limit)*0.5f;
+                    const vec3 half=(limit-origin)*0.5f;
+                    const float radius=std::abs(axis.x)*half.x+
+                                       std::abs(axis.y)*half.y+
+                                       std::abs(axis.z)*half.z;
+                    const float lo=dot(center-base,axis)-radius;
+                    const float hi=dot(center-base,axis)+radius;
                     const int begin=std::clamp(int(std::ceil(lo/step-0.5f)),0,count);
                     const int finish=std::clamp(int(std::ceil(hi/step+0.5f)),0,count);
                     return std::pair{begin,finish};
@@ -594,9 +591,7 @@ namespace pc
                 face({a.x,a.y,b.z},{dx,0,0},{0,dy,0},{0,0,1});
                 face({b.x,a.y,a.z},{-dx,0,0},{0,dy,0},{0,0,-1});
             }
-            // Cube faces may rotate freely. Sampling uses their world-space
-            // oriented edges, rather than only axis-aligned bounding boxes.
-            for(const auto& surface:source->probe_faces)
+            for(const auto& surface:source->surfaces)
                 face(surface.base,surface.u,surface.v,surface.normal);
             // Host provides world-space triangles including animation skinning.
             for(const auto& triangle:source->triangles)
@@ -797,6 +792,16 @@ namespace pc
         if (data.sampler) device.destroySampler(data.sampler);
 
         data = {};
+    }
+
+    vk::ImageView ldr_view(std::uint32_t image)
+    {
+        return get().frames.at(image).ldr.view;
+    }
+
+    vk::RenderPass presentation_pass()
+    {
+        return get().presentation->pass();
     }
 
     targets images(std::uint32_t image)

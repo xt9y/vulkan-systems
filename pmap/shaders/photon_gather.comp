@@ -184,6 +184,15 @@ void main()
             continue;
         }
         Face surface=faces[hit.index];
+        if(surface.emission.w>1.0 || surface.emission.w<0.0) {
+            bool reflected=false;
+            rd=surface.emission.w>1.0 ?
+                pm_surface_dielectric(rd,hit,surface,seed,reflected) :
+                pm_surface_conductor(rd,hit,surface,seed);
+            ro=hit.point+rd*PM_EPS;
+            found=pm_closest(ro,rd,1e20,first);
+            continue;
+        }
         if(any(greaterThan(surface.emission.rgb,vec3(0))))
             radiance=surface.emission.rgb;
         else

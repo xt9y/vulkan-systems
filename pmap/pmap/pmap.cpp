@@ -68,7 +68,8 @@ namespace pm
                                sizeof(float));
             return key;
         }
-        acceleration make_acceleration(const scene& source,float photon_radius)
+        acceleration make_acceleration(const scene& source,float photon_radius,
+                                       bool transport_only)
         {
             if(source.surfaces.empty() || source.surfaces.size()>100000u ||
                source.emitter>=source.surfaces.size())
@@ -90,11 +91,29 @@ namespace pm
                     throw std::invalid_argument("pm: invalid face normal");
                 const vec3 n=vk::util::math::normalize(f.normal);
                 const float area=length*(f.triangle?.5f:1.f);
+                if(f.optical_type>2 || f.pattern>2 ||
+                   !std::isfinite(f.optical_strength) ||
+                   f.optical_strength<0.f || f.optical_strength>1.f ||
+                   !std::isfinite(f.roughness) || f.roughness<0.f ||
+                   f.roughness>1.f || !std::isfinite(f.ior) ||
+                   f.ior<=1.f)
+                    throw std::invalid_argument("pm: invalid optical material");
+                const float transmission=f.optical_type==1 ?
+                    f.optical_strength : 0.f;
+                const float conductor=f.optical_type==2 ?
+                    -f.optical_strength : 0.f;
+                // Diffuse surface pattern lives in otherwise unused
+                // emission.w: .25 world checker, .50 local checker.
+                const float pattern=f.optical_type==0 ?
+                    (f.pattern==1?.25f:f.pattern==2?.5f:0.f):0.f;
                 result.faces.push_back({
                     pack(f.origin),pack(f.u),pack(f.v),
-                    pack(n,f.triangle?1.f:0.f),pack(f.albedo),
-                    pack(f.emission),{{c/determinant,-b/determinant,
-                                      a/determinant,area}}
+                    pack(n,f.triangle?1.f:0.f),
+                    pack(f.albedo,transmission),
+                    pack(f.emission, f.optical_type==1 ? f.ior :
+                         f.optical_type==2 ? conductor : pattern),
+                    {{c/determinant,-b/determinant,
+                      a/determinant,f.optical_type ? f.roughness : area}}
                 });
                 auto add_tri=[&](vec3 x,vec3 y,vec3 z)
                 {
@@ -118,7 +137,8 @@ namespace pm
                     high=max3(high,q+f.v);
                 }
             }
-            if(squared(source.surfaces[source.emitter].emission)<=0.f)
+            if(!transport_only &&
+               squared(source.surfaces[source.emitter].emission)<=0.f)
                 throw std::invalid_argument("pm: selected emitter has no emission");
             result.nodes=bvh::build_stackless(result.triangles);
             if(result.nodes.empty())
@@ -150,6 +170,7 @@ namespace pm
             result.parameters.description={count,source.emitter,columns,rows};
             result.parameters.grid={{low.x,low.y,low.z,cell_size}};
             result.parameters.extra[0]=std::uint32_t(result.cutouts.size());
+            result.parameters.extra[1]=source.omnidirectional_emitter?1u:0u;
             return result;
         }
         void image_barrier(vk::CommandBuffer command,gpu::image& resource,
@@ -229,12 +250,15 @@ namespace pm
         void create(scene input,vk::Extent2D dimensions,configuration config)
         {
             validate(config,dimensions);
-            acceleration accel=make_acceleration(input,config.photon_radius);
+            acceleration accel=make_acceleration(input,config.photon_radius,
+                                                   config.transport_only);
             cfg=std::move(config);
             world=std::move(input);
-            extent=dimensions;
-            atlas.width=accel.parameters.description[2]*cfg.atlas_tile;
-            atlas.height=accel.parameters.description[3]*cfg.atlas_tile;
+            extent=cfg.transport_only ? vk::Extent2D{1,1} : dimensions;
+            atlas.width=cfg.transport_only ? 1u :
+                accel.parameters.description[2]*cfg.atlas_tile;
+            atlas.height=cfg.transport_only ? 1u :
+                accel.parameters.description[3]*cfg.atlas_tile;
             photon_capacity=cfg.photons*cfg.bounces;
             node_count=std::uint32_t(accel.nodes.size());
             const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
@@ -354,12 +378,14 @@ namespace pm
             pipeline(bin,"photon_bin.comp",true);
             pipeline(prefix,"photon_prefix.comp",false);
             pipeline(scatter,"photon_scatter.comp",true);
-            pipeline(gather_gi,"photon_cache.comp",true);
-            pipeline(direct_pass,"photon_direct.comp",true);
-            pipeline(direct_filter,"photon_direct_filter.comp",true);
-            pipeline(gather,"photon_gather.comp",true);
-            pipeline(temporal_pass,"photon_temporal.comp",true);
-            pipeline(denoise,"photon_denoise.comp",true);
+            if(!cfg.transport_only) {
+                pipeline(gather_gi,"photon_cache.comp",true);
+                pipeline(direct_pass,"photon_direct.comp",true);
+                pipeline(direct_filter,"photon_direct_filter.comp",true);
+                pipeline(gather,"photon_gather.comp",true);
+                pipeline(temporal_pass,"photon_temporal.comp",true);
+                pipeline(denoise,"photon_denoise.comp",true);
+            }
         }
         void prepare(vk::CommandBuffer cmd)
         {
@@ -397,8 +423,44 @@ namespace pm
                      vk::ImageLayout::eUndefined,
                 vk::ImageLayout::eGeneral);
         }
+        photon_output transport(vk::CommandBuffer cmd)
+        {
+            if(!cfg.transport_only)
+                throw std::logic_error("pm: record_transport requires transport_only configuration");
+            if(!cmd)throw std::invalid_argument("pm: null transport command buffer");
+            if(gi_samples>=cfg.gi_updates)
+                return {sorted.handle(),counter.handle(),photon_capacity};
+            camera_push push{};
+            push.eye=pack(vec3{},float(frame));
+            push.params={extent.width,extent.height,0u,cfg.bounces};
+            push.config={cfg.photons,photon_capacity,gi_samples,node_count};
+            push.settings={{cfg.photon_radius,0.f,0.f,0.f}};
+            push.sphere=pack(world.glass.center,world.glass.radius);
+            push.material={{world.glass.ior,0.f,float(cfg.atlas_tile),0.f}};
+            prepare(cmd);
+            const auto set=sets.set(0);
+            clear.dispatch(cmd,(cells+127u)/128u,1,1,{set});
+            compute_barrier(cmd);
+            emit.dispatch(cmd,(cfg.photons+63u)/64u,1,1,{set},
+                          &push,sizeof(push));
+            compute_barrier(cmd);
+            bin.dispatch(cmd,(photon_capacity+127u)/128u,1,1,{set},
+                         &push,sizeof(push));
+            compute_barrier(cmd);
+            prefix.dispatch(cmd,1,1,1,{set});
+            compute_barrier(cmd);
+            scatter.dispatch(cmd,(photon_capacity+127u)/128u,1,1,{set},
+                             &push,sizeof(push));
+            compute_barrier(cmd);
+            ++gi_samples;
+            ++frame;
+            return {sorted.handle(),counter.handle(),photon_capacity};
+        }
+
         image_output render(vk::CommandBuffer cmd,const view& camera)
         {
+            if(cfg.transport_only)
+                throw std::logic_error("pm: fullscreen record disabled for transport-only mapper");
             if(!cmd)throw std::invalid_argument("pm: null command buffer");
             if(!(camera.vertical_fov>.05f && camera.vertical_fov<3.f))
                 throw std::invalid_argument("pm: invalid camera FOV");
@@ -588,6 +650,24 @@ namespace pm
     {
         if(!state_)throw std::logic_error("pm: mapper not created");
         return state_->render(command,v);
+    }
+    photon_output mapper::record_transport(vk::CommandBuffer cmd)
+    {
+        if(!state_)throw std::logic_error("pm: mapper not created");
+        return state_->transport(cmd);
+    }
+    photon_output mapper::photon_buffers() const
+    {
+        if(!state_)throw std::logic_error("pm: mapper not created");
+        return {state_->sorted.handle(),state_->counter.handle(),
+                state_->photon_capacity};
+    }
+    geometry_output mapper::geometry_buffers() const
+    {
+        if(!state_)throw std::logic_error("pm: mapper not created");
+        return {state_->faces.handle(),state_->nodes.handle(),
+                state_->triangles.handle(),state_->scene_info.handle(),
+                state_->sorted.handle(),state_->offsets.handle()};
     }
     image_output mapper::output() const
     {

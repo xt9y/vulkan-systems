@@ -9,7 +9,6 @@ bvh       GPU BVH and TLAS/BLAS ray traversal
 lumen     Cornell GI: surface cards, probes, reflections
 pcloud    Point-cloud GI, BVH shadows, point-light BRDF, tonemapping
 pmap      Photon mapping, caustics, surface GI and filtered soft shadows
-pt        Progressive path tracing, temporal reuse and denoising
 spatial   CPU spatial BVH and indexed neighborhoods
 network   DTLS-secured datagrams and reliable transport
 jobs      Worker scheduling and main-thread completion

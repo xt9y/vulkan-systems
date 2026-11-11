@@ -18,6 +18,14 @@ namespace pm
         vec3 albedo{.725f,.710f,.680f};
         vec3 emission{};
         bool triangle=false;
+        // 0 = diffuse, 1 = refractive dielectric, 2 = reflective conductor.
+        // Both optical types use the same software-BVH photon transport.
+        std::uint32_t optical_type=0;
+        float optical_strength=0.f;
+        float roughness=0.f;
+        float ior=1.52f;
+        // 0 solid, 1 world-space generated floor, 2 face-local cube checker.
+        std::uint32_t pattern=0;
     };
     // Mark receiver texels hidden behind another surface, e.g. a floor
     // covered by a box top, using projection along receiver normal.
@@ -34,6 +42,9 @@ namespace pm
         std::uint32_t emitter=0;
         std::vector<cutout> cutouts;
         glass_sphere glass{};
+        // Interpret the emitter as an isotropic point source at its origin.
+        // The existing rectangular area-emitter mode remains unchanged.
+        bool omnidirectional_emitter=false;
     };
     struct view
     {
@@ -49,12 +60,23 @@ namespace pm
         std::uint32_t denoise_passes=1,edge_spp=2,screen_spp=2,debug_view=0;
         float photon_radius=.30f;
         bool screen_shadows=true;
+        bool transport_only=false; // avoids fullscreen work and large atlases
     };
     struct progress
     {
         std::uint32_t gi_updates=0,gi_target=0;
         std::uint32_t direct_updates=0,direct_target=0;
         std::uint64_t submitted_frames=0;
+    };
+    struct photon_output {
+        vk::Buffer sorted{},used{};
+        std::uint32_t capacity=0;
+    };
+    // Read-only GPU buffers for generic visibility/radiance consumers.
+    // Exactly the same BVH and face data used by photon tracing.
+    struct geometry_output {
+        vk::Buffer faces{}, nodes{}, triangles{}, scene_info{};
+        vk::Buffer photons{}, offsets{};
     };
     struct image_output
     {
@@ -90,6 +112,11 @@ namespace pm
         // Host submits this buffer exactly once and waits for completion
         // before recording another frame through the same mapper.
         image_output record(vk::CommandBuffer,const view&);
+        // Transport-only: emission, BVH interactions, compact spatial photons.
+        // No camera rays, full-screen gathering, or tonemapping.
+        photon_output record_transport(vk::CommandBuffer);
+        photon_output photon_buffers() const;
+        geometry_output geometry_buffers() const;
         image_output output() const;
         image_output surface_positions() const;
         progress status() const;
