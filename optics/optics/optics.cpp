@@ -156,6 +156,19 @@ void compositor::set_probe_space(const std::array<float,4>& space)
 {
     probe_space_.upload(space.data(),sizeof(space));
 }
+void compositor::set_probe_views(const std::vector<vk::ImageView>& views)
+{
+    if(views.size()!=frame_count_)
+        throw std::invalid_argument("optics: probe view count mismatch");
+    for(std::uint32_t i=0;i<frame_count_;++i) {
+        if(!views[i])throw std::invalid_argument("optics: missing probe image");
+        vk::DescriptorImageInfo probe{};
+        probe.sampler=sampler_;
+        probe.imageView=views[i];
+        probe.imageLayout=vk::ImageLayout::eGeneral;
+        descriptors_.write_image(i,16,probe);
+    }
+}
 void compositor::set_normals(const std::vector<face_normals>& normals)
 {
     if(!frame_count_ || normals.size()!=face_count_)
