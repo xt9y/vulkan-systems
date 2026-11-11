@@ -58,16 +58,6 @@ namespace pm
             std::vector<std::array<std::uint32_t,4>> cutouts;
             scene_parameters parameters{};
         };
-        std::string triangle_key(const f4* triangle)
-        {
-            std::string key;
-            key.reserve(9*sizeof(float));
-            for(int i=0;i<3;++i)
-                for(int j=0;j<3;++j)
-                    key.append(reinterpret_cast<const char*>(&triangle[i][j]),
-                               sizeof(float));
-            return key;
-        }
         acceleration make_acceleration(const scene& source,float photon_radius,
                                        bool transport_only)
         {
@@ -78,7 +68,6 @@ namespace pm
             result.faces.reserve(source.surfaces.size());
             const auto inf=std::numeric_limits<float>::infinity();
             vec3 low{inf,inf,inf},high{-inf,-inf,-inf};
-            std::unordered_map<std::string,std::uint32_t> triangle_to_face;
             for(std::uint32_t i=0;i<source.surfaces.size();++i)
             {
                 const surface& f=source.surfaces[i];
@@ -117,8 +106,11 @@ namespace pm
                 });
                 auto add_tri=[&](vec3 x,vec3 y,vec3 z)
                 {
-                    const std::array<f4,3> tri{pack(x),pack(y),pack(z)};
-                    triangle_to_face.emplace(triangle_key(tri.data()),i);
+                    // Embed exact source face ID before BVH sorting. Two
+                    // coincident triangles can have different material/UVs.
+                    const std::array<f4,3> tri{
+                        pack(x,float(i)),pack(y),pack(z)
+                    };
                     result.triangles.insert(result.triangles.end(),
                                             tri.begin(),tri.end());
                 };
@@ -143,14 +135,6 @@ namespace pm
             result.nodes=bvh::build_stackless(result.triangles);
             if(result.nodes.empty())
                 throw std::invalid_argument("pm: BVH build failed");
-            for(std::size_t i=0;i<result.triangles.size();i+=3)
-            {
-                const auto it=triangle_to_face.find(
-                    triangle_key(result.triangles.data()+i));
-                if(it==triangle_to_face.end())
-                    throw std::logic_error("pm: BVH triangle remap failed");
-                result.triangles[i][3]=float(it->second);
-            }
             for(const auto& mask:source.cutouts)
             {
                 if(mask.receiver>=source.surfaces.size() ||
