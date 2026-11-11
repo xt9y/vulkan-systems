@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "lighting_shared.glsl"
 layout(local_size_x=8,local_size_y=8) in;
 
 layout(set=0,binding=0) uniform sampler2D g_albedo;
@@ -40,32 +42,6 @@ layout(push_constant) uniform Controls {
     vec4 sky;          // xyz: grid origin, w: spacing
 } pc;
 
-const float PI=3.14159265359;
-vec3 fresnel(float cosine,vec3 f0)
-{
-    // Schlick's exact fifth-order polynomial; avoids the GPU's general
-    // pow/log/exp path for every surviving point-light evaluation.
-    float m=1.0-clamp(cosine,0.0,1.0);
-    float m2=m*m;
-    return f0+(1.0-f0)*(m2*m2*m);
-}
-vec3 brdf(vec3 albedo,float metallic,float roughness,vec3 N,vec3 V,vec3 L)
-{
-    float nl=max(dot(N,L),0.0);
-    if(nl<=0.0)return vec3(0.0);
-    vec3 H=normalize(V+L);
-    float nv=max(dot(N,V),1e-4);
-    float nh=max(dot(N,H),0.0);
-    float vh=max(dot(V,H),0.0);
-    float a=roughness*roughness, a2=a*a;
-    float d=nh*nh*(a2-1.0)+1.0;
-    float D=a2/max(PI*d*d,1e-6);
-    float k=(roughness+1.0)*(roughness+1.0)*0.125;
-    float G=(nv/(nv*(1.0-k)+k))*(nl/(nl*(1.0-k)+k));
-    vec3 F=fresnel(vh,mix(vec3(0.04),albedo,metallic));
-    return ((1.0-F)*(1.0-metallic)*albedo/PI+
-            D*G*F/max(4.0*nv*nl,1e-4))*nl;
-}
 float linear_depth(float depth)
 {
     float n=pc.eye_near.w,far_plane=pc.forward_far.w;
@@ -147,34 +123,6 @@ bool any_hit(vec3 origin,vec3 ray,float distance,uint light_index)
     }
     return false;
 }
-// Port of Rogue/test.frag GetProbe: eight weighted neighbouring probes,
-// rejecting probes behind the receiver's geometric normal.
-vec3 indirect_lighting(vec3 world,vec3 normal)
-{
-    float spacing=pc.sky.w;
-    vec3 coords=(world-pc.sky.xyz)/spacing;
-    ivec3 base=ivec3(floor(coords));
-    vec3 blend=fract(coords);
-    ivec3 size=textureSize(probes,0);
-    vec3 sum=vec3(0.0);
-    float weight_sum=0.0;
-    for(int z=0;z<2;++z)
-    for(int y=0;y<2;++y)
-    for(int x=0;x<2;++x)
-    {
-        ivec3 offset=ivec3(x,y,z),probe=base+offset;
-        if(any(lessThan(probe,ivec3(0))) ||
-           any(greaterThanEqual(probe,size)))continue;
-        vec3 to_probe=pc.sky.xyz+vec3(probe)*spacing-world;
-        if(dot(normal,to_probe)<=0.0)continue;
-        vec3 factors=mix(vec3(1.0)-blend,blend,vec3(offset));
-        float weight=factors.x*factors.y*factors.z;
-        sum+=weight*texelFetch(probes,probe,0).rgb;
-        weight_sum+=weight;
-    }
-    return weight_sum>1e-5 ? max(sum/weight_sum,vec3(0.0)) : vec3(0.0);
-}
-
 bool within_light_reach(vec3 position)
 {
     uint count=min(uint(max(pc.light_count.x,0.0)),uint(lights.length()));
@@ -309,14 +257,14 @@ void main()
         // world shadow receiver; otherwise query the exact scene triangles.
         if(!viewmodel && any_hit(P+N*0.004,direction,dist-0.008,i))
             continue;
-        color+=brdf(albedo.rgb,metallic,roughness,N,V,direction)*
+        color+=shared_brdf(albedo.rgb,metallic,roughness,N,V,direction)*
             light.color_intensity.rgb*
             (light.color_intensity.w*attenuation);
     }
     // Rogue uses a 0.01 diffuse bounce factor after normalized probe sampling.
     if(!viewmodel)
         color+=albedo.rgb*(1.0-metallic)*ao*
-            indirect_lighting(P,N)*(0.01*min(1.0,roughness*1.5));
+            shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*(0.01*min(1.0,roughness*1.5));
     vec3 emission=vec3(albedo.a,n.a,material.a);
     color+=emission/max(vec3(1.0)-emission,vec3(1.0/255.0));
     imageStore(hdr,p,vec4(max(color,vec3(0.0)),1.0));
