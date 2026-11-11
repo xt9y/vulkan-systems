@@ -6,6 +6,7 @@
 #include <render/pipeline.hpp>
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace optics {
@@ -34,6 +35,10 @@ struct face_uv {
 // Smooth normals are in world space and share the same vertex order as UVs.
 struct face_normals {
     std::array<float,4> a{},b{},c{};
+};
+struct face_normal_update {
+    std::uint32_t face=0;
+    face_normals value{};
 };
 struct texture_rgba {
     std::uint32_t id=0,width=0,height=0;
@@ -66,6 +71,9 @@ public:
     void set_textures(const std::vector<face_uv>&,
                       const std::vector<texture_rgba>&);
     void set_normals(const std::vector<face_normals>&);
+    void set_geometry_frame(std::uint32_t,geometry);
+    void update_normals(std::uint32_t,
+                        const std::vector<face_normal_update>&);
     void set_probe_space(const std::array<float,4>&);
     void set_probe_views(const std::vector<vk::ImageView>&);
     // Only emit fragments inside rasterized material bounds.
@@ -77,6 +85,12 @@ private:
     gpu::descriptors descriptors_;
     render::pipeline pipeline_;
     gpu::buffer empty_,lights_,face_uv_,face_normals_,probe_space_;
+    struct animated_normals {
+        gpu::buffer buffer;
+        std::vector<face_normals> faces;
+    };
+    std::vector<face_normals> original_normals_;
+    std::vector<std::unique_ptr<animated_normals>> frame_normals_;
     std::uint32_t face_count_=0;
     gpu::owned_image atlas_;
     vk::ImageView atlas_view_{};
