@@ -25,6 +25,8 @@ struct geometry {
 struct face_uv {
     std::array<float,2> a{},b{},c{};
     std::uint32_t texture_id=0;
+    std::uint32_t metallic_roughness_texture=0,normal_texture=0;
+    std::uint32_t occlusion_texture=0,emissive_texture=0;
     float alpha_cutoff=0.f;
 };
 // Each entry corresponds to one BVH face, including transport emitters.
