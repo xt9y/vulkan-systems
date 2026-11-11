@@ -67,6 +67,7 @@ public:
                       const std::vector<texture_rgba>&);
     void set_normals(const std::vector<face_normals>&);
     void set_probe_space(const std::array<float,4>&);
+    void set_probe_views(const std::vector<vk::ImageView>&);
     // Only emit fragments inside rasterized material bounds.
     void record(vk::CommandBuffer command,std::uint32_t frame,
                 const camera& view,const std::vector<vk::Rect2D>& regions,
