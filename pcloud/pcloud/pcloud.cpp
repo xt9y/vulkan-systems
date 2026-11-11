@@ -41,6 +41,8 @@ namespace pc
             gpu::owned_image grid;
             vk::ImageView grid_view{};
             bool dirty=true;
+            bool partial_grid=false;
+            std::array<std::uint32_t,3> grid_first{},grid_end{};
             vk::DescriptorSet cloud{};
             vk::DescriptorSet gi{};
             vk::DescriptorSet lighting{};
@@ -60,6 +62,7 @@ namespace pc
             gpu::owned_buffer neighborhood_indices;
             std::shared_ptr<const world> snapshot;
             std::shared_ptr<const world> incoming;
+            std::vector<light> live_lights;
             configuration shader_paths{};
             presentation_target output{};
             std::uint32_t light_count=0, point_count=0, vertex_count=0, node_count=0;
@@ -113,8 +116,9 @@ namespace pc
         struct grid_push {
             std::uint32_t points,vertices,nodes,lights=0;
             std::array<float,4> origin_spacing{};
+            std::array<std::uint32_t,4> region_first{};
         };
-        static_assert(sizeof(grid_push)==32);
+        static_assert(sizeof(grid_push)==48);
 
         struct push {
             float exposure;
@@ -219,7 +223,9 @@ namespace pc
 
     void updated(std::uint32_t image)
     {
-        get().frames.at(image).dirty=false;
+        auto& frame=get().frames.at(image);
+        frame.dirty=false;
+        frame.partial_grid=false;
     }
 
     void set_exposure(float exposure)
@@ -785,10 +791,14 @@ namespace pc
             data.lighting_sets->write_buffer(i,8,vk::buffer::descriptor(data.nodes));
         }
         data.snapshot=source;
+        data.live_lights=source?source->lights:std::vector<light>{};
         // The scene update can replace grid images and point buffers.
         // The caller already guaranteed all old GPU submissions are idle.
         for(auto& graph:data.frame_graphs)graph.clear_states();
-        for(auto& frame:data.frames)frame.dirty=true;
+        for(auto& frame:data.frames) {
+            frame.dirty=true;
+            frame.partial_grid=false;
+        }
     }
 
     void release()
@@ -867,16 +877,24 @@ namespace pc
     void gi(vk::CommandBuffer command,std::uint32_t image)
     {
         if(!get().frames.at(image).dirty)return;
+        const auto& data=get();
+        const auto& frame=data.frames.at(image);
+        const std::array<std::uint32_t,3> begin=frame.partial_grid?
+            frame.grid_first:std::array<std::uint32_t,3>{};
+        const std::array<std::uint32_t,3> end=frame.partial_grid?
+            frame.grid_end:std::array<std::uint32_t,3>{
+                data.grid_extent.width,data.grid_extent.height,data.grid_extent.depth};
         const grid_push push{
-            get().point_count,get().vertex_count,get().node_count,get().light_count,
-            {get().grid_origin.x,get().grid_origin.y,get().grid_origin.z,
-             get().grid_spacing}
+            data.point_count,data.vertex_count,data.node_count,data.light_count,
+            {data.grid_origin.x,data.grid_origin.y,data.grid_origin.z,
+             data.grid_spacing},
+            {begin[0],begin[1],begin[2],0}
         };
-        get().gi_program->dispatch(command,
-            (get().grid_extent.width+3)/4,
-            (get().grid_extent.height+3)/4,
-            (get().grid_extent.depth+3)/4,
-            {get().frames.at(image).gi},&push,sizeof(push));
+        if(end[0]>begin[0] && end[1]>begin[1] && end[2]>begin[2])
+            data.gi_program->dispatch(command,
+                (end[0]-begin[0]+3)/4,(end[1]-begin[1]+3)/4,
+                (end[2]-begin[2]+3)/4,
+                {frame.gi},&push,sizeof(push));
     }
 
     void lighting(vk::CommandBuffer command, std::uint32_t image,
