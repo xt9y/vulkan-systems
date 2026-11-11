@@ -12,9 +12,10 @@
 
 namespace optics {
 void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
-                        const char* vertex,const char* fragment)
+                        const char* vertex,const char* fragment,
+                        const char* mirror_fragment)
 {
-    if(!pass || frames.empty() || !vertex || !fragment)
+    if(!pass || frames.empty() || !vertex || !fragment || !mirror_fragment)
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
@@ -82,6 +83,10 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             {vk::ShaderStageFlagBits::eVertex,vertex},
             {vk::ShaderStageFlagBits::eFragment,fragment}
         });
+        mirror_pipeline_.create(raster,{
+            {vk::ShaderStageFlagBits::eVertex,vertex},
+            {vk::ShaderStageFlagBits::eFragment,mirror_fragment}
+        });
         for(std::uint32_t i=0;i<frames.size();++i) {
             const auto& f=frames[i];
             const std::array<vk::ImageView,6> views{
@@ -121,12 +126,14 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         set_textures({},{});
     }catch(...) {reset();throw;}
 }
-void compositor::set_scene(geometry g,const std::vector<light>& lights)
+void compositor::set_scene(geometry g,const std::vector<light>& lights,
+                           bool contains_glass)
 {
     if(!frame_count_)throw std::logic_error("optics: compositor not initialized");
     if(g.face_count && !g.face_ids)
         throw std::invalid_argument("optics: missing sorted face IDs");
     face_count_=g.face_count;
+    contains_glass_=contains_glass || !g.face_count;
     const std::array<vk::Buffer,6> buffers{
         g.faces,g.nodes,g.face_ids,g.scene_info,g.photons,g.offsets
     };
@@ -382,10 +389,12 @@ void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
                         const camera& view,const std::vector<vk::Rect2D>& regions,
                         vk::Extent2D extent) const
 {
-    if(!cmd || !pipeline_.handle() || frame>=frame_count_)
+    if(!cmd || !pipeline_.handle() || !mirror_pipeline_.handle() ||
+       frame>=frame_count_)
         throw std::logic_error("optics: missing pipeline or invalid frame");
     if(regions.empty())return;
-    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,pipeline_.handle());
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                     contains_glass_?pipeline_.handle():mirror_pipeline_.handle());
     const vk::DescriptorSet set=descriptors_.set(frame);
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,layout_,0,{set},{});
     cmd.pushConstants(layout_,vk::ShaderStageFlagBits::eFragment,0,sizeof(camera),&view);
@@ -400,7 +409,9 @@ void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
 }
 void compositor::reset() noexcept
 {
+    mirror_pipeline_.reset();
     pipeline_.reset();
+    contains_glass_=true;
     if(layout_)vk::device::get()->handle.destroyPipelineLayout(layout_);
     layout_=nullptr;
     descriptors_.reset();
