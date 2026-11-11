@@ -441,7 +441,11 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
                 float expected_depth=.1+.9*ndc.z;
                 float actual_depth=textureLod(opaque_depth,screen,0.0).r;
                 // Exclude near-depth first-person weapon pixels.
-                if(actual_depth>=.1 &&
+                float optical_front=textureLod(optic_depth,screen,0.0).r;
+                bool covered_by_optics=
+                    textureLod(optic_normal,screen,0.0).a>.25 &&
+                    optical_front<actual_depth-.0003;
+                if(!covered_by_optics && actual_depth>=.1 &&
                    abs(actual_depth-expected_depth)<.0004) {
                     accumulated+=path.throughput*
                         textureLod(lit_image,screen,0.0).rgb;
