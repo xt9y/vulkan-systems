@@ -14,6 +14,7 @@ namespace optics {
 struct input {
     vk::ImageView lit{}, opaque_depth{};
     vk::ImageView normal{}, tint{}, material{}, material_depth{};
+    vk::ImageView probes{};
 };
 struct geometry {
     vk::Buffer faces{},nodes{},triangles{},scene_info{};
@@ -65,6 +66,7 @@ public:
     void set_textures(const std::vector<face_uv>&,
                       const std::vector<texture_rgba>&);
     void set_normals(const std::vector<face_normals>&);
+    void set_probe_space(const std::array<float,4>&);
     // Only emit fragments inside rasterized material bounds.
     void record(vk::CommandBuffer command,std::uint32_t frame,
                 const camera& view,const std::vector<vk::Rect2D>& regions,
@@ -73,7 +75,7 @@ public:
 private:
     gpu::descriptors descriptors_;
     render::pipeline pipeline_;
-    gpu::buffer empty_,lights_,face_uv_,face_normals_;
+    gpu::buffer empty_,lights_,face_uv_,face_normals_,probe_space_;
     std::uint32_t face_count_=0;
     gpu::owned_image atlas_;
     vk::ImageView atlas_view_{};
