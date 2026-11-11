@@ -66,10 +66,12 @@ public:
     compositor& operator=(const compositor&)=delete;
     void create(vk::RenderPass pass, const std::vector<input>& frames,
                 const char* vertex="build/shaders/pcloud_fullscreen.vert.spv",
-                const char* fragment="build/shaders/optics_compose.frag.spv");
+                const char* fragment="build/shaders/optics_compose.frag.spv",
+                const char* mirror_fragment="build/shaders/optics_compose_mirror.frag.spv");
     // Share the photon mapper's static GPU BVH; the mapper must outlive
     // submitted rendering work. Empty geometry disables off-screen rays.
-    void set_scene(geometry,const std::vector<light>&);
+    void set_scene(geometry,const std::vector<light>&,
+                   bool contains_glass=true);
     // Update reflected direct lighting without replacing BVH or photon buffers.
     void set_lights(const std::vector<light>&);
     void set_textures(const std::vector<face_uv>&,
@@ -87,7 +89,7 @@ public:
     void reset() noexcept;
 private:
     gpu::descriptors descriptors_;
-    render::pipeline pipeline_;
+    render::pipeline pipeline_,mirror_pipeline_;
     gpu::buffer empty_,lights_,face_uv_,face_normals_,probe_space_;
     struct animated_normals {
         gpu::buffer buffer;
@@ -96,6 +98,7 @@ private:
     std::vector<face_normals> original_normals_;
     std::vector<std::unique_ptr<animated_normals>> frame_normals_;
     std::uint32_t face_count_=0;
+    bool contains_glass_=true;
     gpu::owned_image atlas_;
     vk::ImageView atlas_view_{};
     vk::Sampler sampler_{},atlas_sampler_{};
