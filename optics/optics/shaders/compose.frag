@@ -51,7 +51,7 @@ void main()
     bool glass=mask.a<.75;
     vec3 reflection=glass ?
         optics_offscreen_glossy(P+N*.03,R,mattness):
-        optics_offscreen_radiance(P+N*.012,R);
+        optics_perfect_mirror(P+N*.012,R);
     float cosine=clamp(dot(-incoming,N),0.0,1.0);
     float fresnel=.04+.96*pow(1.0-cosine,5.0);
     if(mask.a<.75) {
