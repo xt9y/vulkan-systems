@@ -126,7 +126,7 @@ void compositor::set_scene(geometry g,const std::vector<light>& lights)
     if(!frame_count_)throw std::logic_error("optics: compositor not initialized");
     face_count_=g.face_count;
     const std::array<vk::Buffer,6> buffers{
-        g.faces,g.nodes,g.triangles,g.scene_info,g.photons,g.offsets
+        g.faces,g.nodes,g.face_ids,g.scene_info,g.photons,g.offsets
     };
     for(std::uint32_t i=0;i<frame_count_;++i)
         for(std::uint32_t j=0;j<buffers.size();++j) {
@@ -173,7 +173,7 @@ void compositor::set_geometry_frame(std::uint32_t frame,geometry g)
     descriptors_.write_buffer(frame,7,
         vk::DescriptorBufferInfo{g.nodes,0,VK_WHOLE_SIZE});
     descriptors_.write_buffer(frame,8,
-        vk::DescriptorBufferInfo{g.triangles,0,VK_WHOLE_SIZE});
+        vk::DescriptorBufferInfo{g.face_ids,0,VK_WHOLE_SIZE});
 }
 void compositor::update_normals(
     std::uint32_t frame,const std::vector<face_normal_update>& updates)
