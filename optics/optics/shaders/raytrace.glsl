@@ -5,6 +5,7 @@
 // vertex normals are evaluated without an interpolated radiance cache.
 #ifndef OPTICS_RAYTRACE_GLSL
 #define OPTICS_RAYTRACE_GLSL
+#include "lighting_shared.glsl"
 const float OPTICS_PI=3.14159265358979;
 struct OpticsFace {vec4 origin,u,v,normal,albedo,emission,metric;};
 struct OpticsNode {vec3 minimum;uint next;vec3 maximum;uint first_and_count;};
@@ -223,55 +224,6 @@ vec3 optics_photon_radiance(OpticsHit hit,vec3 albedo)
     }
     return flux*albedo*(2.0/(OPTICS_PI*OPTICS_PI*radius2));
 }
-// Exactly the direct-light GGX/Smith/Schlick BRDF used by
-// pcloud/shaders/light.comp, with the same attenuation and color space.
-vec3 optics_brdf(vec3 albedo,float metallic,float roughness,
-                 vec3 N,vec3 V,vec3 L)
-{
-    float nl=max(dot(N,L),0.0);
-    if(nl<=0.0)return vec3(0.0);
-    vec3 H=normalize(V+L);
-    float nv=max(dot(N,V),1e-4);
-    float nh=max(dot(N,H),0.0);
-    float vh=max(dot(V,H),0.0);
-    float a=roughness*roughness,a2=a*a;
-    float d=nh*nh*(a2-1.0)+1.0;
-    float D=a2/max(OPTICS_PI*d*d,1e-6);
-    float k=(roughness+1.0)*(roughness+1.0)*.125;
-    float G=(nv/(nv*(1.0-k)+k))*(nl/(nl*(1.0-k)+k));
-    vec3 F0=mix(vec3(.04),albedo,metallic);
-    float m=1.0-clamp(vh,0.0,1.0),m2=m*m;
-    vec3 F=F0+(1.0-F0)*m2*m2*m;
-    return ((1.0-F)*(1.0-metallic)*albedo/OPTICS_PI+
-            D*G*F/max(4.0*nv*nl,1e-4))*nl;
-}
-// Mirror diffuse GI must use precisely the same eight-probe
-// interpolation as PCloud's primary lighting pass. The photon BVH is
-// retained for off-screen geometry; its photon gather is only a fallback.
-vec3 optics_probe_lighting(vec3 world,vec3 normal)
-{
-    float spacing=optics_probe_space.w;
-    if(spacing<=0.0)return vec3(0.0);
-    vec3 coords=(world-optics_probe_space.xyz)/spacing;
-    ivec3 base=ivec3(floor(coords));
-    vec3 blend=fract(coords),sum=vec3(0.0);
-    float total=0.0;
-    ivec3 size=textureSize(optics_probes,0);
-    for(int z=0;z<2;++z)
-    for(int y=0;y<2;++y)
-    for(int x=0;x<2;++x) {
-        ivec3 offset=ivec3(x,y,z),probe=base+offset;
-        if(any(lessThan(probe,ivec3(0))) ||
-           any(greaterThanEqual(probe,size)))continue;
-        vec3 towards=optics_probe_space.xyz+vec3(probe)*spacing-world;
-        if(dot(normal,towards)<=0.0)continue;
-        vec3 factors=mix(vec3(1.0)-blend,blend,vec3(offset));
-        float weight=factors.x*factors.y*factors.z;
-        sum+=weight*texelFetch(optics_probes,probe,0).rgb;
-        total+=weight;
-    }
-    return total>1e-5?max(sum/total,vec3(0.0)):vec3(0.0);
-}
 vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
 {
     OpticsFace f=optics_faces[hit.face_id];
@@ -328,7 +280,8 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
             0.0).rgb,vec3(0.0)),vec3(2.2));
     vec3 N_probe=N;
     vec3 bounce=optics_probe_space.w>0.0 ?
-        optics_probe_lighting(hit.position,N_probe)*
+        shared_indirect_lighting(optics_probes,optics_probe_space.xyz,
+                                 optics_probe_space.w,hit.position,N_probe)*
         (.01*min(1.0,roughness*1.5)) :
         optics_photon_radiance(hit,vec3(1.0));
     vec3 radiance=emission+albedo*(1.0-metallic)*ao*bounce;
@@ -346,7 +299,7 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
                            distance-.008,hit.face_id))continue;
         float q=clamp(distance/radius,0.0,1.0);
         float attenuation=1.0-q*q*(3.0-2.0*q);
-        radiance+=optics_brdf(albedo,metallic,roughness,N,V,L)*
+        radiance+=shared_brdf(albedo,metallic,roughness,N,V,L)*
             light.color_strength.rgb*
             (light.color_strength.w*attenuation);
     }
