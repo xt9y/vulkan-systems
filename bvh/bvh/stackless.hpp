@@ -40,7 +40,7 @@ namespace bvh
         using namespace vk::util::math;
         struct primitive
         {
-            std::array<vec3,3> positions;
+            std::uint32_t source_triangle=0;
             vec3 lo{},hi{},center{};
         };
         std::vector<primitive> primitives;
@@ -54,7 +54,7 @@ namespace bvh
                           std::min({a.z,b.z,c.z})};
             const vec3 hi{std::max({a.x,b.x,c.x}),std::max({a.y,b.y,c.y}),
                           std::max({a.z,b.z,c.z})};
-            primitives.push_back({{a,b,c},lo,hi,(lo+hi)*0.5f});
+            primitives.push_back({std::uint32_t(i/3),lo,hi,(lo+hi)*0.5f});
         }
         std::vector<std::uint32_t> order(primitives.size());
         std::iota(order.begin(),order.end(),0u);
@@ -223,9 +223,16 @@ namespace bvh
                 nodes[node_index].first_and_count=
                     (static_cast<std::uint32_t>(first_triangle)<<4) |
                     static_cast<std::uint32_t>(end-first);
-                for(std::size_t i=first;i<end;++i)
-                    for(const auto& p:primitives[order[i]].positions)
-                        ordered.push_back({p.x,p.y,p.z,0.0f});
+                for(std::size_t i=first;i<end;++i) {
+                    // Carry the original triangle payload (including its
+                    // face/material identifier in vertex 0's fourth lane)
+                    // through the SAH reorder. Position hashing cannot
+                    // distinguish coincident triangles with different UVs.
+                    const auto base=std::size_t(primitives[order[i]].source_triangle)*3;
+                    ordered.push_back(triangles[base]);
+                    ordered.push_back(triangles[base+1]);
+                    ordered.push_back(triangles[base+2]);
+                }
             }
             else
             {
