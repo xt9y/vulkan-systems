@@ -225,9 +225,20 @@ void compositor::set_textures(const std::vector<face_uv>& faces,
     }
     struct alignas(16) gpu_uv {
         std::array<float,4> uv01{},uv2_origin{},extent{};
+        std::array<float,4> metallic_rect{},normal_rect{};
+        std::array<float,4> occlusion_rect{},emissive_rect{};
     };
-    static_assert(sizeof(gpu_uv)==48);
+    static_assert(sizeof(gpu_uv)==112);
     std::vector<gpu_uv> mapping(std::max<std::size_t>(faces.size(),1));
+    const auto rect_for=[&](std::uint32_t id) -> std::array<float,4> {
+        if(!id)return {};
+        const auto it=locations.find(id);
+        if(it==locations.end())
+            throw std::invalid_argument("optics: reflection face references missing PBR texture");
+        const auto& r=it->second;
+        return {float(r.x+1)/float(width),float(r.y+1)/float(height),
+                float(r.w)/float(width),float(r.h)/float(height)};
+    };
     for(std::size_t i=0;i<faces.size();++i) {
         const auto& f=faces[i];
         auto& m=mapping[i];
@@ -235,15 +246,16 @@ void compositor::set_textures(const std::vector<face_uv>& faces,
         m.uv2_origin[0]=f.c[0];
         m.uv2_origin[1]=f.c[1];
         if(f.texture_id) {
-            auto it=locations.find(f.texture_id);
-            if(it==locations.end())
-                throw std::invalid_argument("optics: reflection face references missing texture");
-            const auto& r=it->second;
-            m.uv2_origin[2]=float(r.x+1)/float(width);
-            m.uv2_origin[3]=float(r.y+1)/float(height);
-            m.extent={float(r.w)/float(width),float(r.h)/float(height),
-                      1.f,std::clamp(f.alpha_cutoff,0.f,1.f)};
+            const auto base=rect_for(f.texture_id);
+            m.uv2_origin[2]=base[0];
+            m.uv2_origin[3]=base[1];
+            m.extent={base[2],base[3],1.f,
+                      std::clamp(f.alpha_cutoff,0.f,1.f)};
         }
+        m.metallic_rect=rect_for(f.metallic_roughness_texture);
+        m.normal_rect=rect_for(f.normal_texture);
+        m.occlusion_rect=rect_for(f.occlusion_texture);
+        m.emissive_rect=rect_for(f.emissive_texture);
     }
     const auto host=vk::MemoryPropertyFlagBits::eHostVisible |
                     vk::MemoryPropertyFlagBits::eHostCoherent;
