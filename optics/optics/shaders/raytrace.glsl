@@ -123,8 +123,7 @@ bool optics_closest(vec3 ro,vec3 rd,float max_t,out OpticsHit result)
         uint first=node.first_and_count>>4u;
         for(uint k=0u;k<count;++k) {
             uint face_id=optics_face_ids[first+k];
-            // The light emitter is only a transport source. It must not
-            // appear as a white rectangular mesh in camera/reflection rays.
+            // Reject malformed or out-of-range face indices.
             if(face_id>=optics_desc.x)continue;
             float t;
             if(optics_face_hit(ro,rd,optics_faces[face_id],face_id,result.t,t)) {
@@ -277,72 +276,91 @@ struct OpticsPath {
     vec3 origin;
     vec3 direction;
     vec3 throughput;
+    vec3 absorption;  // Per-world-unit color transmittance in a glass solid
+    float medium_ior;
     int depth;
 };
-vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
+// Solid dielectric interfaces use Snell refraction and Beer-Lambert
+// attenuation; thin glass keeps straight-through transmission. Reflection
+// and transmission are deterministic, without temporal samples.
+vec3 optics_offscreen_radiance_medium(vec3 origin,vec3 direction,
+                                      float medium_ior,vec3 absorption)
 {
     if(optics_desc.x==0u)return vec3(0.0);
     OpticsPath pending[16];
     int queued=1;
-    pending[0]=OpticsPath(origin,normalize(direction),vec3(1.0),0);
+    pending[0]=OpticsPath(origin,normalize(direction),vec3(1.0),
+                          absorption,medium_ior,0);
     vec3 accumulated=vec3(0.0);
-    // Material interactions are bounded, not recursively compiled. Eight
-    // boundaries permit glass -> glass -> mirror -> glass and exits.
-    for(int iteration=0;iteration<64 && queued>0;++iteration) {
+    for(int iteration=0;iteration<48 && queued>0;++iteration) {
         OpticsPath path=pending[--queued];
-        if(path.depth>=10 ||
+        if(path.depth>=8 ||
            max(path.throughput.r,max(path.throughput.g,
                path.throughput.b))<.003)continue;
         OpticsHit hit;
         if(!optics_closest(path.origin,path.direction,1000.0,hit))
-            continue; // Outside the real scene: no cubemap/sky substitute.
+            continue;
+        // Absorption depends on the distance actually traveled *inside*
+        // the medium, not the angle or number of glass boundaries.
+        if(path.medium_ior>1.001)
+            path.throughput*=pow(clamp(path.absorption,vec3(.001),
+                                      vec3(1.0)),vec3(max(hit.t,0.0)));
+        if(max(path.throughput.r,max(path.throughput.g,
+            path.throughput.b))<.003)continue;
         OpticsFace surface=optics_faces[hit.face_id];
         if(surface.emission.w>1.0) {
-            float strength=clamp(surface.albedo.w,0.0,1.0);
             float ior=max(1.001,surface.emission.w);
+            float strength=clamp(surface.albedo.w,0.0,1.0);
+            vec3 tint=clamp(surface.albedo.rgb,vec3(.001),vec3(1.0));
+            bool solid=surface.normal.w>1.5;
             bool entering=dot(path.direction,surface.normal.xyz)<0.0;
-            vec3 normal=hit.normal;
-            float cosine=clamp(dot(-path.direction,normal),0.0,1.0);
-            float r0=(ior-1.0)/(ior+1.0);
+            bool leaving=solid && !entering && path.medium_ior>1.001;
+            float n1=solid?path.medium_ior:1.0;
+            float n2=solid?(leaving?1.0:ior):ior;
+            vec3 transmitted=solid ?
+                refract(path.direction,hit.normal,n1/n2) :
+                path.direction;
+            bool total_reflection=solid && dot(transmitted,transmitted)<1e-8;
+            float r0=(n1-n2)/(n1+n2);
             r0*=r0;
-            float fresnel=r0+(1.0-r0)*pow(1.0-cosine,5.0);
-            // Thin-window material: no angular refraction and no lensing.
-            // The direction remains the same at every material boundary.
-            vec3 tint=max(surface.albedo.rgb,vec3(0.0));
-            // Low pass-through still reveals the material itself and
-            // keeps the edge visible in nested reflections/refractions.
-            // An exiting surface does not bend or tint the ray a second time.
-            // This preserves the perspective of the original camera and
-            // avoids double surfaces on thick glass cubes.
-            if(!entering) {
-                if(queued<16)
-                    pending[queued++]=OpticsPath(
-                        hit.position+path.direction*.03,path.direction,
-                        path.throughput,path.depth+1);
-                continue;
-            }
-            if(entering)
+            float cosine=clamp(dot(-path.direction,hit.normal),0.0,1.0);
+            float fresnel=total_reflection?1.0:
+                r0+(1.0-r0)*pow(1.0-cosine,5.0);
+            // Authorable pass-through is a surface transmission factor,
+            // distinct from thickness-dependent volume absorption.
+            if(entering && strength<1.0)
                 accumulated+=path.throughput*tint*(1.0-strength)*
                              (1.0-fresnel);
             vec3 reflected=path.throughput*fresnel;
-            if(queued<16 && max(reflected.r,max(reflected.g,reflected.b))>.003)
-                pending[queued++]=OpticsPath(
-                    hit.position+hit.geometric_normal*.012,
-                    normalize(reflect(path.direction,normal)),
-                    reflected,path.depth+1);
-            if(strength>.003) {
-                vec3 transmitted=path.throughput*(1.0-fresnel)*strength*tint;
-                if(queued<16)
-                    pending[queued++]=OpticsPath(
-                        hit.position+path.direction*.03,path.direction,
-                        transmitted,path.depth+1);
+            if(queued<16 &&
+               max(reflected.r,max(reflected.g,reflected.b))>.003) {
+                OpticsPath bounce=path;
+                bounce.origin=hit.position+hit.geometric_normal*.012;
+                bounce.direction=normalize(reflect(path.direction,hit.normal));
+                bounce.throughput=reflected;
+                bounce.depth++;
+                pending[queued++]=bounce;
+            }
+            if(!total_reflection) {
+                OpticsPath through=path;
+                float pass=entering?strength:1.0;
+                through.throughput*=(1.0-fresnel)*pass*
+                    (solid || !entering ? vec3(1.0):tint);
+                if(max(through.throughput.r,max(through.throughput.g,
+                    through.throughput.b))>.003 && queued<16) {
+                    through.direction=normalize(transmitted);
+                    through.origin=hit.position+through.direction*.03;
+                    through.depth++;
+                    if(solid) {
+                        through.medium_ior=leaving?1.0:ior;
+                        through.absorption=leaving?vec3(1.0):tint;
+                    }
+                    pending[queued++]=through;
+                }
             }
             continue;
         }
         if(surface.emission.w<-.001) {
-            float reflectivity=clamp(-surface.emission.w,0.0,1.0);
-            // Mirror reflectivity remains full strength, but the material
-            // color acts as a per-channel filter at each nested bounce.
             path.throughput*=clamp(surface.albedo.rgb,vec3(0.0),vec3(1.0));
             path.origin=hit.position+hit.geometric_normal*.012;
             path.direction=normalize(reflect(path.direction,hit.normal));
@@ -350,14 +368,23 @@ vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
             if(queued<16)pending[queued++]=path;
             continue;
         }
-        // Always shade the traced surface with its own triangle UVs.
-        // Switching between a screen-space HDR lookup and the atlas when a
-        // hit crosses the FOV/depth threshold changes textures abruptly:
-        // transparent Mermaid cards can flicker or disappear entirely.
         accumulated+=path.throughput*
                      optics_surface_radiance(hit,path.direction);
     }
     return accumulated;
+}
+vec3 optics_offscreen_radiance(vec3 origin,vec3 direction)
+{
+    return optics_offscreen_radiance_medium(
+        origin,direction,1.0,vec3(1.0));
+}
+vec3 optics_solid_transmission(vec3 position,vec3 incoming,
+                               vec3 normal,float ior,vec3 tint)
+{
+    vec3 ray=refract(incoming,normal,1.0/max(ior,1.001));
+    if(dot(ray,ray)<1e-8)return vec3(0.0);
+    return optics_offscreen_radiance_medium(
+        position+ray*.03,normalize(ray),ior,tint);
 }
 #endif
 // Hot path for 100% mirrors: no Fresnel branches, queue, or per-bounce

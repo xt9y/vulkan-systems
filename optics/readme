@@ -11,7 +11,8 @@ The host provides triangles, per-face UVs, normal/PBR data and source textures.
 A bounded ray path traces mirror/glass interactions and shades off-screen hits
 with PCloud's existing 3D GI probes and direct lights. Default mirrors require
 no stochastic denoising. Thin glass has straight-through transmission, tint
-and Fresnel reflection. Material atlases preserve UV, alpha cutout, normal,
+and Fresnel reflection; closed solid glass has Snell entry/exit refraction,
+Schlick Fresnel and Beer-Lambert absorption over traversed distance. Material atlases preserve UV, alpha cutout, normal,
 metallic/roughness, AO and emissive inputs.
 
 Light changes preserve BVH topology; animated triangles refit it using
@@ -23,3 +24,6 @@ off-screen PBR channel parity and M2 GPU performance need native validation.
 Texture atlases are bounded at 8192x8192.
 
 Public API: optics/optics.hpp; shaders: optics/shaders/.
+
+Glass solids use a single current-medium IOR. Deeply nested overlapping
+volumes are approximate rather than a full medium-stack path tracer.

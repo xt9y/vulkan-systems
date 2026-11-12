@@ -191,7 +191,7 @@ void compositor::set_scene(const std::vector<surface>& source,
         const float pattern=s.optical_type ? 0.f :
             s.pattern==1?.25f:s.pattern==2?.5f:0.f;
         next->faces_cpu.push_back({
-            pack(s.origin),pack(s.u),pack(s.v),pack(n,1.f),
+            pack(s.origin),pack(s.u),pack(s.v),pack(n,s.solid?2.f:1.f),
             pack(s.albedo,s.optical_type==1?s.optical_strength:0.f),
             pack(s.emission,s.optical_type==1?s.ior:
                  s.optical_type==2?-s.optical_strength:pattern),
@@ -311,7 +311,7 @@ void compositor::update_geometry_frame(
         face.u=pack(s.u);
         face.v=pack(s.v);
         face.normal=pack(vk::util::math::normalize(
-            vk::util::math::cross(s.u,s.v)),1.f);
+            vk::util::math::cross(s.u,s.v)),face.normal[3]);
         face.metric[0]=c/det;
         face.metric[1]=-b/det;
         face.metric[2]=a/det;
