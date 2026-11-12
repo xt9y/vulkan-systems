@@ -27,3 +27,7 @@ Public API: optics/optics.hpp; shaders: optics/shaders/.
 
 Glass solids use a single current-medium IOR. Deeply nested overlapping
 volumes are approximate rather than a full medium-stack path tracer.
+
+The glass resolve also adds up to four direct point-light GGX highlights,
+with BVH visibility for significant contributions. Smaller contributions
+skip shadow rays as a bounded-performance approximation.

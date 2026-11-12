@@ -271,6 +271,34 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
     }
     return radiance;
 }
+// Bounded analytic specular for point lights that have no visible emitter
+// mesh. These highlights complement world-space BVH reflections rather
+// than replacing them. Trace visibility only for significant glints.
+vec3 optics_glass_specular(vec3 P,vec3 N,vec3 V,float roughness)
+{
+    vec3 radiance=vec3(0.0);
+    for(uint i=0u;i<min(optics_light_count.x,4u);++i) {
+        OpticsLight light=optics_lights[i];
+        vec3 to_light=light.position_radius.xyz-P;
+        float radius=max(light.position_radius.w,.001);
+        float distance2=dot(to_light,to_light);
+        if(distance2<.000004 || distance2>=radius*radius ||
+           dot(N,to_light)<=0.0)continue;
+        float distance=sqrt(distance2);
+        vec3 L=to_light/distance;
+        float q=clamp(distance/radius,0.0,1.0);
+        float attenuation=1.0-q*q*(3.0-2.0*q);
+        vec3 contribution=shared_brdf(
+            vec3(0.0),0.0,clamp(roughness,.045,1.0),N,V,L)*
+            light.color_strength.rgb*
+            (light.color_strength.w*attenuation);
+        if(max(contribution.r,max(contribution.g,contribution.b))>.015 &&
+           optics_occluded(P+N*.006,L,distance-.01,0xffffffffu))
+            continue;
+        radiance+=contribution;
+    }
+    return radiance;
+}
 #ifndef OPTICS_ONLY_MIRRORS
 struct OpticsPath {
     vec3 origin;
