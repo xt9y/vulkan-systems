@@ -23,7 +23,7 @@ struct surface {
     vec3 origin{},u{},v{},normal{};
     vec3 albedo{1.f,1.f,1.f},emission{};
     std::uint32_t pattern=0,optical_type=0;
-    float optical_strength=1.f,roughness=0.f,ior=1.5f;
+    float optical_strength=0.f,roughness=0.f,ior=1.52f;
 };
 struct geometry_update {std::uint32_t face=0;surface value{};};
 // Per-face UVs remain aligned with the optics-owned BVH.
