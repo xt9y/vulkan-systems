@@ -17,14 +17,16 @@ struct input {
     vk::ImageView normal{}, tint{}, material{}, material_depth{};
     vk::ImageView probes{},hdr{},reflection{};
 };
-struct geometry {
-    vk::Buffer faces{},nodes{},triangles{},scene_info{};
-    vk::Buffer photons{},offsets{};
-    std::uint32_t face_count=0;
-    // Packed 32-bit face indices in the exact PMap BVH leaf order.
-    vk::Buffer face_ids{};
+// Triangle inputs and animation updates; BVH storage belongs to VulkanOptics.
+struct surface {
+    using vec3=vk::util::math::vec3;
+    vec3 origin{},u{},v{},normal{};
+    vec3 albedo{1.f,1.f,1.f},emission{};
+    std::uint32_t pattern=0,optical_type=0;
+    float optical_strength=0.f,roughness=0.f,ior=1.52f;
 };
-// Per-BVH-face UV triangles stay index-aligned with VulkanPMap surfaces.
+struct geometry_update {std::uint32_t face=0;surface value{};};
+// Per-face UVs remain aligned with the optics-owned BVH.
 // The texture atlas is built and owned by VulkanOptics, not the game.
 struct face_uv {
     std::array<float,2> a{},b{},c{};
@@ -33,7 +35,7 @@ struct face_uv {
     std::uint32_t occlusion_texture=0,emissive_texture=0;
     float alpha_cutoff=0.f,base_alpha=1.f;
 };
-// Each entry corresponds to one BVH face, including transport emitters.
+// Each entry corresponds to one BVH triangle face.
 // Smooth normals are in world space and share the same vertex order as UVs.
 struct face_normals {
     std::array<float,4> a{},b{},c{};
@@ -60,8 +62,8 @@ static_assert(sizeof(camera)==128);
 
 class compositor {
 public:
-    compositor()=default;
-    ~compositor(){reset();}
+    compositor();
+    ~compositor();
     compositor(const compositor&)=delete;
     compositor& operator=(const compositor&)=delete;
     void create(vk::RenderPass pass, const std::vector<input>& frames,
@@ -69,16 +71,17 @@ public:
                 const char* fragment="build/shaders/optics_compose.frag.spv",
                 const char* mirror_fragment="build/shaders/optics_compose_mirror.frag.spv",
                 const char* planar_fragment="build/shaders/optics_compose_planar.frag.spv");
-    // Share the photon mapper's static GPU BVH; the mapper must outlive
-    // submitted rendering work. Empty geometry disables off-screen rays.
-    void set_scene(geometry,const std::vector<light>&,
+    // Build and own the acceleration structure; submissions must be idle
+    // while replacing scene geometry or its material buffers.
+    void set_scene(const std::vector<surface>&,const std::vector<light>&,
                    bool contains_glass=true);
-    // Update reflected direct lighting without replacing BVH or photon buffers.
+    void update_geometry_frame(std::uint32_t,
+                               const std::vector<geometry_update>&);
+    // Lighting changes need no new BVH or surface atlas.
     void set_lights(const std::vector<light>&);
     void set_textures(const std::vector<face_uv>&,
                       const std::vector<texture_rgba>&);
     void set_normals(const std::vector<face_normals>&);
-    void set_geometry_frame(std::uint32_t,geometry);
     void update_normals(std::uint32_t,
                         const std::vector<face_normal_update>&);
     void set_probe_space(const std::array<float,4>&);
@@ -89,6 +92,8 @@ public:
                 vk::Extent2D extent) const;
     void reset() noexcept;
 private:
+    struct acceleration;
+    std::unique_ptr<acceleration> acceleration_;
     gpu::descriptors descriptors_;
     render::pipeline pipeline_,mirror_pipeline_,planar_pipeline_;
     gpu::buffer empty_,lights_,face_uv_,face_normals_,probe_space_;

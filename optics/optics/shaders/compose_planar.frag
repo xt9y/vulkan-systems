@@ -8,7 +8,7 @@ layout(set=0,binding=1) uniform sampler2D opaque_depth;
 layout(set=0,binding=2) uniform sampler2D optic_normal;
 layout(set=0,binding=3) uniform sampler2D optic_tint;
 layout(set=0,binding=5) uniform sampler2D optic_depth;
-layout(set=0,binding=19) uniform sampler2D planar_reflection;
+layout(set=0,binding=17) uniform sampler2D planar_reflection;
 layout(push_constant) uniform View {
     mat4 vp;
     vec4 eye, right, up, forward;

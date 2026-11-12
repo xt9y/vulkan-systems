@@ -1,5 +1,5 @@
 // Opaque/reflective material resolve. Every reflective pixel traces the
-// same GPU BVH as VulkanPMap, including geometry outside the viewport.
+// optics-owned BVH, including geometry outside the viewport.
 // Single-glass transmission reuses HDR; nested optics retain BVH rays.
 layout(location=0) in vec2 uv_in;
 layout(location=0) out vec4 color;
@@ -14,8 +14,8 @@ layout(push_constant) uniform View {
     vec4 eye, right, up, forward;
 } camera;
 #include "raytrace.glsl"
-layout(set=0,binding=18) uniform sampler2D scene_hdr;
-layout(set=0,binding=19) uniform sampler2D planar_reflection;
+layout(set=0,binding=16) uniform sampler2D scene_hdr;
+layout(set=0,binding=17) uniform sampler2D planar_reflection;
 
 vec3 world_position(vec2 uv,float depth)
 {
