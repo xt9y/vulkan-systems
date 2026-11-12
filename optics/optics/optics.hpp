@@ -24,7 +24,6 @@ struct surface {
     vec3 albedo{1.f,1.f,1.f},emission{};
     std::uint32_t pattern=0,optical_type=0;
     float optical_strength=0.f,roughness=0.f,ior=1.52f;
-    bool solid=false; // Closed glass with entry/exit refraction.
 };
 struct geometry_update {std::uint32_t face=0;surface value{};};
 // Per-face UVs remain aligned with the optics-owned BVH.
@@ -71,7 +70,8 @@ public:
                 const char* vertex="build/shaders/pcloud_fullscreen.vert.spv",
                 const char* fragment="build/shaders/optics_compose.frag.spv",
                 const char* mirror_fragment="build/shaders/optics_compose_mirror.frag.spv",
-                const char* planar_fragment="build/shaders/optics_compose_planar.frag.spv");
+                const char* planar_fragment="build/shaders/optics_compose_planar.frag.spv",
+                const char* glass_fragment="build/shaders/optics_compose_glass.frag.spv");
     // Build and own the acceleration structure; submissions must be idle
     // while replacing scene geometry or its material buffers.
     void set_scene(const std::vector<surface>&,const std::vector<light>&,
@@ -96,7 +96,7 @@ private:
     struct acceleration;
     std::unique_ptr<acceleration> acceleration_;
     gpu::descriptors descriptors_;
-    render::pipeline pipeline_,mirror_pipeline_,planar_pipeline_;
+    render::pipeline pipeline_,mirror_pipeline_,planar_pipeline_,glass_pipeline_;
     gpu::buffer empty_,lights_,face_uv_,face_normals_,probe_space_;
     struct animated_normals {
         gpu::buffer buffer;
@@ -105,7 +105,7 @@ private:
     std::vector<face_normals> original_normals_;
     std::vector<std::unique_ptr<animated_normals>> frame_normals_;
     std::uint32_t face_count_=0;
-    bool contains_glass_=true;
+    bool contains_glass_=true,has_mirror_=false;
     gpu::owned_image atlas_;
     vk::ImageView atlas_view_{};
     vk::Sampler sampler_{},atlas_sampler_{};

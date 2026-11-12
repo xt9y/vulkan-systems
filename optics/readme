@@ -1,33 +1,29 @@
 VulkanOptics (optics::)
 ======================
 
-Reusable deterministic BVH material compositor for mirrors and glass.
-The host owns rasterization, G-buffers, VulkanWrapper, swapchain and command
-buffers. Optics builds and owns its CPU SAH stackless BVH and GPU face/node/
-index buffers using the shared VulkanBVH builder. No photon transport,
-photon buffers, alternative GI renderer or hardware RT extension is required.
+The compositing pass has two disjoint paths:
+- Glass: fast screen-space refraction sampling a linearly filtered PCloud
+  HDR image, with Snell-derived bounded distortion, Fresnel and mild
+  thickness-dependent tint attenuation. No per-pixel BVH, no direct-light
+  highlight injection, no temporal filter.
+- Mirrors: full deterministic Whitted-style BVH reflections, using PCloud
+  probes for indirect lighting at offscreen hits.
 
-The host provides triangles, per-face UVs, normal/PBR data and source textures.
-A bounded ray path traces mirror/glass interactions and shades off-screen hits
-with PCloud's existing 3D GI probes and direct lights. Default mirrors require
-no stochastic denoising. Thin glass has straight-through transmission, tint
-and Fresnel reflection; closed solid glass has Snell entry/exit refraction,
-Schlick Fresnel and Beer-Lambert absorption over traversed distance. Material atlases preserve UV, alpha cutout, normal,
-metallic/roughness, AO and emissive inputs.
+The host may supply an empty surface scene for glass-only compositions;
+the optics compositor then has no reflection BVH to build. In scenes
+containing mirrors, the shared BVH includes all scene geometry so mirrors
+can continue to reflect off-camera objects. Glass and mirror surfaces are
+resolved in separate fullscreen-scissor draws, each discarding pixels
+that do not belong to its material.
 
-Light changes preserve BVH topology; animated triangles refit it using
-per-swapchain frame buffers. Scissor regions avoid fullscreen traversal.
-Planar mirrors can reuse rasterized reflected-camera lighting.
+Glass is a performance-oriented approximation: it is NOT complete
+path-traced volume refraction. Its bounded screen-space distortion avoids
+the strong inversion and very high GPU costs of full-resolution
+multi-bounce sphere tracing. Missing offscreen background data and
+accurate caustics remain limitations. Thin glass keeps zero displacement,
+while solid glass has controlled distortion. Point-light glints are not
+injected; mirror quality is unchanged.
 
-Limitations: large optical coverage and CPU skinning/refit need profiling;
-off-screen PBR channel parity and M2 GPU performance need native validation.
-Texture atlases are bounded at 8192x8192.
-
-Public API: optics/optics.hpp; shaders: optics/shaders/.
-
-Glass solids use a single current-medium IOR. Deeply nested overlapping
-volumes are approximate rather than a full medium-stack path tracer.
-
-The glass resolve also adds up to four direct point-light GGX highlights,
-with BVH visibility for significant contributions. Smaller contributions
-skip shadow rays as a bounded-performance approximation.
+BVH topology uses VulkanBVH stackless, per-swapchain skinned refits,
+PCloud probes and host-owned G-buffers. The standalone VulkanPMap is
+not linked into VulkanOptics.
