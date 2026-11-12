@@ -108,7 +108,7 @@ private:
     bool contains_glass_=true,has_mirror_=false;
     gpu::owned_image atlas_;
     vk::ImageView atlas_view_{};
-    vk::Sampler sampler_{},atlas_sampler_{};
+    vk::Sampler sampler_{},hdr_sampler_{},atlas_sampler_{};
     vk::PipelineLayout layout_{};
     std::uint32_t frame_count_=0;
 };
