@@ -1,20 +1,18 @@
 // Opaque/reflective material resolve. Every reflective pixel traces the
 // optics-owned BVH, including geometry outside the viewport.
-// Single-glass transmission reuses HDR; nested optics retain BVH rays.
+// Glass is resolved in a separate, BVH-free shader.
 layout(location=0) in vec2 uv_in;
 layout(location=0) out vec4 color;
 layout(set=0,binding=0) uniform sampler2D lit_image;
 layout(set=0,binding=1) uniform sampler2D opaque_depth;
 layout(set=0,binding=2) uniform sampler2D optic_normal;
 layout(set=0,binding=3) uniform sampler2D optic_tint;
-layout(set=0,binding=4) uniform sampler2D optic_material;
 layout(set=0,binding=5) uniform sampler2D optic_depth;
 layout(push_constant) uniform View {
     mat4 vp;
     vec4 eye, right, up, forward;
 } camera;
 #include "raytrace.glsl"
-layout(set=0,binding=16) uniform sampler2D scene_hdr;
 layout(set=0,binding=17) uniform sampler2D planar_reflection;
 
 vec3 world_position(vec2 uv,float depth)

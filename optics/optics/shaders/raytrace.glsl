@@ -394,21 +394,4 @@ vec3 optics_perfect_mirror(vec3 origin,vec3 direction)
     }
     return vec3(0.0);
 }
-#ifndef OPTICS_ONLY_MIRRORS
-vec3 optics_offscreen_glossy(vec3 origin,vec3 direction,float mattness)
-{
-    vec3 center=optics_offscreen_radiance(origin,direction);
-    // Deterministic cone sampling only for matte, off-screen reflections.
-    // No noise, stochastic temporal filter or environment fallback.
-    if(mattness<=.35)return center;
-    vec3 axis=abs(direction.y)<.9?vec3(0,1,0):vec3(1,0,0);
-    vec3 tangent=normalize(cross(direction,axis));
-    vec3 bitangent=normalize(cross(direction,tangent));
-    float spread=mattness*mattness*.16;
-    vec3 offset=(tangent+bitangent)*spread;
-    vec3 a=optics_offscreen_radiance(origin,normalize(direction+offset));
-    vec3 b=optics_offscreen_radiance(origin,normalize(direction-offset));
-    return (center*2.0+a+b)*.25;
-}
-#endif
 #endif
