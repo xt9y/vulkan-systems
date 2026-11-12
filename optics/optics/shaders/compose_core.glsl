@@ -39,7 +39,10 @@ void main()
     float scene_depth=texture(opaque_depth,uv).r;
     if(surface_depth>scene_depth+.0003)discard;
     vec4 tint=texture(optic_tint,uv);
-    float mattness=texture(optic_material,uv).r;
+    vec4 optical=texture(optic_material,uv);
+    float mattness=optical.r;
+    float ior=1.0+optical.g; // R8G8B8A8 UNORM stores (ior - 1)
+    bool solid_glass=optical.b>.5;
     vec3 N=normalize(mask.rgb*2.0-1.0);
     vec3 P=world_position(uv,surface_depth);
     vec3 incoming=normalize(P-camera.eye.xyz);
@@ -69,23 +72,27 @@ void main()
             optics_offscreen_glossy(P+N*.03,R,mattness)) :
         optics_perfect_mirror(P+N*.012,R);
     float cosine=clamp(dot(-incoming,N),0.0,1.0);
-    float fresnel=.04+.96*pow(1.0-cosine,5.0);
-    if(mask.a<.75) {
-        // A single glass object has no additional optical layers.
-        // Reuse the same-pixel opaque HDR image instead of another BVH ray;
-        // no UV displacement, duplicated weapon, or lens distortion.
-        // Multiple optical objects retain exact nested BVH transmission.
-        float transmission=clamp(tint.a,0.0,1.0);
+    float f0=(ior-1.0)/(ior+1.0);
+    f0*=f0;
+    float fresnel=f0+(1.0-f0)*pow(1.0-cosine,5.0);
+    if(glass) {
+        // A solid cube/sphere transmits a refracted ray through its volume;
+        // two interfaces cancel the unwanted single-surface lens artifact.
+        // Thin panes keep one HDR fetch or a straight BVH ray.
         vec3 background=vec3(0.0);
-        if(transmission>.001)
-            background=camera.eye.w>2.5 ?
-                textureLod(scene_hdr,uv,0.0).rgb :
-                optics_offscreen_glossy(P+incoming*.03,incoming,mattness);
-        // At zero pass-through show opaque tinted glass, not a hole;
-        // at one show the unchanged camera perspective through it.
-        vec3 glass=mix(tint.rgb,background*mix(vec3(1.0),tint.rgb,.20),
-                       transmission);
-        vec3 radiance=mix(glass,reflection,fresnel);
+        if(strength>.001) {
+            if(solid_glass)
+                background=optics_solid_transmission(
+                    P,incoming,N,ior,clamp(tint.rgb,vec3(.001),vec3(1.0)));
+            else
+                background=camera.eye.w>2.5 ?
+                    textureLod(scene_hdr,uv,0.0).rgb :
+                    optics_offscreen_glossy(P+incoming*.03,incoming,mattness);
+        }
+        vec3 transmitted=solid_glass?background:
+            background*mix(vec3(1.0),tint.rgb,.20);
+        vec3 glass_color=mix(tint.rgb,transmitted,strength);
+        vec3 radiance=mix(glass_color,reflection,fresnel);
         color=vec4(shared_tonemap(radiance,camera.forward.w),1.0);
     } else {
         // Full-strength reflection through the editor's RGB color filter.
