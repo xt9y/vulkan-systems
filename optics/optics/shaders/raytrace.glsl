@@ -1,27 +1,16 @@
-// Reusable software-BVH reflection queries over Photon Mapping's scene
-// buffers. BVH leaf ordering and the 112-byte face layout match VulkanPMap.
-// Full-resolution reflected rays use the same triangle BVH as Photon
-// Mapping. Per-hit shadows, photon irradiance, UV texture, and smooth
-// vertex normals are evaluated without an interpolated radiance cache.
+// Stackless optics-owned BVH, deterministic mirrors and thin glass.
+// Off-screen GI uses the renderer's PCloud probe field.
 #ifndef OPTICS_RAYTRACE_GLSL
 #define OPTICS_RAYTRACE_GLSL
 #include "lighting_shared.glsl"
-const float OPTICS_PI=3.14159265358979;
 struct OpticsFace {vec4 origin,u,v,normal,albedo,emission,metric;};
 struct OpticsNode {vec3 minimum;uint next;vec3 maximum;uint first_and_count;};
-struct OpticsPhoton {vec4 position,power;uvec4 link;};
 struct OpticsLight {vec4 position_radius,color_strength;};
 layout(std430,set=0,binding=6) readonly buffer OpticalFaces {OpticsFace optics_faces[];};
 layout(std430,set=0,binding=7) readonly buffer OpticalNodes {OpticsNode optics_nodes[];};
 layout(std430,set=0,binding=8) readonly buffer OpticalFaceIds {uint optics_face_ids[];};
-layout(std430,set=0,binding=9) readonly buffer OpticalScene {
-    uvec4 optics_desc;
-    vec4 optics_grid;
-    uvec4 optics_extra;
-};
-layout(std430,set=0,binding=10) readonly buffer OpticalPhotons {OpticsPhoton optics_photons[];};
-layout(std430,set=0,binding=11) readonly buffer OpticalOffsets {uint optics_offsets[];};
-layout(std430,set=0,binding=12) readonly buffer OpticalLights {
+layout(std430,set=0,binding=9) readonly buffer OpticalScene {uvec4 optics_desc;};
+layout(std430,set=0,binding=10) readonly buffer OpticalLights {
     uvec4 optics_light_count;
     OpticsLight optics_lights[16];
 };
@@ -31,22 +20,21 @@ struct OpticsUV {
     vec4 uv01,uv2_origin,rect;
     vec4 metallic_rect,normal_rect,occlusion_rect,emissive_rect;
 };
-layout(std430,set=0,binding=13) readonly buffer OpticalUV {
+layout(std430,set=0,binding=11) readonly buffer OpticalUV {
     OpticsUV optics_uv[];
 };
-layout(set=0,binding=14) uniform sampler2D optics_atlas;
+layout(set=0,binding=12) uniform sampler2D optics_atlas;
 // Per-face vertex normals share the exact face ordering of the traced BVH.
 // They do not change triangle intersections; curved meshes keep smooth
 // reflected directions instead of showing their individual polygons.
 struct OpticsNormals {vec4 a,b,c;};
-layout(std430,set=0,binding=15) readonly buffer OpticalNormals {
+layout(std430,set=0,binding=13) readonly buffer OpticalNormals {
     OpticsNormals optics_normals[];
 };
-layout(set=0,binding=16) uniform sampler3D optics_probes;
-layout(std430,set=0,binding=17) readonly buffer OpticalProbeSpace {
+layout(set=0,binding=14) uniform sampler3D optics_probes;
+layout(std430,set=0,binding=15) readonly buffer OpticalProbeSpace {
     vec4 optics_probe_space;
 };
-layout(set=0,binding=18) uniform sampler2D hdr_image;
 struct OpticsHit {
     vec3 position,normal,geometric_normal;
     float t;
@@ -137,7 +125,7 @@ bool optics_closest(vec3 ro,vec3 rd,float max_t,out OpticsHit result)
             uint face_id=optics_face_ids[first+k];
             // The light emitter is only a transport source. It must not
             // appear as a white rectangular mesh in camera/reflection rays.
-            if(face_id>=optics_desc.x || face_id==optics_desc.y)continue;
+            if(face_id>=optics_desc.x)continue;
             float t;
             if(optics_face_hit(ro,rd,optics_faces[face_id],face_id,result.t,t)) {
                 result.t=t;
@@ -192,7 +180,7 @@ bool optics_occluded(vec3 ro,vec3 rd,float limit,uint source)
         uint first=node.first_and_count>>4u;
         for(uint k=0u;k<count;++k) {
             uint id=optics_face_ids[first+k];
-            if(id>=optics_desc.x || id==optics_desc.y || id==source)continue;
+            if(id>=optics_desc.x || id==source)continue;
             OpticsFace f=optics_faces[id];
             if(f.albedo.w>.001)continue;
             float t;
@@ -201,35 +189,6 @@ bool optics_occluded(vec3 ro,vec3 rd,float limit,uint source)
         index=node.next;
     }
     return false;
-}
-vec3 optics_photon_radiance(OpticsHit hit,vec3 albedo)
-{
-    // Use the existing photon grid for off-screen indirect radiance,
-    // limiting work per query so the first mirror stays affordable on M2.
-    float radius=max(.18,optics_grid.w);
-    float radius2=radius*radius;
-    ivec3 center=ivec3(floor((hit.position-optics_grid.xyz)/
-                             max(optics_grid.w,1e-5)));
-    vec3 flux=vec3(0);
-    for(int z=-1;z<=1;++z)
-    for(int y=-1;y<=1;++y)
-    for(int x=-1;x<=1;++x) {
-        ivec3 c=center+ivec3(x,y,z);
-        if(any(lessThan(c,ivec3(0))) ||
-           any(greaterThanEqual(c,ivec3(16))))continue;
-        uint cell=uint(c.x+16*(c.y+16*c.z));
-        uint start=optics_offsets[cell];
-        uint stop=min(optics_offsets[cell+1u],start+48u);
-        for(uint i=start;i<stop;++i) {
-            OpticsPhoton p=optics_photons[i];
-            if(p.link.y!=hit.face_id)continue;
-            vec3 delta=hit.position-p.position.xyz;
-            float distance2=dot(delta,delta);
-            if(distance2>=radius2)continue;
-            flux+=p.power.rgb*(1.0-distance2/radius2);
-        }
-    }
-    return flux*albedo*(2.0/(OPTICS_PI*OPTICS_PI*radius2));
 }
 vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
 {
@@ -291,8 +250,7 @@ vec3 optics_surface_radiance(OpticsHit hit,vec3 rd)
     vec3 bounce=optics_probe_space.w>0.0 ?
         shared_indirect_lighting(optics_probes,optics_probe_space.xyz,
                                  optics_probe_space.w,hit.position,N_probe)*
-        (.01*min(1.0,roughness*1.5)) :
-        optics_photon_radiance(hit,vec3(1.0));
+        (.01*min(1.0,roughness*1.5)) : vec3(0.0);
     vec3 radiance=emission+albedo*(1.0-metallic)*ao*bounce;
     vec3 V=normalize(-rd);
     for(uint i=0u;i<min(optics_light_count.x,16u);++i) {
