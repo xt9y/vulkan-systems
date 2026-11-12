@@ -40,10 +40,10 @@ compositor::~compositor(){reset();}
 void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
                         const char* vertex,const char* fragment,
                         const char* mirror_fragment,
-                        const char* planar_fragment)
+                        const char* planar_fragment,const char* glass_fragment)
 {
     if(!pass || frames.empty() || !vertex || !fragment ||
-       !mirror_fragment || !planar_fragment)
+       !mirror_fragment || !planar_fragment || !glass_fragment)
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
@@ -84,6 +84,11 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         sampler_info.addressModeV=vk::SamplerAddressMode::eClampToEdge;
         sampler_info.addressModeW=vk::SamplerAddressMode::eClampToEdge;
         sampler_=vk::device::get()->handle.createSampler(sampler_info);
+        // Glass screen-space refraction needs subpixel filtering, whereas
+        // G-buffer material/depth reads must remain nearest.
+        sampler_info.magFilter=vk::Filter::eLinear;
+        sampler_info.minFilter=vk::Filter::eLinear;
+        hdr_sampler_=vk::device::get()->handle.createSampler(sampler_info);
         const vk::DescriptorSetLayout set_layout=descriptors_.layout();
         vk::PushConstantRange push{};
         push.stageFlags=vk::ShaderStageFlagBits::eFragment;
@@ -119,6 +124,10 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             {vk::ShaderStageFlagBits::eVertex,vertex},
             {vk::ShaderStageFlagBits::eFragment,planar_fragment}
         });
+        glass_pipeline_.create(raster,{
+            {vk::ShaderStageFlagBits::eVertex,vertex},
+            {vk::ShaderStageFlagBits::eFragment,glass_fragment}
+        });
         for(std::uint32_t i=0;i<frames.size();++i) {
             const auto& f=frames[i];
             const std::array<vk::ImageView,6> views{
@@ -138,7 +147,7 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             descriptors_.write_image(i,14,probes);
             if(!f.hdr)throw std::invalid_argument("optics: missing linear HDR view");
             vk::DescriptorImageInfo hdr{};
-            hdr.sampler=sampler_;
+            hdr.sampler=hdr_sampler_;
             hdr.imageView=f.hdr;
             hdr.imageLayout=vk::ImageLayout::eGeneral;
             descriptors_.write_image(i,16,hdr);
@@ -168,8 +177,11 @@ void compositor::set_scene(const std::vector<surface>& source,
                            const std::vector<light>& lights,bool contains_glass)
 {
     if(!frame_count_)throw std::logic_error("optics: compositor not initialized");
-    if(source.size()>100000u)
-        throw std::invalid_argument("optics: too many triangles");
+    // The old 100k limit rejected a valid scene after inserting another
+    // Mermaid. Keep a larger defensive allocation bound without clipping
+    // authored triangles or losing mirror reflections.
+    if(source.size()>1000000u)
+        throw std::invalid_argument("optics: more than 1 million reflection triangles");
     auto next=std::make_unique<acceleration>();
     next->faces_cpu.reserve(source.size());
     next->triangles.reserve(source.size()*3);
@@ -233,7 +245,9 @@ void compositor::set_scene(const std::vector<surface>& source,
         upload(next->scene_info,desc.data(),sizeof(desc));
     }
     face_count_=std::uint32_t(source.size());
-    contains_glass_=contains_glass || source.empty();
+    contains_glass_=contains_glass;
+    has_mirror_=std::any_of(source.begin(),source.end(),
+        [](const surface& s){return s.optical_type==2;});
     acceleration_=std::move(next);
     for(std::uint32_t frame=0;frame<frame_count_;++frame) {
         const std::array<vk::DescriptorBufferInfo,4> buffers{
@@ -558,39 +572,54 @@ void compositor::set_textures(const std::vector<face_uv>& faces,
 }
 
 void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
-                        const camera& view,const std::vector<vk::Rect2D>& regions,
+                        const camera& view,
+                        const std::vector<vk::Rect2D>& glass_regions,
+                        const std::vector<vk::Rect2D>& mirror_regions,
                         vk::Extent2D extent) const
 {
-    if(!cmd || !pipeline_.handle() || !mirror_pipeline_.handle() ||
-       !planar_pipeline_.handle() || frame>=frame_count_)
+    if(!cmd || !glass_pipeline_.handle() || !pipeline_.handle() ||
+       !mirror_pipeline_.handle() || !planar_pipeline_.handle() ||
+       frame>=frame_count_)
         throw std::logic_error("optics: missing pipeline or invalid frame");
-    if(regions.empty())return;
-    // A/B control: compare the exact same mirror scene with the original
-    // general shader, without changing geometry or visual settings.
-    static const bool force_general=
-        std::getenv("OPTICS_PROFILE_GENERAL")!=nullptr;
-    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
-                     (view.eye.w>1.5f && view.eye.w<2.5f)?planar_pipeline_.handle():
-                     (contains_glass_||force_general)?
-                     pipeline_.handle():mirror_pipeline_.handle());
+    if((glass_regions.empty() || !contains_glass_) &&
+       (mirror_regions.empty() || !has_mirror_))return;
+    const auto draw=[&](vk::Pipeline pipeline,
+                        const std::vector<vk::Rect2D>& regions) {
+        if(regions.empty())return;
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,pipeline);
+        for(const auto& region:regions) {
+            if(!region.extent.width || !region.extent.height)continue;
+            cmd.setScissor(0,{region});
+            cmd.draw(3,1,0,0);
+        }
+    };
     const vk::DescriptorSet set=descriptors_.set(frame);
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,layout_,0,{set},{});
-    cmd.pushConstants(layout_,vk::ShaderStageFlagBits::eFragment,0,sizeof(camera),&view);
-    // Pipeline viewport and scissor are dynamic. Present only the visible
-    // optical material regions, then restore state for the editor overlay.
-    for(const auto& rectangle:regions) {
-        if(!rectangle.extent.width || !rectangle.extent.height)continue;
-        cmd.setScissor(0,{rectangle});
-        cmd.draw(3,1,0,0);
+    cmd.pushConstants(layout_,vk::ShaderStageFlagBits::eFragment,
+                      0,sizeof(camera),&view);
+    if(contains_glass_)draw(glass_pipeline_.handle(),glass_regions);
+    if(has_mirror_) {
+        const bool planar=view.eye.w>1.5f && view.eye.w<2.5f;
+        draw(planar?planar_pipeline_.handle():
+            contains_glass_?pipeline_.handle():mirror_pipeline_.handle(),
+            mirror_regions);
     }
     cmd.setScissor(0,{vk::Rect2D{{0,0},extent}});
 }
+void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
+                        const camera& view,const std::vector<vk::Rect2D>& regions,
+                        vk::Extent2D extent) const
+{
+    record(cmd,frame,view,regions,regions,extent);
+}
 void compositor::reset() noexcept
 {
+    glass_pipeline_.reset();
     planar_pipeline_.reset();
     mirror_pipeline_.reset();
     pipeline_.reset();
     contains_glass_=true;
+    has_mirror_=false;
     if(layout_)vk::device::get()->handle.destroyPipelineLayout(layout_);
     layout_=nullptr;
     descriptors_.reset();
@@ -608,6 +637,8 @@ void compositor::reset() noexcept
     atlas_.reset();
     if(atlas_sampler_)vk::device::get()->handle.destroySampler(atlas_sampler_);
     atlas_sampler_=nullptr;
+    if(hdr_sampler_)vk::device::get()->handle.destroySampler(hdr_sampler_);
+    hdr_sampler_=nullptr;
     if(sampler_)vk::device::get()->handle.destroySampler(sampler_);
     sampler_=nullptr;
     frame_count_=0;

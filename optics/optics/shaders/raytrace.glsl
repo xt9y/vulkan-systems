@@ -107,7 +107,7 @@ bool optics_closest(vec3 ro,vec3 rd,float max_t,out OpticsHit result)
 {
     if(optics_desc.x==0u)return false;
     uint total_nodes=optics_nodes[0].next;
-    if(total_nodes==0u || total_nodes>1000000u)return false;
+    if(total_nodes==0u || total_nodes>optics_desc.x*2u+1u)return false;
     result.t=max_t;
     bool found=false;
     uint index=0u;
@@ -166,7 +166,7 @@ bool optics_occluded(vec3 ro,vec3 rd,float limit,uint source)
 {
     if(limit<=.025 || optics_desc.x==0u)return false;
     uint total=optics_nodes[0].next;
-    if(total==0u || total>1000000u)return false;
+    if(total==0u || total>optics_desc.x*2u+1u)return false;
     uint index=0u;
     vec3 inv_direction=1.0/optics_safe_direction(rd);
     for(uint step=0u;index<total && step<total*2u;++step) {
@@ -394,21 +394,4 @@ vec3 optics_perfect_mirror(vec3 origin,vec3 direction)
     }
     return vec3(0.0);
 }
-#ifndef OPTICS_ONLY_MIRRORS
-vec3 optics_offscreen_glossy(vec3 origin,vec3 direction,float mattness)
-{
-    vec3 center=optics_offscreen_radiance(origin,direction);
-    // Deterministic cone sampling only for matte, off-screen reflections.
-    // No noise, stochastic temporal filter or environment fallback.
-    if(mattness<=.35)return center;
-    vec3 axis=abs(direction.y)<.9?vec3(0,1,0):vec3(1,0,0);
-    vec3 tangent=normalize(cross(direction,axis));
-    vec3 bitangent=normalize(cross(direction,tangent));
-    float spread=mattness*mattness*.16;
-    vec3 offset=(tangent+bitangent)*spread;
-    vec3 a=optics_offscreen_radiance(origin,normalize(direction+offset));
-    vec3 b=optics_offscreen_radiance(origin,normalize(direction-offset));
-    return (center*2.0+a+b)*.25;
-}
-#endif
 #endif

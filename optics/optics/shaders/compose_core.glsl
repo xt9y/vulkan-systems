@@ -1,20 +1,18 @@
 // Opaque/reflective material resolve. Every reflective pixel traces the
 // optics-owned BVH, including geometry outside the viewport.
-// Single-glass transmission reuses HDR; nested optics retain BVH rays.
+// Glass is resolved in a separate, BVH-free shader.
 layout(location=0) in vec2 uv_in;
 layout(location=0) out vec4 color;
 layout(set=0,binding=0) uniform sampler2D lit_image;
 layout(set=0,binding=1) uniform sampler2D opaque_depth;
 layout(set=0,binding=2) uniform sampler2D optic_normal;
 layout(set=0,binding=3) uniform sampler2D optic_tint;
-layout(set=0,binding=4) uniform sampler2D optic_material;
 layout(set=0,binding=5) uniform sampler2D optic_depth;
 layout(push_constant) uniform View {
     mat4 vp;
     vec4 eye, right, up, forward;
 } camera;
 #include "raytrace.glsl"
-layout(set=0,binding=16) uniform sampler2D scene_hdr;
 layout(set=0,binding=17) uniform sampler2D planar_reflection;
 
 vec3 world_position(vec2 uv,float depth)
@@ -34,62 +32,24 @@ void main()
 {
     vec2 uv=gl_FragCoord.xy/vec2(textureSize(lit_image,0));
     vec4 mask=texture(optic_normal,uv);
-    if(mask.a<.25)discard;
-    float surface_depth=texture(optic_depth,uv).r;
-    float scene_depth=texture(opaque_depth,uv).r;
-    if(surface_depth>scene_depth+.0003)discard;
-    vec4 tint=texture(optic_tint,uv);
-    float mattness=texture(optic_material,uv).r;
+    // The separate cheap glass shader resolves every dielectric fragment.
+    // Only reflective surfaces run the expensive BVH mirror traversal.
+    if(mask.a<.75)discard;
+    float depth=texture(optic_depth,uv).r;
+    if(depth>texture(opaque_depth,uv).r+.0003)discard;
     vec3 N=normalize(mask.rgb*2.0-1.0);
-    vec3 P=world_position(uv,surface_depth);
+    vec3 P=world_position(uv,depth);
     vec3 incoming=normalize(P-camera.eye.xyz);
     if(dot(N,incoming)>0.0)N=-N;
+    vec4 tint=texture(optic_tint,uv);
     vec3 R=reflect(incoming,N);
-    // Reflection rays return linear HDR. The renderer uses the same
-    // exposure and monotonic tonemap curve for primary and reflected color.
-    float strength=clamp(tint.a,0.0,1.0);
-    bool glass=mask.a<.75;
 #ifdef OPTICS_ONLY_MIRRORS
-    if(camera.eye.w>1.5) {
-        // Rasterized from the reflected camera, with horizontal sign
-        // correction for the mirror's handedness. Same textures, shadow
-        // BVH, PCloud GI, exposure and HDR transfer as the real scene.
+    if(camera.eye.w>1.5 && camera.eye.w<2.5)
         color=vec4(textureLod(planar_reflection,
             vec2(1.0-uv.x,uv.y),0.0).rgb*tint.rgb,1.0);
-    } else {
-        vec3 reflection=optics_perfect_mirror(P+N*.012,R);
-        color=vec4(shared_tonemap(reflection*tint.rgb,camera.forward.w),1.0);
-    }
-#else
-    // Sharp glass reflection uses the non-branching mirror tracer;
-    // matte glass retains the existing glossy path.
-    vec3 reflection=glass ?
-        (mattness<=.35 ?
-            optics_perfect_mirror(P+N*.03,R) :
-            optics_offscreen_glossy(P+N*.03,R,mattness)) :
-        optics_perfect_mirror(P+N*.012,R);
-    float cosine=clamp(dot(-incoming,N),0.0,1.0);
-    float fresnel=.04+.96*pow(1.0-cosine,5.0);
-    if(mask.a<.75) {
-        // A single glass object has no additional optical layers.
-        // Reuse the same-pixel opaque HDR image instead of another BVH ray;
-        // no UV displacement, duplicated weapon, or lens distortion.
-        // Multiple optical objects retain exact nested BVH transmission.
-        float transmission=clamp(tint.a,0.0,1.0);
-        vec3 background=vec3(0.0);
-        if(transmission>.001)
-            background=camera.eye.w>2.5 ?
-                textureLod(scene_hdr,uv,0.0).rgb :
-                optics_offscreen_glossy(P+incoming*.03,incoming,mattness);
-        // At zero pass-through show opaque tinted glass, not a hole;
-        // at one show the unchanged camera perspective through it.
-        vec3 glass=mix(tint.rgb,background*mix(vec3(1.0),tint.rgb,.20),
-                       transmission);
-        vec3 radiance=mix(glass,reflection,fresnel);
-        color=vec4(shared_tonemap(radiance,camera.forward.w),1.0);
-    } else {
-        // Full-strength reflection through the editor's RGB color filter.
-        color=vec4(shared_tonemap(reflection*tint.rgb,camera.forward.w),1.0);
-    }
+    else
 #endif
+        color=vec4(shared_tonemap(
+            optics_perfect_mirror(P+N*.012,R)*tint.rgb,
+            camera.forward.w),1.0);
 }
