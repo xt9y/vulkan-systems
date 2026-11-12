@@ -245,7 +245,7 @@ void compositor::set_scene(const std::vector<surface>& source,
             descriptors_.write_buffer(frame,6+j,buffers[j]);
     }
     if(face_count_)std::clog<<"optics: BVH faces="<<face_count_
-                            <<" with PCloud GI\\n";
+                            <<" with PCloud GI\n";
     set_lights(lights);
 }
 void compositor::set_lights(const std::vector<light>& lights)
@@ -378,7 +378,7 @@ void compositor::update_normals(
     }
     state->buffer.upload(state->faces.data(),
                          state->faces.size()*sizeof(face_normals));
-    descriptors_.write_buffer(frame,15,state->buffer.descriptor());
+    descriptors_.write_buffer(frame,13,state->buffer.descriptor());
 }
 
 void compositor::set_probe_space(const std::array<float,4>& space)
@@ -417,7 +417,7 @@ void compositor::set_normals(const std::vector<face_normals>& normals)
                          std::max<std::size_t>(1,normals.size())*
                          sizeof(face_normals));
     for(std::uint32_t frame=0;frame<frame_count_;++frame)
-        descriptors_.write_buffer(frame,15,face_normals_.descriptor());
+        descriptors_.write_buffer(frame,13,face_normals_.descriptor());
 }
 
 void compositor::set_textures(const std::vector<face_uv>& faces,

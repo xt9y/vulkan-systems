@@ -15,7 +15,7 @@ layout(std430,set=0,binding=10) readonly buffer OpticalLights {
     OpticsLight optics_lights[16];
 };
 // A face maps its three source UVs onto a subrectangle of the packed
-// RGBA8 atlas. Face indices match the Photon Mapping BVH exactly.
+// RGBA8 atlas. Face indices match the optics-owned BVH exactly.
 struct OpticsUV {
     vec4 uv01,uv2_origin,rect;
     vec4 metallic_rect,normal_rect,occlusion_rect,emissive_rect;
