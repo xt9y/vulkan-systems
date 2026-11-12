@@ -10,6 +10,7 @@ layout(set=0,binding=3) uniform sampler2D optic_tint;
 layout(set=0,binding=4) uniform sampler2D optic_material;
 layout(set=0,binding=5) uniform sampler2D optic_depth;
 layout(set=0,binding=16) uniform sampler2D scene_hdr;
+layout(set=0,binding=17) uniform sampler2D planar_reflection;
 layout(push_constant) uniform View {
     mat4 vp;
     vec4 eye,right,up,forward;
@@ -67,5 +68,54 @@ void main()
     vec3 reflected=texture(scene_hdr,
         clamp(uv-shift*.4,border,1.0-border)).rgb*.7;
     vec3 radiance=mix(through,reflected,fresnel);
-    color=vec4(shared_tonemap(radiance,camera.forward.w),1.0);
+    vec3 result=shared_tonemap(radiance,camera.forward.w);
+
+    // The opaque HDR image contains no mirrors: those are composited
+    // after lighting. If this refracted view hits the single planar
+    // mirror, use its already-rendered reflected-camera LDR image.
+    // camera.vp carries plane, center, and Y/Z axes/half extents here;
+    // no additional push constants or per-glass-pixel BVH queries.
+    if(camera.vp[1].w>.5) {
+        vec4 plane=camera.vp[0];
+        vec3 normal_m=plane.xyz;
+        float ndc=clamp((depth-.1)/.9,0.0,1.0);
+        float linear=.1*1000.0/max(1000.0-ndc*999.9,1e-5);
+        vec3 surface_pos=camera.eye.xyz+camera.forward.xyz*linear+
+            camera.right.xyz*screen.x*linear*camera.right.w-
+            camera.up.xyz*screen.y*linear*camera.up.w;
+        vec3 travel_dir=incoming;
+        if(solid) {
+            vec3 refracted=refract(incoming,normal,1.0/ior);
+            if(dot(refracted,refracted)>1e-6)
+                travel_dir=normalize(refracted);
+        }
+        float facing=dot(normal_m,travel_dir);
+        if(abs(facing)>1e-5) {
+            float distance=-(dot(normal_m,surface_pos)+plane.w)/facing;
+            if(distance>.01) {
+                vec3 hit=surface_pos+travel_dir*distance;
+                vec3 rel=hit-camera.vp[1].xyz;
+                if(abs(dot(rel,camera.vp[2].xyz))<=camera.vp[2].w &&
+                   abs(dot(rel,camera.vp[3].xyz))<=camera.vp[3].w) {
+                    vec3 from_eye=hit-camera.eye.xyz;
+                    float z=dot(from_eye,camera.forward.xyz);
+                    if(z>.1) {
+                        vec2 hit_uv=vec2(
+                            .5+.5*dot(from_eye,camera.right.xyz)/
+                                (z*camera.right.w),
+                            .5-.5*dot(from_eye,camera.up.xyz)/
+                                (z*camera.up.w));
+                        if(all(greaterThanEqual(hit_uv,vec2(0.0))) &&
+                           all(lessThanEqual(hit_uv,vec2(1.0)))) {
+                            vec3 mirror=texture(planar_reflection,
+                                vec2(1.0-hit_uv.x,hit_uv.y)).rgb;
+                            result=mix(result,mirror*absorption,
+                                       pass*(1.0-fresnel));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    color=vec4(result,1.0);
 }

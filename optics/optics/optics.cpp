@@ -593,10 +593,13 @@ void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
     cmd.pushConstants(layout_,vk::ShaderStageFlagBits::eFragment,
                       0,sizeof(camera),&view);
     const bool planar=view.eye.w>1.5f && view.eye.w<2.5f;
-    if(planar && has_mirror_)draw(planar_pipeline_.handle());
-    else {
-        // Glass never executes a software BVH query: a lightweight glass
-        // shader handles every glass pixel, including when mirrors coexist.
+    if(planar && has_mirror_) {
+        // Resolve glass first, then the planar mirror. The mirror shader
+        // masks out glass pixels. Glass can sample the reflected-camera
+        // image when a transmitted ray intersects the planar mirror.
+        if(contains_glass_)draw(glass_pipeline_.handle());
+        draw(planar_pipeline_.handle());
+    } else {
         if(contains_glass_)draw(glass_pipeline_.handle());
         if(has_mirror_)draw(
             contains_glass_?pipeline_.handle():mirror_pipeline_.handle());
