@@ -92,7 +92,8 @@ void main()
         vec3 transmitted=solid_glass?background:
             background*mix(vec3(1.0),tint.rgb,.20);
         vec3 glass_color=mix(tint.rgb,transmitted,strength);
-        vec3 radiance=mix(glass_color,reflection,fresnel);
+        vec3 radiance=mix(glass_color,reflection,fresnel)+
+            optics_glass_specular(P,N,-incoming,mattness);
         color=vec4(shared_tonemap(radiance,camera.forward.w),1.0);
     } else {
         // Full-strength reflection through the editor's RGB color filter.
