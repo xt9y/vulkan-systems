@@ -107,7 +107,7 @@ bool optics_closest(vec3 ro,vec3 rd,float max_t,out OpticsHit result)
 {
     if(optics_desc.x==0u)return false;
     uint total_nodes=optics_nodes[0].next;
-    if(total_nodes==0u || total_nodes>1000000u)return false;
+    if(total_nodes==0u || total_nodes>optics_desc.x*2u+1u)return false;
     result.t=max_t;
     bool found=false;
     uint index=0u;
@@ -166,7 +166,7 @@ bool optics_occluded(vec3 ro,vec3 rd,float limit,uint source)
 {
     if(limit<=.025 || optics_desc.x==0u)return false;
     uint total=optics_nodes[0].next;
-    if(total==0u || total>1000000u)return false;
+    if(total==0u || total>optics_desc.x*2u+1u)return false;
     uint index=0u;
     vec3 inv_direction=1.0/optics_safe_direction(rd);
     for(uint step=0u;index<total && step<total*2u;++step) {

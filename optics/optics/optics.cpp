@@ -177,8 +177,11 @@ void compositor::set_scene(const std::vector<surface>& source,
                            const std::vector<light>& lights,bool contains_glass)
 {
     if(!frame_count_)throw std::logic_error("optics: compositor not initialized");
-    if(source.size()>100000u)
-        throw std::invalid_argument("optics: too many triangles");
+    // The old 100k limit rejected a valid scene after inserting another
+    // Mermaid. Keep a larger defensive allocation bound without clipping
+    // authored triangles or losing mirror reflections.
+    if(source.size()>1000000u)
+        throw std::invalid_argument("optics: more than 1 million reflection triangles");
     auto next=std::make_unique<acceleration>();
     next->faces_cpu.reserve(source.size());
     next->triangles.reserve(source.size()*3);
