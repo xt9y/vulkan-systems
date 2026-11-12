@@ -44,9 +44,12 @@ void main()
     bool solid=material.b>.5;
 
     vec2 shift=vec2(0.0);
+    vec3 travel_dir=incoming;
     if(solid) {
         vec3 transmitted_ray=refract(incoming,normal,1.0/ior);
-        vec3 bend=transmitted_ray-incoming;
+        if(dot(transmitted_ray,transmitted_ray)>1e-6)
+            travel_dir=normalize(transmitted_ray);
+        vec3 bend=travel_dir-incoming;
         shift=vec2(
             dot(bend,camera.right.xyz)/max(camera.right.w,.001),
            -dot(bend,camera.up.xyz)/max(camera.up.w,.001))*.08;
@@ -83,12 +86,6 @@ void main()
         vec3 surface_pos=camera.eye.xyz+camera.forward.xyz*linear+
             camera.right.xyz*screen.x*linear*camera.right.w-
             camera.up.xyz*screen.y*linear*camera.up.w;
-        vec3 travel_dir=incoming;
-        if(solid) {
-            vec3 refracted=refract(incoming,normal,1.0/ior);
-            if(dot(refracted,refracted)>1e-6)
-                travel_dir=normalize(refracted);
-        }
         float facing=dot(normal_m,travel_dir);
         if(abs(facing)>1e-5) {
             float distance=-(dot(normal_m,surface_pos)+plane.w)/facing;
@@ -107,10 +104,19 @@ void main()
                                 (z*camera.up.w));
                         if(all(greaterThanEqual(hit_uv,vec2(0.0))) &&
                            all(lessThanEqual(hit_uv,vec2(1.0)))) {
-                            vec3 mirror=texture(planar_reflection,
-                                vec2(1.0-hit_uv.x,hit_uv.y)).rgb;
-                            result=mix(result,mirror*absorption,
-                                       pass*(1.0-fresnel));
+                            // Depth-test the mirror hit against opaque
+                            // objects. Avoid showing reflections through
+                            // geometry between the glass and mirror.
+                            float opaque=texture(opaque_depth,hit_uv).r;
+                            float opaque_ndc=clamp((opaque-.1)/.9,0.0,1.0);
+                            float opaque_z=100.0/
+                                max(1000.0-opaque_ndc*999.9,1e-5);
+                            if(opaque_z+.02>=z) {
+                                vec3 mirror=texture(planar_reflection,
+                                    vec2(1.0-hit_uv.x,hit_uv.y)).rgb;
+                                result=mix(result,mirror*absorption,
+                                           pass*(1.0-fresnel));
+                            }
                         }
                     }
                 }
