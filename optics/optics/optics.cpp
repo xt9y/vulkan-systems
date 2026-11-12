@@ -35,6 +35,7 @@ struct compositor::acceleration {
     std::vector<std::uint32_t> first_triangle;
     std::vector<std::unique_ptr<frame>> frames;
 };
+compositor::compositor()=default;
 compositor::~compositor(){reset();}
 void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
                         const char* vertex,const char* fragment,

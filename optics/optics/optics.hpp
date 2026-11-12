@@ -62,7 +62,7 @@ static_assert(sizeof(camera)==128);
 
 class compositor {
 public:
-    compositor()=default;
+    compositor();
     ~compositor();
     compositor(const compositor&)=delete;
     compositor& operator=(const compositor&)=delete;
