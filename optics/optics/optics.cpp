@@ -572,19 +572,24 @@ void compositor::set_textures(const std::vector<face_uv>& faces,
 }
 
 void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
-                        const camera& view,const std::vector<vk::Rect2D>& regions,
+                        const camera& view,
+                        const std::vector<vk::Rect2D>& glass_regions,
+                        const std::vector<vk::Rect2D>& mirror_regions,
                         vk::Extent2D extent) const
 {
     if(!cmd || !glass_pipeline_.handle() || !pipeline_.handle() ||
        !mirror_pipeline_.handle() || !planar_pipeline_.handle() ||
        frame>=frame_count_)
         throw std::logic_error("optics: missing pipeline or invalid frame");
-    if(regions.empty() || (!contains_glass_ && !has_mirror_))return;
-    const auto draw=[&](vk::Pipeline pipeline) {
+    if((glass_regions.empty() || !contains_glass_) &&
+       (mirror_regions.empty() || !has_mirror_))return;
+    const auto draw=[&](vk::Pipeline pipeline,
+                        const std::vector<vk::Rect2D>& regions) {
+        if(regions.empty())return;
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,pipeline);
-        for(const auto& rectangle:regions) {
-            if(!rectangle.extent.width || !rectangle.extent.height)continue;
-            cmd.setScissor(0,{rectangle});
+        for(const auto& region:regions) {
+            if(!region.extent.width || !region.extent.height)continue;
+            cmd.setScissor(0,{region});
             cmd.draw(3,1,0,0);
         }
     };
@@ -592,17 +597,12 @@ void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,layout_,0,{set},{});
     cmd.pushConstants(layout_,vk::ShaderStageFlagBits::eFragment,
                       0,sizeof(camera),&view);
-    const bool planar=view.eye.w>1.5f && view.eye.w<2.5f;
-    if(planar && has_mirror_) {
-        // Resolve glass first, then the planar mirror. The mirror shader
-        // masks out glass pixels. Glass can sample the reflected-camera
-        // image when a transmitted ray intersects the planar mirror.
-        if(contains_glass_)draw(glass_pipeline_.handle());
-        draw(planar_pipeline_.handle());
-    } else {
-        if(contains_glass_)draw(glass_pipeline_.handle());
-        if(has_mirror_)draw(
-            contains_glass_?pipeline_.handle():mirror_pipeline_.handle());
+    if(contains_glass_)draw(glass_pipeline_.handle(),glass_regions);
+    if(has_mirror_) {
+        const bool planar=view.eye.w>1.5f && view.eye.w<2.5f;
+        draw(planar?planar_pipeline_.handle():
+            contains_glass_?pipeline_.handle():mirror_pipeline_.handle(),
+            mirror_regions);
     }
     cmd.setScissor(0,{vk::Rect2D{{0,0},extent}});
 }

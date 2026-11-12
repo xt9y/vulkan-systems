@@ -89,7 +89,9 @@ public:
     void set_probe_views(const std::vector<vk::ImageView>&);
     // Only emit fragments inside rasterized material bounds.
     void record(vk::CommandBuffer command,std::uint32_t frame,
-                const camera& view,const std::vector<vk::Rect2D>& regions,
+                const camera& view,
+                const std::vector<vk::Rect2D>& glass_regions,
+                const std::vector<vk::Rect2D>& mirror_regions,
                 vk::Extent2D extent) const;
     void reset() noexcept;
 private:
