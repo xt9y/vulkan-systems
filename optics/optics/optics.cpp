@@ -606,6 +606,12 @@ void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
     }
     cmd.setScissor(0,{vk::Rect2D{{0,0},extent}});
 }
+void compositor::record(vk::CommandBuffer cmd,std::uint32_t frame,
+                        const camera& view,const std::vector<vk::Rect2D>& regions,
+                        vk::Extent2D extent) const
+{
+    record(cmd,frame,view,regions,regions,extent);
+}
 void compositor::reset() noexcept
 {
     glass_pipeline_.reset();

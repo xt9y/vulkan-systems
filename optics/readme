@@ -27,3 +27,15 @@ injected; mirror quality is unchanged.
 BVH topology uses VulkanBVH stackless, per-swapchain skinned refits,
 PCloud probes and host-owned G-buffers. The standalone VulkanPMap is
 not linked into VulkanOptics.
+
+Performance refinement: the host can supply separate conservative
+scissor rectangles for glass and mirror. The original shared-region
+record overload remains available for other host projects.
+
+For a single planar mirror, the game renders a reflected camera view and
+shares its plane, center and extents through the existing optics camera
+push constants. The glass pass checks transmitted rays against that plane
+and the opaque depth buffer, then samples the existing reflected LDR image.
+This covers the planar mirror behind glass without any per-glass-pixel BVH
+queries. Non-planar or multiple simultaneous mirrors remain subject to the
+cheap glass compositor's screen-space limitations.
