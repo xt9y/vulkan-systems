@@ -11,11 +11,21 @@ layout(set=0,binding=4) uniform sampler2D optic_material;
 layout(set=0,binding=5) uniform sampler2D optic_depth;
 layout(set=0,binding=16) uniform sampler2D scene_hdr;
 layout(set=0,binding=17) uniform sampler2D planar_reflection;
+layout(set=0,binding=18) uniform sampler2D second_normal;
+layout(set=0,binding=19) uniform sampler2D second_tint;
+layout(set=0,binding=20) uniform sampler2D second_material;
+layout(set=0,binding=21) uniform sampler2D second_depth;
+layout(set=0,binding=22) uniform sampler2D reflected_normal;
+layout(set=0,binding=23) uniform sampler2D reflected_tint;
+layout(set=0,binding=24) uniform sampler2D reflected_material;
+layout(set=0,binding=25) uniform sampler2D reflected_depth;
+layout(set=0,binding=26) uniform sampler2D reflected_opaque_depth;
 layout(push_constant) uniform View {
     mat4 vp;
     vec4 eye,right,up,forward;
 } camera;
 #include "lighting_shared.glsl"
+#include "glass_layer.glsl"
 void main()
 {
     ivec2 pixel=ivec2(gl_FragCoord.xy);
@@ -104,23 +114,47 @@ void main()
                         vec3 mirror_ldr=texture(planar_reflection,
                             vec2(1.0-mirror_uv.x,mirror_uv.y)).rgb*
                             clamp(camera.vp[3].rgb,vec3(0.0),vec3(1.0));
+                        vec2 reflected_uv=vec2(
+                            1.0-mirror_uv.x,mirror_uv.y);
+                        // The mirror's reflected-camera G-buffer captures
+                        // glass that is invisible to the original view.
+                        vec4 back_mask=texture(
+                            reflected_normal,reflected_uv);
+                        float back_depth=texture(
+                            reflected_depth,reflected_uv).r;
+                        float back_opaque=texture(
+                            reflected_opaque_depth,reflected_uv).r;
+                        if(back_mask.a>.25 && back_mask.a<.75 &&
+                           back_depth<back_opaque+.0003) {
+                            vec4 back_tint=texture(
+                                reflected_tint,reflected_uv);
+                            vec4 back_material=texture(
+                                reflected_material,reflected_uv);
+                            mirror_ldr=optics_glass_layer(
+                                mirror_ldr,back_tint.rgb,back_tint.a,
+                                back_material.b);
+                        }
                         background_ldr=mirror_ldr;
                     }
                 }
             }
         }
     }
-    // One medium for both backgrounds. Previously ordinary glass used
-    // pow(tint,0.04) while mirror glass used a separate exponential filter,
-    // so identical glass appeared different at the mirror boundary.
-    // Absorption and the modest surface veil are now shared, irrespective
-    // of which source provided the transmitted scene.
-    vec3 pigment=clamp(tint.rgb,vec3(0.0),vec3(1.0));
-    float density=clamp(1.0-dot(pigment,vec3(.2126,.7152,.0722)),
-                        0.0,1.0);
-    vec3 attenuation=exp(-(solid?0.85:0.25)*(vec3(1.0)-pigment));
-    vec3 transmitted=mix(pigment,background_ldr*attenuation,pass);
-    float surface_veil=0.22*density;
-    vec3 glass=mix(transmitted,pigment,surface_veil);
+    // Sample the second FRONT-facing glass layer behind this one. Its
+    // own depth test guarantees the layer belongs behind the first
+    // optical surface; opaque geometry still wins if nearer.
+    vec4 second_mask=texture(second_normal,transmitted_uv);
+    float second_z=texture(second_depth,transmitted_uv).r;
+    float opaque_z=texture(opaque_depth,transmitted_uv).r;
+    if(second_mask.a>.25 && second_mask.a<.75 &&
+       second_z>depth+.0001 && second_z<opaque_z+.0003) {
+        vec4 behind_tint=texture(second_tint,transmitted_uv);
+        vec4 behind_material=texture(second_material,transmitted_uv);
+        background_ldr=optics_glass_layer(
+            background_ldr,behind_tint.rgb,behind_tint.a,
+            behind_material.b);
+    }
+    vec3 glass=optics_glass_layer(background_ldr,tint.rgb,pass,
+                                 solid?1.0:0.0);
     color=vec4(mix(glass,reflection_ldr,fresnel),1.0);
 }

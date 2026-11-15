@@ -47,8 +47,8 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
-        std::vector<vk::DescriptorSetLayoutBinding> bindings(18);
-        for(std::uint32_t i=0;i<18;++i) {
+        std::vector<vk::DescriptorSetLayoutBinding> bindings(27);
+        for(std::uint32_t i=0;i<27;++i) {
             bindings[i].binding=i;
             bindings[i].descriptorCount=1;
             bindings[i].descriptorType=(i>=6 && i<=11) || i==13 || i==15 ?
@@ -157,6 +157,22 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             mirror.imageView=f.reflection;
             mirror.imageLayout=vk::ImageLayout::eGeneral;
             descriptors_.write_image(i,17,mirror);
+            const std::array<vk::ImageView,9> layers{
+                f.peel_normal,f.peel_tint,f.peel_material,f.peel_depth,
+                f.reflected_normal,f.reflected_tint,f.reflected_material,
+                f.reflected_depth,f.reflected_opaque_depth
+            };
+            for(std::uint32_t binding=0;binding<layers.size();++binding) {
+                if(!layers[binding])
+                    throw std::invalid_argument("optics: missing layered glass view");
+                vk::DescriptorImageInfo layer{};
+                layer.sampler=sampler_;
+                layer.imageView=layers[binding];
+                layer.imageLayout=(binding==3 || binding==7 || binding==8) ?
+                    vk::ImageLayout::eDepthStencilReadOnlyOptimal :
+                    vk::ImageLayout::eShaderReadOnlyOptimal;
+                descriptors_.write_image(i,18+binding,layer);
+            }
             for(std::uint32_t binding=0;binding<views.size();++binding) {
                 if(!views[binding])throw std::invalid_argument("optics: missing input view");
                 vk::DescriptorImageInfo image{};

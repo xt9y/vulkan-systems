@@ -16,6 +16,11 @@ struct input {
     vk::ImageView lit{}, opaque_depth{};
     vk::ImageView normal{}, tint{}, material{}, material_depth{};
     vk::ImageView probes{},hdr{},reflection{};
+    // A second optical layer in the primary view (depth peeled), plus
+    // glass visible to the reflected camera, all owned by the host.
+    vk::ImageView peel_normal{},peel_tint{},peel_material{},peel_depth{};
+    vk::ImageView reflected_normal{},reflected_tint{},reflected_material{};
+    vk::ImageView reflected_depth{},reflected_opaque_depth{};
 };
 // Triangle inputs and animation updates; BVH storage belongs to VulkanOptics.
 struct surface {
