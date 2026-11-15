@@ -103,20 +103,23 @@ void main()
                         vec3 mirror_ldr=texture(planar_reflection,
                             vec2(1.0-mirror_uv.x,mirror_uv.y)).rgb*
                             clamp(camera.vp[3].rgb,vec3(0.0),vec3(1.0));
-                        // The transmitted mirror is not the final
-                        // glass color. Keep the same glass layer already
-                        // computed for the ordinary world visible, even
-                        // when pass-through is nearly 100 percent.
-                        // A darker authored RGB pigment makes this layer
-                        // denser; clear glass stays more transparent.
+                        // The mirror is the background seen through
+                        // this SAME glass surface, not an opaque layer
+                        // pasted on top of it. Use the authored glass RGB
+                        // as an absorption coefficient. Solid glass crosses
+                        // a thicker medium than a thin window.
                         vec3 pigment=clamp(tint.rgb,vec3(0.0),vec3(1.0));
-                        float density=1.0-dot(pigment,
+                        vec3 transmittance=exp(
+                            -(solid?2.5:.75)*(vec3(1.0)-pigment));
+                        // Keep the normal glass shading as the surface
+                        // veil. Reduce the mirror's contribution together
+                        // with the light transmitted through the medium.
+                        float transmitted_luma=dot(transmittance,
                             vec3(.2126,.7152,.0722));
-                        float coating=clamp(.35+.40*density,.35,.75);
                         float mirror_weight=pass*(1.0-fresnel)*
-                                            (1.0-coating);
-                        color=vec4(mix(glass_ldr,mirror_ldr*pigment,
-                                       mirror_weight),1.0);
+                            sqrt(clamp(transmitted_luma,0.0,1.0));
+                        color=vec4(mix(glass_ldr,
+                            mirror_ldr*transmittance,mirror_weight),1.0);
                         return;
                     }
                 }
