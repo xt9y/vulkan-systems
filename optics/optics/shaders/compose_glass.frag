@@ -75,6 +75,7 @@ void main()
         texture(scene_hdr,transmitted_uv).rgb,camera.forward.w);
     float pass=clamp(tint.a,0.0,1.0);
     float mirror_surface_z=1e30;
+    vec2 mirror_image_uv=vec2(0.0);
     vec3 reflection_ldr=shared_tonemap(
         texture(scene_hdr,clamp(uv-shift*.4,border,1.0-border)).rgb*.7,
         camera.forward.w);
@@ -131,12 +132,37 @@ void main()
                                 reflected_tint,reflected_uv);
                             vec4 back_material=texture(
                                 reflected_material,reflected_uv);
-                            mirror_ldr=optics_glass_layer(
-                                mirror_ldr,back_tint.rgb,back_tint.a,
+                            vec3 mirror_n=normalize(camera.vp[0].xyz);
+                            vec3 virtual_forward=reflect(camera.forward.xyz,mirror_n);
+                            vec3 virtual_up=reflect(camera.up.xyz,mirror_n);
+                            vec3 virtual_right=normalize(cross(virtual_forward,virtual_up));
+                            virtual_up=normalize(cross(virtual_right,virtual_forward));
+                            vec2 screen=reflected_uv*2.0-1.0;
+                            vec3 incident=normalize(virtual_forward+
+                                virtual_right*screen.x*camera.right.w-
+                                virtual_up*screen.y*camera.up.w);
+                            optics_glass_profile surface=optics_glass_shape(
+                                back_mask,incident,virtual_right,virtual_up,
+                                vec2(camera.right.w,camera.up.w),
+                                clamp(1.0+back_material.g,1.001,2.0),
                                 back_material.b);
+                            vec2 border_ref=.5/vec2(textureSize(planar_reflection,0));
+                            vec3 mirror_tint=clamp(camera.vp[3].rgb,
+                                vec3(0.0),vec3(1.0));
+                            vec3 through=texture(planar_reflection,
+                                clamp(reflected_uv+surface.shift,
+                                      border_ref,1.0-border_ref)).rgb*mirror_tint;
+                            vec3 sheen=texture(planar_reflection,
+                                clamp(reflected_uv-surface.shift*.4,
+                                      border_ref,1.0-border_ref)).rgb*
+                                      mirror_tint*.7;
+                            mirror_ldr=optics_glass_shaped(through,sheen,
+                                back_tint.rgb,back_tint.a,back_material.b,
+                                surface.fresnel);
                         }
                         background_ldr=mirror_ldr;
                         mirror_surface_z=mirror_z;
+                        mirror_image_uv=reflected_uv;
                     }
                 }
             }
@@ -156,9 +182,37 @@ void main()
        second_linear+.02<mirror_surface_z) {
         vec4 behind_tint=texture(second_tint,transmitted_uv);
         vec4 behind_material=texture(second_material,transmitted_uv);
-        background_ldr=optics_glass_layer(
-            background_ldr,behind_tint.rgb,behind_tint.a,
+        vec2 second_screen=transmitted_uv*2.0-1.0;
+        vec3 second_ray=normalize(camera.forward.xyz+
+            camera.right.xyz*second_screen.x*camera.right.w-
+            camera.up.xyz*second_screen.y*camera.up.w);
+        optics_glass_profile behind=optics_glass_shape(
+            second_mask,second_ray,camera.right.xyz,camera.up.xyz,
+            vec2(camera.right.w,camera.up.w),
+            clamp(1.0+behind_material.g,1.001,2.0),
             behind_material.b);
+        vec3 through, sheen;
+        if(mirror_surface_z<1e29) {
+            // Mirror coordinates are horizontally flipped relative to
+            // the primary view; use the already-rendered mirror image.
+            vec2 mirror_shift=vec2(-behind.shift.x,behind.shift.y);
+            vec3 mirror_tint=clamp(camera.vp[3].rgb,vec3(0),vec3(1));
+            through=texture(planar_reflection,clamp(mirror_image_uv+
+                mirror_shift,border,1.0-border)).rgb*mirror_tint;
+            sheen=texture(planar_reflection,clamp(mirror_image_uv-
+                mirror_shift*.4,border,1.0-border)).rgb*mirror_tint*.7;
+        } else {
+            through=shared_tonemap(texture(scene_hdr,
+                clamp(transmitted_uv+behind.shift,border,1.0-border)).rgb,
+                camera.forward.w);
+            sheen=shared_tonemap(texture(scene_hdr,
+                clamp(transmitted_uv-behind.shift*.4,border,1.0-border)).rgb*
+                .7,camera.forward.w);
+        }
+        background_ldr=optics_glass_shaped(
+            mix(background_ldr,through,.85),sheen,
+            behind_tint.rgb,behind_tint.a,behind_material.b,
+            behind.fresnel);
     }
     vec3 glass=optics_glass_layer(background_ldr,tint.rgb,pass,
                                  solid?1.0:0.0);

@@ -69,3 +69,12 @@ comes from the reflected camera's optical G-buffer.
 Currently there are at most two primary glass layers and one reflected
 glass layer. Unlimited recursion and glass through secondary nonplanar
 mirrors are not provided by this fast path.
+
+## Curved secondary glass
+The planar reflected-camera glass and one depth-peeled primary glass layer
+now decode the rasterized world-space normal and glass material, reconstruct
+the corresponding camera ray, and apply the same bounded refraction and
+Schlick Fresnel as direct glass. Both keep the shared glass-color treatment;
+there is no BVH query and no additional reflected-camera render pass. The
+result remains a two-layer screen-space approximation, not full dielectric
+ray tracing. Large overlap can increase texture sampling cost.

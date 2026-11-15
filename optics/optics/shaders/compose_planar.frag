@@ -41,8 +41,27 @@ void main()
        depth_glass<depth_opaque+.0003) {
         vec4 glass_tint=texture(reflected_tint,reflected_uv);
         vec4 glass_material=texture(reflected_material,reflected_uv);
-        reflected=optics_glass_layer(reflected,glass_tint.rgb,
-                                    glass_tint.a,glass_material.b);
+        vec3 plane_normal=normalize(camera.vp[0].xyz);
+        vec3 view_forward=reflect(camera.forward.xyz,plane_normal);
+        vec3 view_up=reflect(camera.up.xyz,plane_normal);
+        vec3 view_right=normalize(cross(view_forward,view_up));
+        view_up=normalize(cross(view_right,view_forward));
+        vec2 screen=reflected_uv*2.0-1.0;
+        vec3 incident=normalize(view_forward+
+            view_right*screen.x*camera.right.w-
+            view_up*screen.y*camera.up.w);
+        optics_glass_profile surface=optics_glass_shape(
+            mask_glass,incident,view_right,view_up,
+            vec2(camera.right.w,camera.up.w),
+            clamp(1.0+glass_material.g,1.001,2.0),
+            glass_material.b);
+        vec2 border=.5/vec2(textureSize(planar_reflection,0));
+        vec3 through=texture(planar_reflection,
+            clamp(reflected_uv+surface.shift,border,1.0-border)).rgb;
+        vec3 sheen=texture(planar_reflection,
+            clamp(reflected_uv-surface.shift*.4,border,1.0-border)).rgb*.7;
+        reflected=optics_glass_shaped(through,sheen,glass_tint.rgb,
+            glass_tint.a,glass_material.b,surface.fresnel);
     }
     color=vec4(reflected*tint.rgb,1.0);
 }
