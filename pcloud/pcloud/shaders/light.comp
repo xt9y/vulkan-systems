@@ -197,12 +197,46 @@ vec4 debug_sphere(vec3 eye,vec3 direction,float max_distance)
     return vec4(-1.0);
 }
 
+// The viewmodel uses a reserved depth interval. It is still a physical
+// receiver of world light: walls and mirrors must occlude point lights.
+// Cache each light's visibility from the camera eye once per 8x8 workgroup
+// (64 threads), rather than tracing a BVH ray for every hand/gun pixel.
+shared uint has_viewmodel;
+shared uint viewmodel_occluded[64];
 void main()
 {
     ivec2 p=ivec2(gl_GlobalInvocationID.xy),size=imageSize(hdr);
-    if(any(greaterThanEqual(p,size)))return;
-    float depth=texelFetch(g_depth,p,0).r;
-    bool viewmodel=depth<0.1;
+    bool inside=all(lessThan(p,size));
+    float depth=inside?texelFetch(g_depth,p,0).r:1.0;
+    bool viewmodel=inside && depth<0.1;
+    uint lane=gl_LocalInvocationIndex;
+    if(lane==0u)has_viewmodel=0u;
+    barrier();
+    if(viewmodel)atomicOr(has_viewmodel,1u);
+    barrier();
+
+    // 8x8 workgroups fall entirely within one 16x16 light-list tile.
+    uint tile_cols=(uint(size.x)+15u)/16u;
+    uint tile=(gl_WorkGroupID.y/2u)*tile_cols+
+              (gl_WorkGroupID.x/2u);
+    uint offset=tile*65u;
+    uint count=min(tile_lights[offset],64u);
+    if(has_viewmodel!=0u && lane<count) {
+        uint light_index=tile_lights[offset+1u+lane];
+        PointLight light=lights[light_index];
+        vec3 to_light=light.position_range.xyz-pc.eye_near.xyz;
+        float dist2=dot(to_light,to_light);
+        uint blocked=0u;
+        if(dist2>0.000064 && light.color_intensity.w>0.0) {
+            float dist=sqrt(dist2);
+            vec3 ray=to_light/dist;
+            blocked=any_hit(pc.eye_near.xyz+ray*0.004,ray,
+                            dist-0.008,light_index)?1u:0u;
+        }
+        viewmodel_occluded[lane]=blocked;
+    }
+    barrier(); // Cache is complete before any viewmodel fragment reads it.
+    if(!inside)return;
     vec3 eye=pc.eye_near.xyz;
     vec3 fragment=world_position(p,size,depth>=0.999999?0.999:depth);
     if(pc.light_count.y>0.5 && !viewmodel)
@@ -231,10 +265,6 @@ void main()
     float metallic=clamp(material.g,0.0,1.0);
     float ao=clamp(material.b,0.0,1.0);
     vec3 color=vec3(0.0);
-    uint tile_cols=(uint(size.x)+15u)/16u;
-    uint tile=(uint(p.y)/16u)*tile_cols+uint(p.x)/16u;
-    uint offset=tile*65u;
-    uint count=min(tile_lights[offset],64u);
     for(uint candidate=0u;candidate<count;++candidate)
     {
         uint i=tile_lights[offset+1u+candidate];
@@ -253,9 +283,12 @@ void main()
         vec3 direction=to_light/dist;
         float q=clamp(dist/radius,0.0,1.0);
         float attenuation=1.0-q*q*(3.0-2.0*q);
-        // Viewmodel geometry uses its own depth interval and is never a
-        // world shadow receiver; otherwise query the exact scene triangles.
-        if(!viewmodel && any_hit(P+N*0.004,direction,dist-0.008,i))
+        // World surfaces keep exact per-pixel shadow queries. Hands and
+        // weapon use camera-local visibility cached once per tile/light:
+        // the viewmodel's reserved depth must not disable occlusion.
+        if(viewmodel) {
+            if(viewmodel_occluded[candidate]!=0u)continue;
+        } else if(any_hit(P+N*0.004,direction,dist-0.008,i))
             continue;
         color+=shared_brdf(albedo.rgb,metallic,roughness,N,V,direction)*
             light.color_intensity.rgb*
