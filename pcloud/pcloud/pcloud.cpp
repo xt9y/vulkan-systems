@@ -494,7 +494,9 @@ namespace pc
             {view.forward.x,view.forward.y,view.forward.z,1000.f},
             {view.right.x,view.right.y,view.right.z,tangent*aspect},
             {view.up.x,view.up.y,view.up.z,tangent},
-            {float(data.light_count),0.f,float(data.vertex_count),
+            // -1 disables viewmodel-only shared shadow work in the
+            // reflected camera, which never renders first-person arms.
+            {float(data.light_count),-1.f,float(data.vertex_count),
              float(data.node_count)},
             {data.grid_origin.x,data.grid_origin.y,data.grid_origin.z,
              data.grid_spacing}

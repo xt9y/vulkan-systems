@@ -210,32 +210,37 @@ void main()
     float depth=inside?texelFetch(g_depth,p,0).r:1.0;
     bool viewmodel=inside && depth<0.1;
     uint lane=gl_LocalInvocationIndex;
-    if(lane==0u)has_viewmodel=0u;
-    barrier();
-    if(viewmodel)atomicOr(has_viewmodel,1u);
-    barrier();
-
     // 8x8 workgroups fall entirely within one 16x16 light-list tile.
     uint tile_cols=(uint(size.x)+15u)/16u;
     uint tile=(gl_WorkGroupID.y/2u)*tile_cols+
               (gl_WorkGroupID.x/2u);
     uint offset=tile*65u;
     uint count=min(tile_lights[offset],64u);
-    if(has_viewmodel!=0u && lane<count) {
-        uint light_index=tile_lights[offset+1u+lane];
-        PointLight light=lights[light_index];
-        vec3 to_light=light.position_range.xyz-pc.eye_near.xyz;
-        float dist2=dot(to_light,to_light);
-        uint blocked=0u;
-        if(dist2>0.000064 && light.color_intensity.w>0.0) {
-            float dist=sqrt(dist2);
-            vec3 ray=to_light/dist;
-            blocked=any_hit(pc.eye_near.xyz+ray*0.004,ray,
-                            dist-0.008,light_index)?1u:0u;
+
+    // Reflection G-buffers contain no first-person weapon. The negative
+    // debug flag is a uniformly selected reflection-only shader mode, so
+    // that pass skips all viewmodel shared-memory synchronization.
+    if(pc.light_count.y>=0.0) {
+        if(lane==0u)has_viewmodel=0u;
+        barrier();
+        if(viewmodel)atomicOr(has_viewmodel,1u);
+        barrier();
+        if(has_viewmodel!=0u && lane<count) {
+            uint light_index=tile_lights[offset+1u+lane];
+            PointLight light=lights[light_index];
+            vec3 to_light=light.position_range.xyz-pc.eye_near.xyz;
+            float dist2=dot(to_light,to_light);
+            uint blocked=0u;
+            if(dist2>0.000064 && light.color_intensity.w>0.0) {
+                float dist=sqrt(dist2);
+                vec3 ray=to_light/dist;
+                blocked=any_hit(pc.eye_near.xyz+ray*0.004,ray,
+                                dist-0.008,light_index)?1u:0u;
+            }
+            viewmodel_occluded[lane]=blocked;
         }
-        viewmodel_occluded[lane]=blocked;
+        barrier(); // Cache ready before any viewmodel pixel reads it.
     }
-    barrier(); // Cache is complete before any viewmodel fragment reads it.
     if(!inside)return;
     vec3 eye=pc.eye_near.xyz;
     vec3 fragment=world_position(p,size,depth>=0.999999?0.999:depth);
