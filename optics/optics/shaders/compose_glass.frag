@@ -57,15 +57,16 @@ void main()
     }
     vec2 border=.5/size;
     vec2 transmitted_uv=clamp(uv+shift,border,1.0-border);
-    vec3 background=texture(scene_hdr,transmitted_uv).rgb;
-    vec3 absorption=pow(clamp(tint.rgb,vec3(.05),vec3(1.0)),
-                        vec3(material.b>.5?.04:.01));
+    // Both ordinary geometry and planar mirrors must undergo the same
+    // glass shading. Convert the normal HDR scene into the same display
+    // space as the already-tonemapped planar reflection, then substitute
+    // only the background source if the refracted view hits the mirror.
+    vec3 background_ldr=shared_tonemap(
+        texture(scene_hdr,transmitted_uv).rgb,camera.forward.w);
     float pass=clamp(tint.a,0.0,1.0);
-    vec3 transmission=mix(tint.rgb,background*absorption,pass);
-    vec3 reflected=texture(scene_hdr,
-        clamp(uv-shift*.4,border,1.0-border)).rgb*.7;
-    vec3 radiance=mix(transmission,reflected,fresnel);
-    vec3 glass_ldr=shared_tonemap(radiance,camera.forward.w);
+    vec3 reflection_ldr=shared_tonemap(
+        texture(scene_hdr,clamp(uv-shift*.4,border,1.0-border)).rgb*.7,
+        camera.forward.w);
 
     // The regular planar mirror resolves from the *tonemapped LDR*
     // reflection at (1-uv.x,uv.y) and applies the mirror's color tint.
@@ -103,28 +104,23 @@ void main()
                         vec3 mirror_ldr=texture(planar_reflection,
                             vec2(1.0-mirror_uv.x,mirror_uv.y)).rgb*
                             clamp(camera.vp[3].rgb,vec3(0.0),vec3(1.0));
-                        // The mirror is the background seen through
-                        // this SAME glass surface, not an opaque layer
-                        // pasted on top of it. Use the authored glass RGB
-                        // as an absorption coefficient. Solid glass crosses
-                        // a thicker medium than a thin window.
-                        vec3 pigment=clamp(tint.rgb,vec3(0.0),vec3(1.0));
-                        vec3 transmittance=exp(
-                            -(solid?2.5:.75)*(vec3(1.0)-pigment));
-                        // Keep the normal glass shading as the surface
-                        // veil. Reduce the mirror's contribution together
-                        // with the light transmitted through the medium.
-                        float transmitted_luma=dot(transmittance,
-                            vec3(.2126,.7152,.0722));
-                        float mirror_weight=pass*(1.0-fresnel)*
-                            sqrt(clamp(transmitted_luma,0.0,1.0));
-                        color=vec4(mix(glass_ldr,
-                            mirror_ldr*transmittance,mirror_weight),1.0);
-                        return;
+                        background_ldr=mirror_ldr;
                     }
                 }
             }
         }
     }
-    color=vec4(glass_ldr,1.0);
+    // One medium for both backgrounds. Previously ordinary glass used
+    // pow(tint,0.04) while mirror glass used a separate exponential filter,
+    // so identical glass appeared different at the mirror boundary.
+    // Absorption and the modest surface veil are now shared, irrespective
+    // of which source provided the transmitted scene.
+    vec3 pigment=clamp(tint.rgb,vec3(0.0),vec3(1.0));
+    float density=clamp(1.0-dot(pigment,vec3(.2126,.7152,.0722)),
+                        0.0,1.0);
+    vec3 attenuation=exp(-(solid?0.85:0.25)*(vec3(1.0)-pigment));
+    vec3 transmitted=mix(pigment,background_ldr*attenuation,pass);
+    float surface_veil=0.22*density;
+    vec3 glass=mix(transmitted,pigment,surface_veil);
+    color=vec4(mix(glass,reflection_ldr,fresnel),1.0);
 }
