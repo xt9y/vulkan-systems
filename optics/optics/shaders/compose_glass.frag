@@ -103,14 +103,20 @@ void main()
                         vec3 mirror_ldr=texture(planar_reflection,
                             vec2(1.0-mirror_uv.x,mirror_uv.y)).rgb*
                             clamp(camera.vp[3].rgb,vec3(0.0),vec3(1.0));
-                        // Apply a visible layer of the authored glass
-                        // color to the mirror, just as to the ordinary
-                        // scene. High pass-through must not erase the
-                        // glass medium's color absorption.
-                        vec3 mirror_filter=absorption*mix(
-                            vec3(1.0),clamp(tint.rgb,vec3(0.0),vec3(1.0)),.25);
-                        color=vec4(mix(glass_ldr,mirror_ldr*mirror_filter,
-                                        pass*(1.0-fresnel)),1.0);
+                        // The transmitted mirror is not the final
+                        // glass color. Keep the same glass layer already
+                        // computed for the ordinary world visible, even
+                        // when pass-through is nearly 100 percent.
+                        // A darker authored RGB pigment makes this layer
+                        // denser; clear glass stays more transparent.
+                        vec3 pigment=clamp(tint.rgb,vec3(0.0),vec3(1.0));
+                        float density=1.0-dot(pigment,
+                            vec3(.2126,.7152,.0722));
+                        float coating=clamp(.35+.40*density,.35,.75);
+                        float mirror_weight=pass*(1.0-fresnel)*
+                                            (1.0-coating);
+                        color=vec4(mix(glass_ldr,mirror_ldr*pigment,
+                                       mirror_weight),1.0);
                         return;
                     }
                 }
