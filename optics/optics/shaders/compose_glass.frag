@@ -149,13 +149,16 @@ void main()
                             vec2 border_ref=.5/vec2(textureSize(planar_reflection,0));
                             vec3 mirror_tint=clamp(camera.vp[3].rgb,
                                 vec3(0.0),vec3(1.0));
-                            vec3 through=texture(planar_reflection,
-                                clamp(reflected_uv+surface.shift,
-                                      border_ref,1.0-border_ref)).rgb*mirror_tint;
-                            vec3 sheen=texture(planar_reflection,
-                                clamp(reflected_uv-surface.shift*.4,
-                                      border_ref,1.0-border_ref)).rgb*
-                                      mirror_tint*.7;
+                            vec3 through=mirror_ldr,sheen=mirror_ldr*.7;
+                            if(back_material.b>.5) {
+                                through=texture(planar_reflection,
+                                    clamp(reflected_uv+surface.shift,
+                                          border_ref,1.0-border_ref)).rgb*mirror_tint;
+                                sheen=texture(planar_reflection,
+                                    clamp(reflected_uv-surface.shift*.4,
+                                          border_ref,1.0-border_ref)).rgb*
+                                          mirror_tint*.7;
+                            }
                             mirror_ldr=optics_glass_shaped(through,sheen,
                                 back_tint.rgb,back_tint.a,back_material.b,
                                 surface.fresnel);
@@ -191,8 +194,8 @@ void main()
             vec2(camera.right.w,camera.up.w),
             clamp(1.0+behind_material.g,1.001,2.0),
             behind_material.b);
-        vec3 through, sheen;
-        if(mirror_surface_z<1e29) {
+        vec3 through=background_ldr,sheen=background_ldr*.7;
+        if(behind_material.b>.5 && mirror_surface_z<1e29) {
             // Mirror coordinates are horizontally flipped relative to
             // the primary view; use the already-rendered mirror image.
             vec2 mirror_shift=vec2(-behind.shift.x,behind.shift.y);
@@ -201,7 +204,7 @@ void main()
                 mirror_shift,border,1.0-border)).rgb*mirror_tint;
             sheen=texture(planar_reflection,clamp(mirror_image_uv-
                 mirror_shift*.4,border,1.0-border)).rgb*mirror_tint*.7;
-        } else {
+        } else if(behind_material.b>.5) {
             through=shared_tonemap(texture(scene_hdr,
                 clamp(transmitted_uv+behind.shift,border,1.0-border)).rgb,
                 camera.forward.w);

@@ -29,7 +29,8 @@ optics_glass_profile optics_glass_shape(vec4 encoded_normal,vec3 incoming,
     f0*=f0;
     float edge=1.0-cosine;
     optics_glass_profile out_shape;
-    out_shape.fresnel=f0+(1.0-f0)*pow(edge,5.0);
+    float edge2=edge*edge;
+    out_shape.fresnel=f0+(1.0-f0)*edge2*edge2*edge;
     out_shape.shift=vec2(0.0);
     if(solid>.5) {
         vec3 ray=refract(incoming,n,1.0/ior);

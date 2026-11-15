@@ -56,10 +56,13 @@ void main()
             clamp(1.0+glass_material.g,1.001,2.0),
             glass_material.b);
         vec2 border=.5/vec2(textureSize(planar_reflection,0));
-        vec3 through=texture(planar_reflection,
-            clamp(reflected_uv+surface.shift,border,1.0-border)).rgb;
-        vec3 sheen=texture(planar_reflection,
-            clamp(reflected_uv-surface.shift*.4,border,1.0-border)).rgb*.7;
+        vec3 through=reflected,sheen=reflected*.7;
+        if(glass_material.b>.5) {
+            through=texture(planar_reflection,
+                clamp(reflected_uv+surface.shift,border,1.0-border)).rgb;
+            sheen=texture(planar_reflection,
+                clamp(reflected_uv-surface.shift*.4,border,1.0-border)).rgb*.7;
+        }
         reflected=optics_glass_shaped(through,sheen,glass_tint.rgb,
             glass_tint.a,glass_material.b,surface.fresnel);
     }
