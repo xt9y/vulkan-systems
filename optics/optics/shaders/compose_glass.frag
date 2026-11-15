@@ -61,7 +61,7 @@ void main()
     // A thin window is almost colorless. A solid receives modest volume
     // tint, not repeated face-by-face multiplication that turns it opaque.
     vec3 absorption=pow(clamp(tint.rgb,vec3(.05),vec3(1.0)),
-                        vec3(solid?.16:.025));
+                        vec3(solid?.04:.01));
     vec3 transmitted=background*absorption;
     float pass=clamp(tint.a,0.0,1.0);
     vec3 through=mix(tint.rgb,transmitted,pass);
@@ -72,12 +72,13 @@ void main()
         clamp(uv-shift*.4,border,1.0-border)).rgb*.7;
     vec3 radiance=mix(through,reflected,fresnel);
 
-    // The opaque HDR image contains no mirrors: those are composited
-    // after lighting. If this refracted view hits the planar mirror,
-    // sample the reflected camera in *its own projected coordinates*.
-    // Read linear HDR and apply the common tone mapper only once.
-    // camera.vp carries plane, center, and Y/Z axes/half extents here;
-    // no additional push constants or per-glass-pixel BVH queries.
+    // The mirror compositor uses reflected HDR at (1-mainUV.x, mainUV.y)
+    // followed by tonemapping and its material tint. Glass must use the
+    // SAME mapping and color transfer, evaluated at the refracted mirror
+    // hit in primary screen space; a reconstructed reflected-view basis
+    // produces incompatible orientation and incorrect mirror colors.
+    // The packed plane, center and Y extent define the mirror surface;
+    // Z tangent follows from cross(normal,Y). VP[3].rgb is mirror tint.
     if(camera.vp[1].w>.5) {
         vec4 plane=camera.vp[0];
         vec3 normal_m=plane.xyz;
@@ -92,55 +93,42 @@ void main()
             if(distance>.01) {
                 vec3 hit=surface_pos+travel_dir*distance;
                 vec3 rel=hit-camera.vp[1].xyz;
+                vec3 axis_z=normalize(cross(normal_m,camera.vp[2].xyz));
                 if(abs(dot(rel,camera.vp[2].xyz))<=camera.vp[2].w &&
-                   abs(dot(rel,camera.vp[3].xyz))<=camera.vp[3].w) {
-                    // Project the mirror hit into the primary camera
-                    // only to test whether opaque geometry blocks it.
+                   abs(dot(rel,axis_z))<=camera.vp[3].w) {
                     vec3 to_hit=hit-camera.eye.xyz;
-                    float primary_z=dot(to_hit,camera.forward.xyz);
-                    if(primary_z>.1) {
-                        vec2 primary_uv=vec2(
+                    float z=dot(to_hit,camera.forward.xyz);
+                    if(z>.1) {
+                        vec2 mirror_uv=vec2(
                             .5+.5*dot(to_hit,camera.right.xyz)/
-                                (primary_z*camera.right.w),
+                                (z*camera.right.w),
                             .5-.5*dot(to_hit,camera.up.xyz)/
-                                (primary_z*camera.up.w));
-                        if(all(greaterThanEqual(primary_uv,vec2(0.0))) &&
-                           all(lessThanEqual(primary_uv,vec2(1.0)))) {
-                            float opaque=texture(opaque_depth,primary_uv).r;
+                                (z*camera.up.w));
+                        if(all(greaterThanEqual(mirror_uv,vec2(0.0))) &&
+                           all(lessThanEqual(mirror_uv,vec2(1.0)))) {
+                            float opaque=texture(opaque_depth,mirror_uv).r;
                             float opaque_ndc=clamp((opaque-.1)/.9,0.0,1.0);
                             float opaque_z=100.0/
                                 max(1000.0-opaque_ndc*999.9,1e-5);
-                            if(opaque_z+.02>=primary_z) {
-                                // Reconstruct the same reflected view
-                                // orientation as scene_renderer's look_at().
-                                float eye_distance=dot(normal_m,camera.eye.xyz)+plane.w;
-                                vec3 reflected_eye=camera.eye.xyz-
-                                    2.0*eye_distance*normal_m;
-                                vec3 reflected_forward=reflect(
-                                    camera.forward.xyz,normal_m);
-                                vec3 reflected_up=reflect(camera.up.xyz,normal_m);
-                                vec3 reflected_right=normalize(cross(
-                                    reflected_forward,reflected_up));
-                                reflected_up=normalize(cross(
-                                    reflected_right,reflected_forward));
-                                vec3 in_reflection=hit-reflected_eye;
-                                float reflected_z=dot(
-                                    in_reflection,reflected_forward);
-                                if(reflected_z>.1) {
-                                    vec2 reflection_uv=vec2(
-                                        .5+.5*dot(in_reflection,reflected_right)/
-                                            (reflected_z*camera.right.w),
-                                        .5-.5*dot(in_reflection,reflected_up)/
-                                            (reflected_z*camera.up.w));
-                                    if(all(greaterThanEqual(reflection_uv,vec2(0.0))) &&
-                                       all(lessThanEqual(reflection_uv,vec2(1.0)))) {
-                                        vec3 mirror_hdr=texture(
-                                            planar_reflection_hdr,reflection_uv).rgb;
-                                        radiance=mix(radiance,
-                                            mirror_hdr*absorption,
-                                            pass*(1.0-fresnel));
-                                    }
-                                }
+                            if(opaque_z+.02>=z) {
+                                // Exact planar mirror orientation and
+                                // display pipeline: matching UV flip,
+                                // tonemap once, multiply mirror tint in
+                                // display space, then attenuate by glass.
+                                vec3 mirror_hdr=texture(planar_reflection_hdr,
+                                    vec2(1.0-mirror_uv.x,mirror_uv.y)).rgb;
+                                vec3 mirror_ldr=shared_tonemap(
+                                    mirror_hdr,camera.forward.w)*
+                                    clamp(camera.vp[3].rgb,vec3(0.0),vec3(1.0));
+                                vec3 glass_filter=pow(
+                                    clamp(tint.rgb,vec3(.05),vec3(1.0)),
+                                    vec3(solid?.04:.01));
+                                vec3 glass_ldr=shared_tonemap(
+                                    radiance,camera.forward.w);
+                                color=vec4(mix(glass_ldr,
+                                    mirror_ldr*glass_filter,
+                                    pass*(1.0-fresnel)),1.0);
+                                return;
                             }
                         }
                     }
