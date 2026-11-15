@@ -46,3 +46,12 @@ flipping primary-camera UVs), samples the reflected HDR image and applies
 the shared tone mapper once. The ordinary mirror keeps its existing LDR
 projection and shading. The additional reflection_hdr input is optional
 for hosts that do not require this glass/mirror combination.
+
+Glass refraction through a planar mirror now uses the **same tone-mapped
+reflection image and screen-space horizontal sampling convention as the
+ordinary planar mirror shader**. Analytic mirror-plane intersection only
+selects the already-visible mirror region behind the glass; bounded UV
+refraction shifts the sample slightly but does not magnify or invert it.
+The unused reflected-HDR descriptor and PCloud HDR-view accessor were
+removed. This is a fast single-interface approximation, not volumetric
+ray tracing, and nonplanar/multiple-mirror transmission remains limited.

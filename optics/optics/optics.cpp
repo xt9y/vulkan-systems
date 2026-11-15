@@ -47,8 +47,8 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
         throw std::invalid_argument("optics: missing presentation pass, frames or shaders");
     reset();
     try {
-        std::vector<vk::DescriptorSetLayoutBinding> bindings(19);
-        for(std::uint32_t i=0;i<19;++i) {
+        std::vector<vk::DescriptorSetLayoutBinding> bindings(18);
+        for(std::uint32_t i=0;i<18;++i) {
             bindings[i].binding=i;
             bindings[i].descriptorCount=1;
             bindings[i].descriptorType=(i>=6 && i<=11) || i==13 || i==15 ?
@@ -157,14 +157,6 @@ void compositor::create(vk::RenderPass pass,const std::vector<input>& frames,
             mirror.imageView=f.reflection;
             mirror.imageLayout=vk::ImageLayout::eGeneral;
             descriptors_.write_image(i,17,mirror);
-            // The display mirror uses the tone-mapped 8-bit reflection,
-            // but transmitted glass must sample the linear HDR reflection
-            // before the final, single application of tone mapping.
-            vk::DescriptorImageInfo mirror_hdr{};
-            mirror_hdr.sampler=hdr_sampler_;
-            mirror_hdr.imageView=f.reflection_hdr?f.reflection_hdr:f.reflection;
-            mirror_hdr.imageLayout=vk::ImageLayout::eGeneral;
-            descriptors_.write_image(i,18,mirror_hdr);
             for(std::uint32_t binding=0;binding<views.size();++binding) {
                 if(!views[binding])throw std::invalid_argument("optics: missing input view");
                 vk::DescriptorImageInfo image{};
