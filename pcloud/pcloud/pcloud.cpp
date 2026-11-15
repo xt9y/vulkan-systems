@@ -513,6 +513,10 @@ namespace pc
     {
         return get().reflections.at(image).ldr.view;
     }
+    vk::ImageView reflection_hdr_view(std::uint32_t image)
+    {
+        return get().reflections.at(image).hdr.view;
+    }
     targets reflection_images(std::uint32_t image)
     {
         const auto& r=get().reflections.at(image);

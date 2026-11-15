@@ -110,6 +110,7 @@ namespace pc
     void reflection_lighting(vk::CommandBuffer,std::uint32_t,const view_basis&);
     void reflection_tonemap(vk::CommandBuffer,std::uint32_t);
     vk::ImageView reflection_ldr_view(std::uint32_t);
+    vk::ImageView reflection_hdr_view(std::uint32_t);
     targets reflection_images(std::uint32_t);
 
     void updated(std::uint32_t);
