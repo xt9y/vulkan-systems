@@ -39,3 +39,10 @@ and the opaque depth buffer, then samples the existing reflected LDR image.
 This covers the planar mirror behind glass without any per-glass-pixel BVH
 queries. Non-planar or multiple simultaneous mirrors remain subject to the
 cheap glass compositor's screen-space limitations.
+
+Glass-through-planar-mirror correction: glass projects a transmitted
+mirror hit into the actual reflected camera (rather than horizontally
+flipping primary-camera UVs), samples the reflected HDR image and applies
+the shared tone mapper once. The ordinary mirror keeps its existing LDR
+projection and shading. The additional reflection_hdr input is optional
+for hosts that do not require this glass/mirror combination.

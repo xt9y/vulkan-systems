@@ -15,7 +15,7 @@ namespace optics {
 struct input {
     vk::ImageView lit{}, opaque_depth{};
     vk::ImageView normal{}, tint{}, material{}, material_depth{};
-    vk::ImageView probes{},hdr{},reflection{};
+    vk::ImageView probes{},hdr{},reflection{},reflection_hdr{};
 };
 // Triangle inputs and animation updates; BVH storage belongs to VulkanOptics.
 struct surface {
