@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 // Full-resolution planar mirror/window: raster-reflected world with
 // non-refracting, same-pixel transmission through single-panel glass.
 layout(location=0) in vec2 uv_in;
