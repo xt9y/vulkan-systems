@@ -103,7 +103,13 @@ void main()
                         vec3 mirror_ldr=texture(planar_reflection,
                             vec2(1.0-mirror_uv.x,mirror_uv.y)).rgb*
                             clamp(camera.vp[3].rgb,vec3(0.0),vec3(1.0));
-                        color=vec4(mix(glass_ldr,mirror_ldr*absorption,
+                        // Apply a visible layer of the authored glass
+                        // color to the mirror, just as to the ordinary
+                        // scene. High pass-through must not erase the
+                        // glass medium's color absorption.
+                        vec3 mirror_filter=absorption*mix(
+                            vec3(1.0),clamp(tint.rgb,vec3(0.0),vec3(1.0)),.25);
+                        color=vec4(mix(glass_ldr,mirror_ldr*mirror_filter,
                                         pass*(1.0-fresnel)),1.0);
                         return;
                     }
