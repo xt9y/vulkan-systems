@@ -74,6 +74,7 @@ void main()
     vec3 background_ldr=shared_tonemap(
         texture(scene_hdr,transmitted_uv).rgb,camera.forward.w);
     float pass=clamp(tint.a,0.0,1.0);
+    float mirror_surface_z=1e30;
     vec3 reflection_ldr=shared_tonemap(
         texture(scene_hdr,clamp(uv-shift*.4,border,1.0-border)).rgb*.7,
         camera.forward.w);
@@ -135,6 +136,7 @@ void main()
                                 back_material.b);
                         }
                         background_ldr=mirror_ldr;
+                        mirror_surface_z=mirror_z;
                     }
                 }
             }
@@ -146,8 +148,12 @@ void main()
     vec4 second_mask=texture(second_normal,transmitted_uv);
     float second_z=texture(second_depth,transmitted_uv).r;
     float opaque_z=texture(opaque_depth,transmitted_uv).r;
+    float second_ndc=clamp((second_z-.1)/.9,0.0,1.0);
+    float second_linear=100.0/
+        max(1000.0-999.9*second_ndc,1e-5);
     if(second_mask.a>.25 && second_mask.a<.75 &&
-       second_z>depth+.0001 && second_z<opaque_z+.0003) {
+       second_z>depth+.0001 && second_z<opaque_z+.0003 &&
+       second_linear+.02<mirror_surface_z) {
         vec4 behind_tint=texture(second_tint,transmitted_uv);
         vec4 behind_material=texture(second_material,transmitted_uv);
         background_ldr=optics_glass_layer(

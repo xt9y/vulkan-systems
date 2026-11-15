@@ -55,3 +55,17 @@ refraction shifts the sample slightly but does not magnify or invert it.
 The unused reflected-HDR descriptor and PCloud HDR-view accessor were
 removed. This is a fast single-interface approximation, not volumetric
 ray tracing, and nonplanar/multiple-mirror transmission remains limited.
+
+## Bounded optical layers
+The game may provide a second depth-peeled optical G-buffer for two
+front-facing glass surfaces in the primary camera, and an optical G-buffer
+for glass in the planar reflected camera. These are optional integration
+features of the host's rendering architecture; they add raster work but
+no per-glass-pixel BVH traversal. Normal scene transmission and mirror
+transmission share the same glass color function. The second primary
+layer is ignored behind the mirror plane; glass visible *in* the mirror
+comes from the reflected camera's optical G-buffer.
+
+Currently there are at most two primary glass layers and one reflected
+glass layer. Unlimited recursion and glass through secondary nonplanar
+mirrors are not provided by this fast path.
