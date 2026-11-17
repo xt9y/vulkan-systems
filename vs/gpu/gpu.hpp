@@ -1,0 +1,17 @@
+#pragma once
+#include <vs/gpu/device.hpp>
+#include <vs/gpu/buffer.hpp>
+#include <vs/gpu/light.hpp>
+#include <vs/gpu/face.hpp>
+#include <vs/gpu/resource.hpp>
+#include <vs/gpu/image.hpp>
+#include <vs/gpu/shader.hpp>
+#include <vs/gpu/descriptors.hpp>
+#include <vs/gpu/pipeline.hpp>
+#include <vs/gpu/compute.hpp>
+#include <vs/gpu/transfer.hpp>
+#include <vs/gpu/upload.hpp>
+#include <vs/gpu/graph.hpp>
+#include <vs/gpu/culler.hpp>
+#include <vs/gpu/texture_cache.hpp>
+#include <vs/gpu/timestamps.hpp>

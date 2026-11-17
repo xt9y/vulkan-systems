@@ -1,0 +1,18 @@
+#version 450
+// Count photons per world-space grid cell before compact storage.
+layout(local_size_x=128) in;
+struct Photon { vec4 position; vec4 power; uvec4 link; };
+layout(std430,set=0,binding=2) readonly buffer Raw { Photon raw[]; };
+layout(std430,set=0,binding=3) buffer Counts { uint counts[]; };
+layout(std430,set=0,binding=4) readonly buffer Counter { uint used; };
+layout(push_constant) uniform Parameters {
+    vec4 eye,right,up;
+    uvec4 params,config;
+    vec4 settings;
+} camera;
+void main()
+{
+    uint i=gl_GlobalInvocationID.x;
+    if(i>=min(used,camera.config.y))return;
+    atomicAdd(counts[raw[i].link.x],1u);
+}

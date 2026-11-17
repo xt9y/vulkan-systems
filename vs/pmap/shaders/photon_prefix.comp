@@ -1,0 +1,18 @@
+#version 450
+// Prefix sum over 4096 cells. Serial 4096-element scan is intentionally
+// bounded and avoids 8+ scan dispatches for this small Cornell-box grid.
+layout(local_size_x=1) in;
+layout(std430,set=0,binding=3) readonly buffer Counts { uint counts[]; };
+layout(std430,set=0,binding=6) buffer Offsets { uint offsets[]; };
+layout(std430,set=0,binding=7) buffer Cursors { uint cursors[]; };
+void main()
+{
+    uint sum=0u;
+    for(uint i=0u;i<4096u;++i)
+    {
+        offsets[i]=sum;
+        cursors[i]=sum;
+        sum+=counts[i];
+    }
+    offsets[4096]=sum;
+}

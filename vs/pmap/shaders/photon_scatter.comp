@@ -1,0 +1,21 @@
+#version 450
+// Parallel scatter: every cell's photons occupy a contiguous SSBO range.
+layout(local_size_x=128) in;
+struct Photon { vec4 position; vec4 power; uvec4 link; };
+layout(std430,set=0,binding=2) readonly buffer Raw { Photon raw[]; };
+layout(std430,set=0,binding=4) readonly buffer Counter { uint used; };
+layout(std430,set=0,binding=5) buffer Compact { Photon sorted[]; };
+layout(std430,set=0,binding=7) buffer Cursors { uint cursors[]; };
+layout(push_constant) uniform Parameters {
+    vec4 eye,right,up;
+    uvec4 params,config;
+    vec4 settings;
+} camera;
+void main()
+{
+    uint i=gl_GlobalInvocationID.x;
+    if(i>=min(used,camera.config.y))return;
+    Photon p=raw[i];
+    uint position=atomicAdd(cursors[p.link.x],1u);
+    sorted[position]=p;
+}

@@ -1,0 +1,192 @@
+# vs
+
+A compact C++20 Vulkan framework. All systems are implemented under `vs/`;
+one root `build.c` builds the library and 14 independent examples.
+
+## Architecture
+
+```text
+build.c                     library, dependencies, shaders, example targets
+vs/
+  vs.hpp                    optional umbrella header
+  app/                      window, GLFW event binding, Vulkan, swapchain
+  scene/                    shared asset/geometry/light/camera data types
+  assets/                   glTF/GLB, GPU assets, textures, Ozz animation
+  gpu/                      buffers, images, upload, shaders, compute, graph
+  render/                   raster, materials, draw calls, frames, targets
+  bvh/                      BLAS/TLAS and CPU/GPU acceleration
+  pmap/                     photon tracing and gathering
+  pcloud/                   probe cloud and global illumination
+  lumen/                    radiance cache, surface cards, screen-space GI
+  optics/                   glass, mirrors, reflections and caustics
+  editor/                   editor state, draw commands and callbacks
+  spatial/                  broadphase spatial queries
+  jobs/                     worker tasks and main-thread completion
+  network/                  UDP, secure sessions and streaming
+examples/
+  app.cpp                   direct W/S movement controls
+  editor.cpp                project-defined insert/edit/remove behavior
+  scene.cpp                 common scene used across GI algorithms
+  assets.cpp                glTF, textures and animation
+  gpu.cpp, render.cpp       compute and raster pipelines
+  bvh.cpp, pcloud.cpp       BVH and point-cloud GI
+  pmap.cpp, lumen.cpp       photon mapping and surface cache GI
+  optics.cpp               photon optics and caustics
+  spatial.cpp, jobs.cpp     broadphase and job scheduling
+  network.cpp              UDP loopback
+  shaders/                  demo-specific GLSL
+```
+
+**Your project owns the world.** VS has no global world manager, physics
+policy or entity lifetime. `vs::scene::data` is just a shared definition
+for meshes, instances, PBR materials, textures, animations, lights, surfaces
+and collision bounds. The renderers consume the same data; they own only
+their distinct GPU resources and caches.
+
+## Bind behavior, not key-state flags
+
+A project defines movement (or any other behavior) and binds it once.
+There is no `keys.up = ...` packet or manual keyboard polling.
+
+```cpp
+#include <vs/app/app.hpp>
+
+struct player {
+    float height=0;
+    void move_up(float dt)   {height+=dt*2;}
+    void move_down(float dt) {height-=dt*2;}
+};
+
+int main() {
+    vs::application app({.title="my project"});
+    player character;
+
+    app.on_hold('W',[&](float dt){character.move_up(dt);});
+    app.on_hold('S',[&](float dt){character.move_down(dt);});
+    app.on_press('R',[&]{character.height=0;});
+
+    app.run([&](vk::CommandBuffer cmd,std::uint32_t image) {
+        app.clear(cmd,image);
+    });
+}
+```
+
+`on_press` invokes once for a key press; optional `repeat=true` follows
+OS key-repeat. `on_release` runs when a key is released. `on_hold` runs while
+held and receives elapsed seconds,
+clamped after stalls. Values are GLFW-compatible key codes, so ASCII
+uppercase letters work directly. The app does not invent `move_up()`;
+the game supplies the implementation.
+
+## Editor behavior
+
+Register an insert action and bind each editable property to code that
+actually changes a project-owned object:
+
+```cpp
+vs::editor::session ui;
+ui.add("cube","Cube",[&] {
+    auto id=insert_cube();  // your own function
+    ui.bind(id,{"x","X",vs::editor::property_kind::real,0,-10,10,.1},
+        [&,id](double x){move_cube_x(id,x);});
+});
+ui.on_remove([&](std::uint64_t id){remove_object(id);});
+app.attach_editor(ui);
+```
+
+VS forwards F1 / Shift+Slash to toggle the editor, Tab to change cursor
+mode, Enter for insert, arrows for navigation and value changes, Escape
+to close, Delete to remove, and mouse picking/dragging. Your code does
+not define navigation booleans or switch on an event type.
+
+The editor itself is **not tied to GLFW**: custom hosts may call
+`ui.press(vs::editor::key::up)` and `ui.pointer(x,y,w,h,down)`.
+The application adapter forwards input and dispatches editor callbacks
+at each poll. After configuring the editor, your render loop still calls
+`vs::editor::vulkan::record(cmd,ui.paint(width,height),extent)`.
+
+`on_hold` gameplay callbacks are suppressed while the attached editor
+captures input, so editing an object does not also move the player.
+
+## Shared scene with independent algorithms
+
+```cpp
+#include <vs/vs.hpp>
+
+auto scene=std::make_shared<vs::scene::data>();
+scene->lights.push_back({{0,3,0},5,{1,1,1},3,true});
+
+// Optionally merge glTF-imported meshes/instances into this project scene.
+// Each algorithm consumes the SAME scene format (once GPU state exists).
+vs::pcloud::set_scene(scene);
+vs::pcloud::synchronize_scene();
+
+vs::pmap::mapper photons;
+photons.create(*scene,extent);
+
+vs::lumen::system lumen;
+lumen.create(render_pass,format,extent,{},*scene);
+```
+
+The project controls edits and save/load. After changing CPU scene
+data, synchronize updates after the relevant GPU fences: re-submit the
+PCloud scene, call `photons.set_scene(*scene)`, or
+`lumen.replace_scene(*scene)` (which requires GPU idle).
+
+One CPU representation does not mean a single GPU layout. PMap needs
+photon buffers and its tracing BVH; PCloud needs probes; Lumen needs
+surface cards and radiance history. These differences are algorithmic,
+not redundant world ownership. BVH nodes, ray tracing and GPU materials
+are shared when compatible.
+
+## Other subsystem usage
+
+```cpp
+// Execute work independently; finish its result on the main thread.
+vs::jobs::pool workers;
+workers.start();
+workers.submit([] {
+    auto result=compute_mesh();      // your code
+    return [result=std::move(result)] {install_mesh(result);};
+});
+workers.wait_idle();
+workers.commit();
+workers.stop();
+```
+
+For GPU rendering, `vs::render::renderer` records into an application-
+supplied command buffer. `vs::gpu::graph` manages declared Vulkan
+resource accesses; synchronization, buffer usage, and pipeline layouts
+remain explicit because they affect GPU correctness. `vs::spatial::index`
+uses a callback to visit broadphase hits; `vs::network` offers direct
+transport and session operations.
+
+## Build and run
+
+```sh
+git switch vs
+c build
+c build run vs-app
+c build run vs-editor
+c build run vs-pmap
+c build run vs-lumen
+c build run vs-assets path/to/model.glb
+```
+
+A normal build compiles shaders incrementally with `glslangValidator`.
+For CPU-only development without that tool:
+
+```sh
+VS_SKIP_SHADERS=1 c build
+```
+
+The PCloud demo generates a synthetic G-buffer rather than loading a
+full raster scene. The optics demo uses placeholder depth, not a final
+physically correct caustic composite. PMap currently supports one active
+emitter in its transport shader and Lumen's card implementation has a
+255-receiver limit.
+
+Dependencies: VulkanWrapper, fastgltf, Ozz, GLFW, MbedTLS, stb.
+
+**Validation:** The branch has been checked for source structure and API
+references but has not been compiled or GPU-tested in this environment.

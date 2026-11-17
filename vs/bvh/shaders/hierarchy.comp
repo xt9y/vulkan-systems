@@ -1,0 +1,173 @@
+#version 450
+layout(local_size_x=64,local_size_y=1,local_size_z=1) in;
+
+struct Node { vec4 lo; vec4 hi; uvec4 links; };
+struct Triangle { vec4 a; vec4 b; vec4 c; };
+struct Ray { vec4 origin_max; vec4 direction_min; };
+struct Instance { mat4 world_to_local; uvec4 metadata; };
+struct Offset { uvec4 values; };
+struct Hit {
+    uint instance;
+    uint primitive;
+    float distance;
+    uint visited;
+    uint flags;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+};
+
+layout(std430,set=0,binding=0) readonly buffer TopNodes { Node top_nodes[]; };
+layout(std430,set=0,binding=1) readonly buffer MeshNodes { Node mesh_nodes[]; };
+layout(std430,set=0,binding=2) readonly buffer Triangles { Triangle triangles[]; };
+layout(std430,set=0,binding=3) readonly buffer Instances { Instance instances[]; };
+layout(std430,set=0,binding=4) readonly buffer Rays { Ray rays[]; };
+layout(std430,set=0,binding=5) writeonly buffer Results { Hit hits[]; };
+layout(std430,set=0,binding=6) readonly buffer Roots { Offset roots[]; };
+layout(std430,set=0,binding=7) readonly buffer MeshOffsets { Offset mesh_offsets[]; };
+
+layout(push_constant) uniform Parameters
+{
+    uint count;
+    uint root_count;
+    uint any_hit;
+    uint unused;
+} pc;
+
+const uint invalid=0xffffffffu;
+
+bool box_hit(Ray ray,vec3 lo,vec3 hi,float limit)
+{
+    float near_t=ray.direction_min.w;
+    float far_t=min(ray.origin_max.w,limit);
+    for(int c=0;c<3;++c)
+    {
+        float d=ray.direction_min[c];
+        float o=ray.origin_max[c];
+        if(abs(d)<1e-9)
+        {
+            if(o<lo[c] || o>hi[c])return false;
+        }
+        else
+        {
+            float inv=1.0/d;
+            float a=(lo[c]-o)*inv;
+            float b=(hi[c]-o)*inv;
+            near_t=max(near_t,min(a,b));
+            far_t=min(far_t,max(a,b));
+            if(near_t>far_t)return false;
+        }
+    }
+    return true;
+}
+
+bool triangle_hit(Ray ray,Triangle tri,float limit,out float t)
+{
+    vec3 e1=tri.b.xyz-tri.a.xyz;
+    vec3 e2=tri.c.xyz-tri.a.xyz;
+    vec3 p=cross(ray.direction_min.xyz,e2);
+    float det=dot(e1,p);
+    if(abs(det)<1e-9)return false;
+    float inv=1.0/det;
+    vec3 offset=ray.origin_max.xyz-tri.a.xyz;
+    float u=dot(offset,p)*inv;
+    if(u<0.0 || u>1.0)return false;
+    vec3 q=cross(offset,e1);
+    float v=dot(ray.direction_min.xyz,q)*inv;
+    if(v<0.0 || u+v>1.0)return false;
+    t=dot(e2,q)*inv;
+    return t>=ray.direction_min.w &&
+           t<=min(ray.origin_max.w,limit);
+}
+
+void main()
+{
+    uint id=gl_GlobalInvocationID.x;
+    if(id>=pc.count)return;
+
+    Ray world=rays[id];
+    Hit best;
+    best.instance=invalid;
+    best.primitive=invalid;
+    best.distance=world.origin_max.w;
+    best.visited=0u;
+    best.flags=0u;
+    best.pad0=best.pad1=best.pad2=0u;
+
+    bool stop=false;
+    for(uint r=0u;r<pc.root_count && !stop;++r)
+    {
+        uint node_offset=roots[r].values.x;
+        uint instance_base=roots[r].values.y;
+        uint top_stack[64];
+        int top_count=1;
+        top_stack[0]=0u;
+
+        while(top_count>0 && !stop)
+        {
+            uint node_id=top_stack[--top_count];
+            Node top=top_nodes[node_offset+node_id];
+            ++best.visited;
+            if(!box_hit(world,top.lo.xyz,top.hi.xyz,best.distance))
+                continue;
+
+            if(top.links.w==invalid)
+            {
+                if(top_count+2>64){best.flags|=1u;break;}
+                top_stack[top_count++]=top.links.x;
+                top_stack[top_count++]=top.links.y;
+                continue;
+            }
+
+            uint instance_id=instance_base+top.links.w;
+            Instance object=instances[instance_id];
+            uint mesh=object.metadata.x;
+            uint mesh_offset=mesh_offsets[mesh].values.x;
+            uint triangle_offset=mesh_offsets[mesh].values.y;
+
+            // No renormalization: transformed directions preserve world-space
+            // ray parameter t even with non-uniform instance scaling.
+            Ray local;
+            local.origin_max=vec4(
+                (object.world_to_local*vec4(world.origin_max.xyz,1.0)).xyz,
+                world.origin_max.w);
+            local.direction_min=vec4(
+                (object.world_to_local*vec4(world.direction_min.xyz,0.0)).xyz,
+                world.direction_min.w);
+
+            uint mesh_stack[64];
+            int mesh_count=1;
+            mesh_stack[0]=0u;
+            while(mesh_count>0)
+            {
+                uint index=mesh_stack[--mesh_count];
+                Node n=mesh_nodes[mesh_offset+index];
+                ++best.visited;
+                if(!box_hit(local,n.lo.xyz,n.hi.xyz,best.distance))
+                    continue;
+                if(n.links.w!=invalid)
+                {
+                    float hit_t;
+                    if(triangle_hit(local,triangles[triangle_offset+n.links.w],
+                                    best.distance,hit_t) &&
+                       hit_t<best.distance)
+                    {
+                        best.distance=hit_t;
+                        best.instance=instance_id;
+                        best.primitive=n.links.w;
+                        if(pc.any_hit!=0u){stop=true;break;}
+                    }
+                }
+                else
+                {
+                    if(mesh_count+2>64){best.flags|=1u;break;}
+                    mesh_stack[mesh_count++]=n.links.x;
+                    mesh_stack[mesh_count++]=n.links.y;
+                }
+            }
+            if(best.flags!=0u)break;
+        }
+        if(best.flags!=0u)break;
+    }
+    hits[id]=best;
+}

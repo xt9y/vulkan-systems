@@ -1,0 +1,263 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "lighting_shared.glsl"
+layout(local_size_x=8,local_size_y=8) in;
+
+layout(set=0,binding=0) uniform sampler2D g_albedo;
+layout(set=0,binding=1) uniform sampler2D g_normal;
+layout(set=0,binding=2) uniform sampler2D g_material;
+layout(set=0,binding=3) uniform sampler2D g_depth;
+layout(set=0,binding=4) uniform sampler3D probes;
+layout(rgba16f,set=0,binding=5) writeonly uniform image2D hdr;
+
+struct PointLight {
+    vec4 position_range;
+    vec4 color_intensity;
+};
+layout(std430,set=0,binding=6) readonly buffer Lights { PointLight lights[]; };
+layout(std430,set=0,binding=7) readonly buffer Geometry { vec4 vertices[]; };
+// Matches VulkanBVH's tightly packed 32-byte std430 node.
+struct ShadowNode {
+    vec3 minimum;
+    uint next;
+    vec3 maximum;
+    uint first_and_count; // high 28 bits: triangle start; low 4: count
+};
+layout(std430,set=0,binding=8) readonly buffer ShadowTree { ShadowNode nodes[]; };
+// Conservative 16x16 light membership: two 32-bit words per tile.
+ // Bit index is the original light ID, preserving the server's ordering.
+layout(std430,set=0,binding=9) readonly buffer TileLights { uint tile_lights[]; };
+// Each light can reference a smaller BVH containing all geometry able to
+// occlude that light. A zero count means no possible shadow casters.
+layout(std430,set=0,binding=10) readonly buffer ShadowRanges { uvec2 shadow_ranges[]; };
+
+#define VS_TRANSMISSION_BINDING 11
+#include "transmission.glsl"
+#define VS_GLASS_VERTEX_BINDING 13
+#define VS_GLASS_NODE_BINDING 14
+#define VS_GLASS_FILTER_BINDING 15
+#define VS_EXACT_DIRECT_TRANSMISSION
+#include "segment.glsl"
+#define VS_LIGHT_SHAPE_BINDING 16
+#include "light_shape.glsl"
+layout(set=0,binding=12) readonly buffer VsPhotonCaustics {uint photon_flux[];};
+layout(push_constant) uniform Controls {
+    float exposure;
+    float padding0;
+    vec2 reserved1;
+    vec4 eye_near;
+    vec4 forward_far;
+    vec4 right_tan;
+    vec4 up_tan;
+    vec4 light_count;  // x: lights, y: -1 for reflected camera
+    vec4 sky;          // xyz: grid origin, w: spacing
+} pc;
+
+float linear_depth(float depth)
+{
+    float n=pc.eye_near.w,far_plane=pc.forward_far.w;
+    float d=clamp((depth-0.1)/0.9,0.0,1.0);
+    return n*far_plane/max(far_plane-d*(far_plane-n),1e-6);
+}
+vec3 world_position(ivec2 pixel,ivec2 extent,float depth)
+{
+    vec2 ndc=(vec2(pixel)+0.5)/vec2(extent)*2.0-1.0;
+    vec3 ray=pc.forward_far.xyz+
+        ndc.x*pc.right_tan.xyz*pc.right_tan.w-
+        ndc.y*pc.up_tan.xyz*pc.up_tan.w;
+    return pc.eye_near.xyz+ray*linear_depth(depth);
+}
+
+// Original Rogue point-light shadow test was a cubemap PCF pass.
+// This uses the same world triangles for explicit visibility on Vulkan.
+bool triangle_hit(vec3 origin,vec3 ray,float far_distance,vec3 a,vec3 e1,vec3 e2)
+{
+    vec3 p=cross(ray,e2);
+    float det=dot(e1,p);
+    if(abs(det)<0.00001)return false;
+    float inv=1.0/det;
+    vec3 t=origin-a;
+    float u=dot(t,p)*inv;
+    if(u<0.0 || u>1.0)return false;
+    vec3 q=cross(t,e1);
+    float v=dot(ray,q)*inv;
+    if(v<0.0 || u+v>1.0)return false;
+    float distance=dot(e2,q)*inv;
+    return distance>0.001 && distance<far_distance;
+}
+bool shadow_box(vec3 origin,vec3 inverse_direction,float distance,ShadowNode node)
+{
+    // Reciprocal ray direction is calculated once per shadow ray, not
+    // six component divisions for every BVH node examined.
+    vec3 p=(node.minimum.xyz-origin)*inverse_direction;
+    vec3 q=(node.maximum.xyz-origin)*inverse_direction;
+    vec3 lo=min(p,q),hi=max(p,q);
+    float t0=max(max(lo.x,lo.y),max(lo.z,0.0));
+    float t1=min(min(hi.x,hi.y),min(hi.z,distance));
+    return t0<=t1;
+}
+
+bool any_hit(vec3 origin,vec3 ray,float distance,uint light_index)
+{
+    uvec2 span=shadow_ranges[light_index];
+    uint first_node=min(span.x,uint(nodes.length()));
+    uint end_node=min(first_node+span.y,uint(nodes.length()));
+    uint vertex_count=uint(vertices.length());
+    if(first_node>=end_node || vertex_count==0u || distance<=0.001)
+        return false;
+    vec3 safe=vec3(
+        abs(ray.x)<1e-7?(ray.x<0.0?-1e-7:1e-7):ray.x,
+        abs(ray.y)<1e-7?(ray.y<0.0?-1e-7:1e-7):ray.y,
+        abs(ray.z)<1e-7?(ray.z<0.0?-1e-7:1e-7):ray.z);
+    vec3 inverse_direction=1.0/safe;
+    uint index=first_node;
+    while(index<end_node)
+    {
+        ShadowNode node=nodes[index];
+        if(!shadow_box(origin,inverse_direction,distance,node))
+        {
+            index=max(node.next,index+1u);
+            continue;
+        }
+        if((node.first_and_count & 15u)>0u)
+        {
+            uint first=(node.first_and_count >> 4u), end=min(first+(node.first_and_count & 15u),vertex_count/3u);
+            for(uint i=first;i<end;++i)
+            {
+                uint v=i*3u;
+                if(triangle_hit(origin,ray,distance,
+                    vertices[v].xyz,vertices[v+1u].xyz,vertices[v+2u].xyz))
+                    return true;
+            }
+        }
+        ++index;
+    }
+    return false;
+}
+// The viewmodel uses a reserved depth interval. It is still a physical
+// receiver of world light: walls and mirrors must occlude point lights.
+// Cache each light's visibility from the camera eye once per 8x8 workgroup
+// (64 threads), rather than tracing a BVH ray for every hand/gun pixel.
+shared uint has_viewmodel;
+shared uint viewmodel_occluded[64];
+void main()
+{
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy),size=imageSize(hdr);
+    bool inside=all(lessThan(p,size));
+    float depth=inside?texelFetch(g_depth,p,0).r:1.0;
+    bool viewmodel=inside && depth<0.1;
+    uint lane=gl_LocalInvocationIndex;
+    // 8x8 workgroups fall entirely within one 16x16 light-list tile.
+    uint tile_cols=(uint(size.x)+15u)/16u;
+    uint tile=(gl_WorkGroupID.y/2u)*tile_cols+
+              (gl_WorkGroupID.x/2u);
+    uvec2 light_mask=uvec2(tile_lights[tile*2u],
+                            tile_lights[tile*2u+1u]);
+    uint count=uint(bitCount(light_mask.x)+bitCount(light_mask.y));
+
+    // Reflection G-buffers contain no viewmodel; skip the shared-memory
+    // visibility cache in reflected-camera passes.
+    if(pc.light_count.y>=0.0 && count!=0u) {
+        if(lane==0u)has_viewmodel=0u;
+        barrier();
+        if(viewmodel)atomicOr(has_viewmodel,1u);
+        barrier();
+        if(has_viewmodel!=0u && lane<64u) {
+            bool selected=lane<32u?
+                ((light_mask.x>>(lane&31u))&1u)!=0u:
+                ((light_mask.y>>(lane&31u))&1u)!=0u;
+            if(selected) {
+                PointLight light=lights[lane];
+                vec3 to_light=light.position_range.xyz-pc.eye_near.xyz;
+                float dist2=dot(to_light,to_light);
+                uint blocked=0u;
+                if(dist2>0.000064 && light.color_intensity.w>0.0) {
+                    float dist=sqrt(dist2);
+                    vec3 ray=to_light/dist;
+                    blocked=any_hit(pc.eye_near.xyz+ray*0.004,ray,
+                                    dist-0.008,lane)?1u:0u;
+                }
+                viewmodel_occluded[lane]=blocked;
+            }
+        }
+        barrier(); // Cache ready before any viewmodel pixel reads it.
+    }
+    if(!inside)return;
+    // Sky pixels need no shading or world-position reconstruction.
+    if(depth>=0.999999) {
+        imageStore(hdr,p,vec4(0.0,0.0,0.0,1.0));
+        return;
+    }
+    vec3 eye=pc.eye_near.xyz;
+    vec3 fragment=world_position(p,size,depth);
+    vec4 albedo=texelFetch(g_albedo,p,0);
+    vec4 n=texelFetch(g_normal,p,0);
+    vec4 material=texelFetch(g_material,p,0);
+    vec3 N=normalize(n.rgb*2.0-1.0);
+    vec3 P=viewmodel?eye+normalize(fragment-eye)*0.5:fragment;
+    vec3 V=normalize(eye-P);
+    float roughness=clamp(material.r,0.045,1.0);
+    float metallic=clamp(material.g,0.0,1.0);
+    float ao=clamp(material.b,0.0,1.0);
+    vec3 color=vec3(0.0);
+    uint remaining_low=light_mask.x,remaining_high=light_mask.y;
+    for(uint candidate=0u;candidate<count;++candidate)
+    {
+        // Consume set bits in ascending light-ID order. This is exactly the
+        // order of the former tile list, including floating-point summation.
+        uint i;
+        if(remaining_low!=0u) {
+            i=uint(findLSB(remaining_low));
+            remaining_low&=remaining_low-1u;
+        } else {
+            i=32u+uint(findLSB(remaining_high));
+            remaining_high&=remaining_high-1u;
+        }
+        PointLight light=lights[i];
+        if(light.color_intensity.w==0.0 || all(equal(light.color_intensity.rgb,vec3(0.0))))
+            continue;
+        vec3 to_light=light.position_range.xyz-P;
+        float radius=light.position_range.w;
+        float distance_squared=dot(to_light,to_light);
+        if(distance_squared<0.000004 || distance_squared>=radius*radius)
+            continue;
+        // BRDF is identically zero for back-facing lights. Avoid the
+        // expensive triangle shadow query (and square root) in that case.
+        if(dot(N,to_light)<=0.0)continue;
+        float dist=sqrt(distance_squared);
+        vec3 direction=to_light/dist;
+        // Spotlight rejection must precede both opaque and transmissive
+        // shadow queries. The direction is already normalized.
+        float cone=vs_light_cone_direction(i,-direction);
+        if(cone<=0.0)continue;
+        float q=clamp(dist/radius,0.0,1.0);
+        float attenuation=1.0-q*q*(3.0-2.0*q);
+        // World surfaces keep exact per-pixel shadow queries. Hands and
+        // weapon use camera-local visibility cached once per tile/light:
+        // the viewmodel's reserved depth must not disable occlusion.
+        if(viewmodel) {
+            if(viewmodel_occluded[i]!=0u)continue;
+        } else if(any_hit(P+N*0.004,direction,dist-0.008,i))
+            continue;
+        vec3 transmission=vs_exact_light_transmission_ray(
+            i,light.position_range.xyz,-direction,dist,0.004);
+        color+=shared_brdf(albedo.rgb,metallic,roughness,N,V,direction)*
+            light.color_intensity.rgb*transmission*
+            cone*(light.color_intensity.w*attenuation);
+    }
+    // Rogue uses a 0.01 diffuse bounce factor after normalized probe sampling.
+    if(!viewmodel)
+        color+=albedo.rgb*(1.0-metallic)*ao*
+            shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*(0.01*min(1.0,roughness*1.5));
+    // Optional refracted photon deposits. The ordinary path binds a
+    // three-word empty buffer, so it performs no extra per-pixel work.
+    uint screen_words=uint(size.x)*uint(size.y)*3u;
+    if(uint(photon_flux.length())>=screen_words) {
+        uint base=(uint(p.x)+uint(p.y)*uint(size.x))*3u;
+        color+=vec3(float(photon_flux[base]),float(photon_flux[base+1u]),
+                    float(photon_flux[base+2u]))/3500.0;
+    }
+    vec3 emission=vec3(albedo.a,n.a,material.a);
+    color+=emission/max(vec3(1.0)-emission,vec3(1.0/255.0));
+    imageStore(hdr,p,vec4(max(color,vec3(0.0)),1.0));
+}
