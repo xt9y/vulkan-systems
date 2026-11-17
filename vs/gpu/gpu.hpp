@@ -13,5 +13,4 @@
 #include <vs/gpu/upload.hpp>
 #include <vs/gpu/graph.hpp>
 #include <vs/gpu/culler.hpp>
-#include <vs/gpu/texture_cache.hpp>
 #include <vs/gpu/timestamps.hpp>

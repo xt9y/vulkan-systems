@@ -24,37 +24,25 @@ static void shaders(void) {
 #endif
     const char* files[]={
         "vs/gpu/shaders/cull.comp",
-        "vs/bvh/shaders/bvh.comp","vs/bvh/shaders/hierarchy.comp",
         "vs/pcloud/shaders/cloud.comp","vs/pcloud/shaders/gi.comp",
         "vs/pcloud/shaders/light.comp","vs/pcloud/shaders/tone.comp",
         "vs/pcloud/shaders/fullscreen.vert","vs/pcloud/shaders/present.frag",
         "vs/visual/shaders/inspect.vert","vs/visual/shaders/inspect.frag",
-        "vs/pmap/shaders/photon_clear.comp","vs/pmap/shaders/photon_emit.comp",
-        "vs/pmap/shaders/photon_bin.comp","vs/pmap/shaders/photon_prefix.comp",
-        "vs/pmap/shaders/photon_scatter.comp","vs/pmap/shaders/photon_cache.comp",
-        "vs/pmap/shaders/photon_direct.comp","vs/pmap/shaders/photon_direct_filter.comp",
-        "vs/pmap/shaders/photon_gather.comp","vs/pmap/shaders/photon_temporal.comp",
-        "vs/pmap/shaders/photon_denoise.comp","vs/pmap/shaders/fullscreen.vert",
-        "vs/pmap/shaders/present.frag",
-        "vs/optics/shaders/compose.frag",
-        "vs/optics/shaders/compose_mirror.frag",
-        "vs/optics/shaders/compose_planar.frag",
-        "vs/optics/shaders/project.comp",
+        "vs/optics/shaders/legacy_compose.frag",
+        "vs/optics/shaders/legacy_compose_mirror.frag",
+        "vs/optics/shaders/legacy_compose_planar.frag",
+        "vs/optics/shaders/legacy_compose_glass.frag",
         "examples/shaders/particles.comp",
         "examples/shaders/triangle.vert",
         "examples/shaders/triangle.frag",
-        "examples/shaders/fullscreen.vert",
-        "examples/shaders/fullscreen.frag",
-        "examples/shaders/optics.frag"
     };
     const char* includes[]={
         "vs/pcloud/shaders/lighting_shared.glsl",
         "vs/lighting/shaders/transmission.glsl",
         "vs/lighting/shaders/segment.glsl",
         "vs/lighting/shaders/light_shape.glsl",
-        "vs/pmap/shaders/photon_scene.glsl",
-        "vs/optics/shaders/raytrace.glsl",
-        "vs/optics/shaders/compose_core.glsl",
+        "vs/optics/shaders/legacy_compose_core.glsl",
+        "vs/optics/shaders/legacy_raytrace.glsl",
         "vs/optics/shaders/legacy_glass_layer.glsl"
     };
     for(size_t i=0;i<sizeof(files)/sizeof(*files);++i) {
@@ -74,7 +62,7 @@ static void shaders(void) {
                dst.st_mtime<include_info.st_mtime)cached=0;
         if(cached)continue;
         snprintf(command,sizeof(command),
-            "glslangValidator -V -Ivs/pcloud/shaders -Ivs/pmap/shaders "
+            "glslangValidator -V -Ivs/pcloud/shaders "
             "-Ivs/lighting/shaders "
             "-Ivs/optics/shaders \"%s\" -o \"%s\"",file,destination);
         if(system(command)) {fprintf(stderr,"Failed compiling %s\n",file);exit(1);}
@@ -162,8 +150,8 @@ void build(C_Build* b) {
 
     // One self-contained executable per subsystem. All reuse the VS library.
     const char* demos[]={
-        "app","assets","scene","gpu","render","bvh","pcloud","pmap",
-        "lumen","optics","spatial","jobs","network","editor"
+        "app","assets","scene","gpu","render","bvh","pcloud",
+        "spatial","jobs","network","editor"
     };
     for(size_t i=0;i<sizeof(demos)/sizeof(*demos);++i) {
         char target_name[80],source[128];

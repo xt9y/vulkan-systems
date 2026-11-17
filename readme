@@ -1,6 +1,6 @@
 # vs
 
 A compact C++20 Vulkan framework. All systems are implemented under `vs/`;
-one root `build.c` builds the library and 14 independent examples.
+one root `build.c` builds the library and 11 independent examples.
 
 Dependencies: VulkanWrapper, fastgltf, Ozz, GLFW, MbedTLS, stb.

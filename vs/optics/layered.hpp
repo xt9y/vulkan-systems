@@ -1,6 +1,6 @@
 #pragma once
 #include <vk/vk.hpp>
-#include <vs/optics/optics.hpp>
+#include <vs/scene/scene.hpp>
 #include <vs/gpu/descriptors.hpp>
 #include <vs/gpu/buffer.hpp>
 #include <vs/gpu/resource.hpp>
@@ -9,6 +9,29 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
+
+
+namespace vs::optics {
+struct face_uv {
+    std::array<float,2> a{},b{},c{};
+    std::uint32_t texture_id=0;
+    std::uint32_t metallic_roughness_texture=0,normal_texture=0;
+    std::uint32_t occlusion_texture=0,emissive_texture=0;
+    float alpha_cutoff=0.f,base_alpha=1.f;
+};
+struct face_normals {
+    std::array<float,4> a{},b{},c{};
+};
+struct face_normal_update {
+    std::uint32_t face=0;
+    face_normals value{};
+};
+struct camera {
+    vk::util::math::mat4 view_projection;
+    vk::util::math::vec4 eye,right,up,forward;
+};
+static_assert(sizeof(camera)==128);
+}
 
 namespace vs::pcloud {struct shadow_geometry;}
 namespace vs::optics::layered {

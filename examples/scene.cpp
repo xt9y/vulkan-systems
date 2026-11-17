@@ -1,7 +1,4 @@
 #include <vs/scene/scene.hpp>
-#include <vs/pmap/pmap.hpp>
-#include <vs/pcloud/pcloud.hpp>
-#include <vs/lumen/lumen.hpp>
 #include <iostream>
 #include <memory>
 
@@ -28,11 +25,6 @@ int main() {
     scene.instances.push_back(object);
     scene.lights.push_back({{0,3,0},5,{1,.8f,.6f},2,true});
 
-    // No copying geometry to a PMap/PCloud/Lumen-specific scene.
-    // In a GPU application:
-    //   vs::pcloud::set_scene(project.scene);
-    //   mapper.create(*project.scene,extent); // PMap
-    //   lumen.create(pass,format,extent,settings,*project.scene);
     std::size_t triangles=0;
     vs::scene::each_surface(scene,[&](const vs::scene::surface& face) {
         triangles+=face.triangle?1u:2u;
