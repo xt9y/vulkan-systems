@@ -66,7 +66,7 @@ namespace vs::pcloud
             ::vs::gpu::owned_buffer triangles;
             ::vs::gpu::owned_buffer nodes;
             ::vs::gpu::owned_buffer shadow_light_ranges;
-            ::vs::gpu::owned_buffer transmission,empty_caustics;
+            ::vs::gpu::owned_buffer transmission;
             ::vs::gpu::owned_buffer glass_vertices,glass_nodes,glass_filters;
             std::uint32_t glass_node_count=0;
             ::vs::gpu::owned_buffer neighborhood_offsets;
@@ -282,7 +282,7 @@ namespace vs::pcloud
             data.gi_sets=std::make_unique<::vs::gpu::descriptors>();
             data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,9),count);
             data.lighting_sets=std::make_unique<::vs::gpu::descriptors>();
-            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,11),count*2);
+            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,10),count*2);
             data.tone_sets=std::make_unique<::vs::gpu::descriptors>();
             data.tone_sets->create(bindings(1,1,vk::ShaderStageFlagBits::eCompute),count*2);
             data.present_sets=std::make_unique<::vs::gpu::descriptors>();
@@ -338,11 +338,6 @@ namespace vs::pcloud
                 ::vs::lighting::transmission_header_words*sizeof(std::uint32_t),storage,memory);
             const std::array<std::uint32_t,::vs::lighting::transmission_header_words> no_glass{};
             vk::buffer::write(data.transmission,no_glass.data(),sizeof(no_glass));
-            data.empty_caustics=::vs::gpu::create_buffer(
-                3*sizeof(std::uint32_t),storage,memory);
-            const std::array<std::uint32_t,3> no_caustics{};
-            vk::buffer::write(data.empty_caustics,no_caustics.data(),
-                              sizeof(no_caustics));
             data.glass_vertices=::vs::gpu::create_buffer(
                 3*sizeof(std::array<float,4>),storage,memory);
             data.glass_nodes=::vs::gpu::create_buffer(sizeof(shadow_node),storage,memory);
@@ -416,14 +411,12 @@ namespace vs::pcloud
                 data.lighting_sets->write_buffer(i,10,vk::buffer::descriptor(data.shadow_light_ranges));
                 data.lighting_sets->write_buffer(i,11,vk::buffer::descriptor(data.transmission));
                 data.lighting_sets->write_buffer(i,12,
-                    vk::buffer::descriptor(data.empty_caustics));
-                data.lighting_sets->write_buffer(i,13,
                     vk::buffer::descriptor(data.glass_vertices));
-                data.lighting_sets->write_buffer(i,14,
+                data.lighting_sets->write_buffer(i,13,
                     vk::buffer::descriptor(data.glass_nodes));
-                data.lighting_sets->write_buffer(i,15,
+                data.lighting_sets->write_buffer(i,14,
                     vk::buffer::descriptor(data.glass_filters));
-                data.lighting_sets->write_buffer(i,16,
+                data.lighting_sets->write_buffer(i,15,
                     vk::buffer::descriptor(data.light_shapes));
                 std::array<vk::DescriptorImageInfo,2> tone{};
                 tone[0].sampler = data.sampler;
@@ -501,14 +494,12 @@ namespace vs::pcloud
             data.lighting_sets->write_buffer(i+count,11,
                 vk::buffer::descriptor(data.transmission));
             data.lighting_sets->write_buffer(i+count,12,
-                vk::buffer::descriptor(data.empty_caustics));
-            data.lighting_sets->write_buffer(i+count,13,
                 vk::buffer::descriptor(data.glass_vertices));
-            data.lighting_sets->write_buffer(i+count,14,
+            data.lighting_sets->write_buffer(i+count,13,
                 vk::buffer::descriptor(data.glass_nodes));
-            data.lighting_sets->write_buffer(i+count,15,
+            data.lighting_sets->write_buffer(i+count,14,
                 vk::buffer::descriptor(data.glass_filters));
-            data.lighting_sets->write_buffer(i+count,16,
+            data.lighting_sets->write_buffer(i+count,15,
                 vk::buffer::descriptor(data.light_shapes));
             vk::DescriptorImageInfo tone{};
             tone.sampler=data.sampler;
@@ -708,21 +699,21 @@ namespace vs::pcloud
                 vk::buffer::descriptor(data.glass_filters));
             data.lighting_sets->write_buffer(i,11,
                 vk::buffer::descriptor(data.transmission));
-            data.lighting_sets->write_buffer(i,13,
+            data.lighting_sets->write_buffer(i,12,
                 vk::buffer::descriptor(data.glass_vertices));
-            data.lighting_sets->write_buffer(i,14,
+            data.lighting_sets->write_buffer(i,13,
                 vk::buffer::descriptor(data.glass_nodes));
-            data.lighting_sets->write_buffer(i,15,
+            data.lighting_sets->write_buffer(i,14,
                 vk::buffer::descriptor(data.glass_filters));
             if(!data.reflections.empty()) {
                 const auto reflected=i+std::uint32_t(data.frames.size());
                 data.lighting_sets->write_buffer(reflected,11,
                     vk::buffer::descriptor(data.transmission));
-                data.lighting_sets->write_buffer(reflected,13,
+                data.lighting_sets->write_buffer(reflected,12,
                     vk::buffer::descriptor(data.glass_vertices));
-                data.lighting_sets->write_buffer(reflected,14,
+                data.lighting_sets->write_buffer(reflected,13,
                     vk::buffer::descriptor(data.glass_nodes));
-                data.lighting_sets->write_buffer(reflected,15,
+                data.lighting_sets->write_buffer(reflected,14,
                     vk::buffer::descriptor(data.glass_filters));
             }
             data.frames[i].dirty=true;
@@ -1120,20 +1111,6 @@ namespace vs::pcloud
         }
     }
 
-    void set_caustics(const std::vector<vk::Buffer>& per_image)
-    {
-        auto& state=get();
-        if(!per_image.empty() && per_image.size()!=state.frames.size())
-            throw std::invalid_argument("pc: caustic image count mismatch");
-        for(std::uint32_t i=0;i<state.frames.size();++i) {
-            if(per_image.empty() || !per_image[i])
-                state.lighting_sets->write_buffer(i,12,
-                    vk::buffer::descriptor(state.empty_caustics));
-            else
-                state.lighting_sets->write_buffer(i,12,
-                    vk::DescriptorBufferInfo{per_image[i],0,VK_WHOLE_SIZE});
-        }
-    }
     shadow_geometry opaque_shadows()
     {
         const auto& state=get();
@@ -1185,7 +1162,6 @@ namespace vs::pcloud
         data.nodes.reset();
         data.shadow_light_ranges.reset();
         data.transmission.reset();
-        data.empty_caustics.reset();
         data.glass_vertices.reset();
         data.glass_nodes.reset();
         data.glass_filters.reset();

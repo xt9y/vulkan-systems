@@ -116,10 +116,6 @@ namespace vs::pcloud
     };
     // Borrow the exact live data; no CPU readback or alternate simulation.
     inspection_resources inspect(std::uint32_t image);
-    // Optional photon-caustic screen buffers. The source remains owned by the
-    // VS photon projector. Empty disables the effect without allocation.
-    // Call while submitted GPU work is idle.
-    void set_caustics(const std::vector<vk::Buffer>& per_image);
     // Render the same opaque PCloud lighting from a mirrored raster camera.
     // Uses a second full-resolution G-buffer, existing probe field and shadow
     // BVH, and a separate per-image HDR/LDR target. No ray-traced primary hit.
