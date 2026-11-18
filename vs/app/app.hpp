@@ -26,6 +26,15 @@ public:
     frame begin_frame(); // empty command while minimized/recreating swapchain
     void present(frame);
     void resize();
+    // Safe boundary for replacing shared scene GPU resources/descriptors.
+    // Waits for FPS renderer submissions, not the entire Vulkan device.
+    void synchronize_frames() {frames_.wait_all();}
+    std::uint64_t completed_serial() const {
+        return frames_.completed_serial();
+    }
+    std::uint64_t submitted_serial() const noexcept {
+        return frames_.submitted_serial();
+    }
     // Register behavior, not one bool per key or per-frame polling.
     // Key codes use GLFW values; ASCII capitals ('W') work directly.
     void on_press(int key,std::function<void()> action,bool repeat=false);

@@ -23,6 +23,9 @@ public:
     void resize(std::uint32_t image_count);
     // Wait for the current frame fence before modifying resources it may use.
     void wait();
+    // Synchronize only this renderer's in-flight graphics submissions.
+    // Does not stall unrelated compute/transfer queues like deviceWaitIdle.
+    void wait_all();
     // True when every submitted frame has finished.
     bool idle() const;
     // Monotonic queue submission/completion serials for safe page retirement.

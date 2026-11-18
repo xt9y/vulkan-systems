@@ -44,6 +44,18 @@ void frame_scheduler::wait() {
         throw std::runtime_error("frame fence wait failed");
     completed_=std::max(completed_,frames_[next_].serial);
 }
+void frame_scheduler::wait_all() {
+    if(frames_.empty())return;
+    std::vector<vk::Fence> fences;
+    fences.reserve(frames_.size());
+    for(const auto& frame:frames_)
+        if(frame.fence)fences.push_back(frame.fence);
+    if(!fences.empty() &&
+       vk::device::get()->handle.waitForFences(fences,true,UINT64_MAX)
+           !=vk::Result::eSuccess)
+        throw std::runtime_error("Render frame fence wait failed");
+    completed_=submitted_;
+}
 bool frame_scheduler::idle() const {
     auto device=vk::device::get()->handle;
     for(const auto& frame:frames_)
