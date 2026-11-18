@@ -34,7 +34,27 @@ namespace vs::render
             ::vs::gpu::owned_buffer next_indices(transfers.add(
                 indices,index_bytes,vk::BufferUsageFlagBits::eIndexBuffer));
             vertices_=std::move(next_vertices);
+            borrowed_vertices_={};
             indices_=std::move(next_indices);
+            index_count_=index_count;
+            index_type_=index_type;
+        }
+
+        // Reuse an existing immutable vertex stream for simplified index LODs.
+        // The source geometry must outlive the index-only variant.
+        void upload_indices(::vs::gpu::upload::batch& transfers,
+                            const geometry& source,
+                            const void* indices,std::size_t index_bytes,
+                            std::uint32_t index_count,
+                            vk::IndexType index_type=vk::IndexType::eUint32)
+        {
+            if(!source.vertex_buffer() || !indices || !index_bytes ||
+               !index_count || index_bytes%index_count)
+                throw std::invalid_argument("Invalid LOD index upload");
+            indices_=transfers.add(indices,index_bytes,
+                vk::BufferUsageFlagBits::eIndexBuffer);
+            vertices_.reset();
+            borrowed_vertices_=source.vertex_buffer();
             index_count_=index_count;
             index_type_=index_type;
         }
@@ -42,8 +62,8 @@ namespace vs::render
         mesh view(std::uint32_t vertex_binding=0) const
         {
             mesh result{};
-            if(vertices_.handle)
-                result.streams.push_back({vertex_binding,vertices_.handle,0});
+            if(vertex_buffer())
+                result.streams.push_back({vertex_binding,vertex_buffer(),0});
             result.index_buffer=indices_.handle;
             result.index_type=index_type_;
             result.index_count=index_count_;
@@ -54,13 +74,17 @@ namespace vs::render
         {
             vertices_.reset();
             indices_.reset();
+            borrowed_vertices_={};
             index_count_=0;
         }
-        vk::Buffer vertex_buffer() const noexcept {return vertices_.handle;}
+        vk::Buffer vertex_buffer() const noexcept {
+            return vertices_.handle ? vertices_.handle : borrowed_vertices_;
+        }
         vk::Buffer index_buffer() const noexcept {return indices_.handle;}
         std::uint32_t index_count() const noexcept {return index_count_;}
     private:
         ::vs::gpu::owned_buffer vertices_,indices_;
+        vk::Buffer borrowed_vertices_{};
         std::uint32_t index_count_=0;
         vk::IndexType index_type_=vk::IndexType::eUint32;
     };
