@@ -25,6 +25,7 @@
 #include <limits>
 #include <optional>
 #include <cstring>
+#include <iostream>
 namespace vs::pcloud
 {
     namespace
