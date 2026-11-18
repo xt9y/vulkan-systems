@@ -1191,31 +1191,46 @@ namespace vs::pcloud
     }
 
     void update_dynamic_geometry(std::uint32_t image,
-                                 const std::vector<triangle>& faces)
+                                 const std::vector<triangle>& faces,
+                                 const std::vector<shadow_sphere>& spheres)
     {
         using namespace vk::util::math;
         auto& data=get();
         if(!data.snapshot) return;
         auto& frame=data.frames.at(image);
 
-        if(data.dynamic_order.size()!=faces.size()) {
+        const auto primitive_count=faces.size()+spheres.size();
+        if(data.dynamic_order.size()!=primitive_count) {
             std::vector<std::array<float,4>> initial;
-            initial.reserve(faces.size()*3u);
+            initial.reserve(primitive_count*3u);
             for(std::uint32_t i=0;i<faces.size();++i) {
                 const auto& t=faces[i];
                 initial.push_back({t.a.x,t.a.y,t.a.z,float(i)});
                 initial.push_back({t.b.x,t.b.y,t.b.z,0.f});
                 initial.push_back({t.c.x,t.c.y,t.c.z,0.f});
             }
+            for(std::size_t i=0;i<spheres.size();++i) {
+                const auto& ball=spheres[i];
+                const auto p=ball.center;
+                const float r=std::max(ball.radius,.001f);
+                const vec3 extent{r,r,r};
+                const vec3 lo=p-extent,hi=p+extent;
+                initial.push_back({lo.x,lo.y,lo.z,float(faces.size()+i)});
+                initial.push_back({hi.x,hi.y,hi.z,0.f});
+                initial.push_back({p.x,p.y,p.z,0.f});
+            }
             data.dynamic_topology=::vs::bvh::build_stackless(initial);
-            data.dynamic_order.resize(faces.size());
-            for(std::size_t i=0;i<faces.size();++i)
+            // A topology change invalidates every image's previous node links,
+            // even if the new tree happens to contain the same node count.
+            for(auto& frame:data.frames)frame.dynamic_refit.clear();
+            data.dynamic_order.resize(primitive_count);
+            for(std::size_t i=0;i<primitive_count;++i)
                 data.dynamic_order[i]=std::uint32_t(initial[i*3u][3]);
         }
 
         auto& vertices=frame.dynamic_cpu;
         vertices.clear();
-        vertices.reserve(faces.size()*3u);
+        vertices.reserve(primitive_count*3u);
         collision_box bounds{};
         const float inf=std::numeric_limits<float>::infinity();
         bounds.minimum={inf,inf,inf};
@@ -1234,12 +1249,25 @@ namespace vs::pcloud
                 std::max(bounds.maximum.z,p.z)};
         };
         for(const auto original:data.dynamic_order) {
-            const auto& f=faces.at(original);
-            include(f.a);include(f.b);include(f.c);
-            vertices.push_back({f.a.x,f.a.y,f.a.z,0.f});
-            const vec3 u=f.b-f.a,v=f.c-f.a;
-            vertices.push_back({u.x,u.y,u.z,0.f});
-            vertices.push_back({v.x,v.y,v.z,0.f});
+            if(original<faces.size()) {
+                const auto& f=faces[original];
+                include(f.a);include(f.b);include(f.c);
+                vertices.push_back({f.a.x,f.a.y,f.a.z,0.f});
+                const vec3 u=f.b-f.a,v=f.c-f.a;
+                vertices.push_back({u.x,u.y,u.z,0.f});
+                vertices.push_back({v.x,v.y,v.z,0.f});
+            } else {
+                const auto& sphere=spheres.at(original-faces.size());
+                if(!std::isfinite(sphere.radius) || sphere.radius<=0.f)
+                    throw std::runtime_error("pc: invalid animated sphere radius");
+                const vec3 r{sphere.radius,sphere.radius,sphere.radius};
+                include(sphere.center-r);
+                include(sphere.center+r);
+                vertices.push_back({sphere.center.x,sphere.center.y,
+                                    sphere.center.z,-sphere.radius});
+                vertices.push_back({0.f,0.f,0.f,0.f});
+                vertices.push_back({0.f,0.f,0.f,0.f});
+            }
         }
 
         auto& nodes=frame.dynamic_refit;
@@ -1259,11 +1287,18 @@ namespace vs::pcloud
                     const std::size_t at=(std::size_t(first)+k)*3u;
                     const auto& p=vertices.at(at);
                     const vec3 a{p[0],p[1],p[2]};
-                    const auto& e1=vertices.at(at+1u);
-                    const auto& e2=vertices.at(at+2u);
-                    extend(a);
-                    extend(a+vec3{e1[0],e1[1],e1[2]});
-                    extend(a+vec3{e2[0],e2[1],e2[2]});
+                    if(p[3]<0.f) {
+                        const float radius=-p[3];
+                        const vec3 extent{radius,radius,radius};
+                        extend(a-extent);
+                        extend(a+extent);
+                    } else {
+                        const auto& e1=vertices.at(at+1u);
+                        const auto& e2=vertices.at(at+2u);
+                        extend(a);
+                        extend(a+vec3{e1[0],e1[1],e1[2]});
+                        extend(a+vec3{e2[0],e2[1],e2[2]});
+                    }
                 }
             } else {
                 for(std::size_t child=j+1u;child<node.next;
@@ -1336,7 +1371,7 @@ namespace vs::pcloud
         if(frame.dirty)return;
         const bool had=frame.has_dynamic_bounds;
         const auto previous=frame.dynamic_bounds;
-        const bool has=!faces.empty();
+        const bool has=primitive_count!=0;
         frame.changed_count=0;
         if(!had && !has)return;
         // Dynamic direct shadows remain exact every frame. Only diffuse GI

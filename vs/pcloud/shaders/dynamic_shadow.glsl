@@ -49,8 +49,23 @@ bool vs_dynamic_hit(vec3 origin,vec3 ray,float distance)
             uint end=min(first+count,vertex_count/3u);
             for(uint i=first;i<end;++i) {
                 uint v=i*3u;
-                if(vs_dynamic_triangle_hit(origin,ray,distance,
-                    vs_dynamic_vertices[v].xyz,
+                vec4 primitive=vs_dynamic_vertices[v];
+                if(primitive.w<0.0) {
+                    // The same BVH stores animated bone spheres and triangles.
+                    vec3 delta=origin-primitive.xyz;
+                    float radius=-primitive.w;
+                    float c=dot(delta,delta)-radius*radius;
+                    // A receiver inside a coarse sphere must not self-shadow.
+                    if(c>0.0) {
+                        float half_b=dot(delta,ray);
+                        float discriminant=half_b*half_b-c;
+                        if(half_b<0.0 && discriminant>=0.0) {
+                            float entry=-half_b-sqrt(discriminant);
+                            if(entry>0.001 && entry<distance)return true;
+                        }
+                    }
+                } else if(vs_dynamic_triangle_hit(origin,ray,distance,
+                    primitive.xyz,
                     vs_dynamic_vertices[v+1u].xyz,
                     vs_dynamic_vertices[v+2u].xyz))
                     return true;

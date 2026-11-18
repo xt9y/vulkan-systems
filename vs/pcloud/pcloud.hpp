@@ -93,10 +93,15 @@ namespace vs::pcloud
                 const configuration& shaders={});
     void set_scene(std::shared_ptr<const ::vs::scene::data>);
     void synchronize_scene();
-    // Update animated world-space triangles for one acquired frame image.
-    // Static probe samples and the opaque BVH remain unchanged.
+    struct shadow_sphere {
+        vec3 center{};
+        float radius=0.f;
+    };
+    // Animated shadow triangles and compact bone spheres share one BVH.
+    // The static scene and probe samples remain unchanged.
     void update_dynamic_geometry(std::uint32_t image,
-                                 const std::vector<triangle>& triangles);
+                                 const std::vector<triangle>& triangles,
+                                 const std::vector<shadow_sphere>& spheres={});
     // Update light color/intensity without rebuilding unchanged scene geometry.
     // Position, radius, active mask and light count must be unchanged.
     void update_lights(const std::vector<light>&);
