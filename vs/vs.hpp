@@ -1,6 +1,8 @@
 #pragma once
 // Single public entry point. All implementations are owned by vs/.
 #include <vs/scene/scene.hpp>
+#include <vs/scene/environment.hpp>
+#include <vs/scene/regions.hpp>
 #include <vs/assets/model.hpp>
 #include <vs/assets/animation.hpp>
 #include <vs/assets/gpu_assets.hpp>
@@ -13,8 +15,12 @@
 #include <vs/pcloud/pcloud.hpp>
 #include <vs/optics/layered.hpp>
 #include <vs/spatial/index.hpp>
+#include <vs/spatial/world.hpp>
+#include <vs/spatial/regions.hpp>
+#include <vs/spatial/paged_index.hpp>
 #include <vs/jobs/pool.hpp>
 #include <vs/network/network.hpp>
+#include <vs/network/region.hpp>
 #include <vs/editor/editor.hpp>
 #include <vs/editor/widgets.hpp>
 #include <vs/visual/inspector.hpp>
