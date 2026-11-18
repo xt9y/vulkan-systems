@@ -1157,6 +1157,230 @@ namespace vs::pcloud
         }
     }
 
+    void update_dynamic_geometry(std::uint32_t image,
+                                 const std::vector<triangle>& faces)
+    {
+        using namespace vk::util::math;
+        auto& data=get();
+        if(!data.snapshot) return;
+        auto& frame=data.frames.at(image);
+
+        if(data.dynamic_order.size()!=faces.size()) {
+            std::vector<std::array<float,4>> initial;
+            initial.reserve(faces.size()*3u);
+            for(std::uint32_t i=0;i<faces.size();++i) {
+                const auto& t=faces[i];
+                initial.push_back({t.a.x,t.a.y,t.a.z,float(i)});
+                initial.push_back({t.b.x,t.b.y,t.b.z,0.f});
+                initial.push_back({t.c.x,t.c.y,t.c.z,0.f});
+            }
+            data.dynamic_topology=::vs::bvh::build_stackless(initial);
+            data.dynamic_order.resize(faces.size());
+            for(std::size_t i=0;i<faces.size();++i)
+                data.dynamic_order[i]=std::uint32_t(initial[i*3u][3]);
+        }
+
+        std::vector<std::array<float,4>> vertices;
+        vertices.reserve(faces.size()*3u);
+        collision_box bounds{};
+        const float inf=std::numeric_limits<float>::infinity();
+        bounds.minimum={inf,inf,inf};
+        bounds.maximum={-inf,-inf,-inf};
+        const auto include=[&](vec3 p) {
+            if(!std::isfinite(p.x) || !std::isfinite(p.y) ||
+               !std::isfinite(p.z))
+                throw std::runtime_error("pc: non-finite animated geometry");
+            bounds.minimum={
+                std::min(bounds.minimum.x,p.x),
+                std::min(bounds.minimum.y,p.y),
+                std::min(bounds.minimum.z,p.z)};
+            bounds.maximum={
+                std::max(bounds.maximum.x,p.x),
+                std::max(bounds.maximum.y,p.y),
+                std::max(bounds.maximum.z,p.z)};
+        };
+        for(const auto original:data.dynamic_order) {
+            const auto& f=faces.at(original);
+            include(f.a);include(f.b);include(f.c);
+            vertices.push_back({f.a.x,f.a.y,f.a.z,0.f});
+            const vec3 u=f.b-f.a,v=f.c-f.a;
+            vertices.push_back({u.x,u.y,u.z,0.f});
+            vertices.push_back({v.x,v.y,v.z,0.f});
+        }
+
+        auto nodes=data.dynamic_topology;
+        for(std::size_t j=nodes.size();j-->0;) {
+            auto& node=nodes[j];
+            vec3 lo{inf,inf,inf},hi{-inf,-inf,-inf};
+            const auto extend=[&](vec3 p) {
+                lo={std::min(lo.x,p.x),std::min(lo.y,p.y),std::min(lo.z,p.z)};
+                hi={std::max(hi.x,p.x),std::max(hi.y,p.y),std::max(hi.z,p.z)};
+            };
+            const std::uint32_t count=node.first_and_count&15u;
+            if(count) {
+                const std::uint32_t first=node.first_and_count>>4u;
+                for(std::uint32_t k=0;k<count;++k) {
+                    const std::size_t at=(std::size_t(first)+k)*3u;
+                    const auto& p=vertices.at(at);
+                    const vec3 a{p[0],p[1],p[2]};
+                    const auto& e1=vertices.at(at+1u);
+                    const auto& e2=vertices.at(at+2u);
+                    extend(a);
+                    extend(a+vec3{e1[0],e1[1],e1[2]});
+                    extend(a+vec3{e2[0],e2[1],e2[2]});
+                }
+            } else {
+                for(std::size_t child=j+1u;child<node.next;
+                    child=nodes[child].next) {
+                    const auto& n=nodes.at(child);
+                    extend({n.minimum[0],n.minimum[1],n.minimum[2]});
+                    extend({n.maximum[0],n.maximum[1],n.maximum[2]});
+                }
+            }
+            if(std::isfinite(lo.x)) {
+                node.minimum={lo.x-.0001f,lo.y-.0001f,lo.z-.0001f};
+                node.maximum={hi.x+.0001f,hi.y+.0001f,hi.z+.0001f};
+            }
+        }
+
+        const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
+        const auto host=vk::MemoryPropertyFlagBits::eHostVisible |
+                        vk::MemoryPropertyFlagBits::eHostCoherent;
+        const auto ensure=[&](::vs::gpu::owned_buffer& buffer,std::size_t bytes) {
+            if(buffer.size<bytes)
+                buffer=::vs::gpu::create_buffer(
+                    std::max(bytes,std::size_t(buffer.size)*2u),storage,host);
+        };
+        const auto vertex_bytes=vertices.size()*sizeof(std::array<float,4>);
+        ensure(frame.dynamic_vertices,std::max<std::size_t>(vertex_bytes,48));
+        if(vertex_bytes)
+            vk::buffer::write(frame.dynamic_vertices,vertices.data(),vertex_bytes);
+        const auto node_bytes=16u+nodes.size()*sizeof(shadow_node);
+        ensure(frame.dynamic_nodes,std::max<std::size_t>(node_bytes,16u+sizeof(shadow_node)));
+        std::vector<std::uint8_t> node_packet(node_bytes,0u);
+        const std::array<std::uint32_t,4> counts{
+            std::uint32_t(nodes.size()),std::uint32_t(vertices.size()),0u,0u};
+        std::memcpy(node_packet.data(),counts.data(),sizeof(counts));
+        if(!nodes.empty())
+            std::memcpy(node_packet.data()+16,nodes.data(),
+                        nodes.size()*sizeof(shadow_node));
+        vk::buffer::write(frame.dynamic_nodes,node_packet.data(),node_packet.size());
+        data.cloud_sets->write_buffer(image,6,vk::buffer::descriptor(frame.dynamic_vertices));
+        data.cloud_sets->write_buffer(image,7,vk::buffer::descriptor(frame.dynamic_nodes));
+        data.gi_sets->write_buffer(image,10,vk::buffer::descriptor(frame.dynamic_vertices));
+        data.gi_sets->write_buffer(image,11,vk::buffer::descriptor(frame.dynamic_nodes));
+        data.lighting_sets->write_buffer(image,16,vk::buffer::descriptor(frame.dynamic_vertices));
+        data.lighting_sets->write_buffer(image,17,vk::buffer::descriptor(frame.dynamic_nodes));
+        if(!data.reflections.empty()) {
+            const std::uint32_t reflected=image+std::uint32_t(data.frames.size());
+            data.lighting_sets->write_buffer(reflected,16,
+                vk::buffer::descriptor(frame.dynamic_vertices));
+            data.lighting_sets->write_buffer(reflected,17,
+                vk::buffer::descriptor(frame.dynamic_nodes));
+        }
+
+        const bool had=frame.has_dynamic_bounds;
+        const auto previous=frame.dynamic_bounds;
+        const bool has=!faces.empty();
+        frame.dynamic_bounds=bounds;
+        frame.has_dynamic_bounds=has;
+        frame.changed_count=0;
+        if(!had && !has)return;
+
+        const auto intersects=[&](vec3 point,vec3 end,const collision_box& box) {
+            const vec3 direction=end-point;
+            float entry=0.f,exit=1.f;
+            for(int axis=0;axis<3;++axis) {
+                const float d=direction[axis];
+                const float min=box.minimum[axis]-.01f;
+                const float max=box.maximum[axis]+.01f;
+                if(std::abs(d)<1e-8f) {
+                    if(point[axis]<min || point[axis]>max)return false;
+                } else {
+                    float a=(min-point[axis])/d,b=(max-point[axis])/d;
+                    if(a>b)std::swap(a,b);
+                    entry=std::max(entry,a);
+                    exit=std::min(exit,b);
+                    if(entry>exit)return false;
+                }
+            }
+            return true;
+        };
+        std::vector<std::uint32_t> affected;
+        affected.reserve(data.sample_positions.size()/8u+1u);
+        vec3 dirty_min{inf,inf,inf},dirty_max{-inf,-inf,-inf};
+        const auto dirty=[&](vec3 p,float reach) {
+            const vec3 offset{reach,reach,reach};
+            const vec3 lo=p-offset,hi=p+offset;
+            dirty_min={std::min(dirty_min.x,lo.x),
+                       std::min(dirty_min.y,lo.y),
+                       std::min(dirty_min.z,lo.z)};
+            dirty_max={std::max(dirty_max.x,hi.x),
+                       std::max(dirty_max.y,hi.y),
+                       std::max(dirty_max.z,hi.z)};
+        };
+        if(had) {
+            dirty(previous.minimum,bounce_reach);
+            dirty(previous.maximum,bounce_reach);
+        }
+        if(has) {
+            dirty(bounds.minimum,bounce_reach);
+            dirty(bounds.maximum,bounce_reach);
+        }
+        for(std::uint32_t i=0;i<data.sample_positions.size();++i) {
+            const vec3 point=data.sample_positions[i];
+            bool changed=false;
+            for(const auto& light:data.live_lights) {
+                if(!light.enabled || light.strength<=0.f || light.radius<=0.f ||
+                   length_squared(light.position-point)>=light.radius*light.radius)
+                    continue;
+                if((had && intersects(point,light.position,previous)) ||
+                   (has && intersects(point,light.position,bounds))) {
+                    changed=true;break;
+                }
+            }
+            if(!changed)continue;
+            affected.push_back(i);
+            dirty(point,bounce_reach);
+        }
+
+        frame.changed_count=std::uint32_t(affected.size());
+        const auto point_bytes=affected.size()*sizeof(std::uint32_t);
+        ensure(frame.changed_points,std::max<std::size_t>(point_bytes,4u));
+        if(point_bytes)
+            vk::buffer::write(frame.changed_points,affected.data(),point_bytes);
+        data.cloud_sets->write_buffer(image,8,
+            vk::buffer::descriptor(frame.changed_points));
+
+        std::array<std::uint32_t,3> first{},last{};
+        const std::array<std::uint32_t,3> extent{
+            data.grid_extent.width,data.grid_extent.height,data.grid_extent.depth};
+        for(int axis=0;axis<3;++axis) {
+            const double begin=std::floor(
+                (double(dirty_min[axis])-data.grid_origin[axis])/
+                data.grid_spacing)-1.0;
+            const double end=std::ceil(
+                (double(dirty_max[axis])-data.grid_origin[axis])/
+                data.grid_spacing)+2.0;
+            first[axis]=std::uint32_t(std::clamp(begin,0.0,double(extent[axis])));
+            last[axis]=std::uint32_t(std::clamp(end,0.0,double(extent[axis])));
+        }
+        if(first[0]>=last[0] || first[1]>=last[1] || first[2]>=last[2])
+            return;
+        if(!frame.dirty) {
+            frame.dirty=true;
+            frame.partial_grid=true;
+            frame.cloud_partial=true;
+            frame.grid_first=first;
+            frame.grid_end=last;
+        } else if(frame.partial_grid) {
+            for(int axis=0;axis<3;++axis) {
+                frame.grid_first[axis]=std::min(frame.grid_first[axis],first[axis]);
+                frame.grid_end[axis]=std::max(frame.grid_end[axis],last[axis]);
+            }
+        }
+    }
+
     shadow_geometry opaque_shadows()
     {
         const auto& state=get();
