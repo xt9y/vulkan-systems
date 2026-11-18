@@ -292,8 +292,26 @@ namespace vs::pcloud
         for(std::uint32_t i=0;i<data.light_count && i<64u;++i)
             if((data.dynamic_shadow_mask[i>>5u]&(1u<<(i&31u)))!=0u)
                 ++eligible;
+        std::uint32_t lit_tiles=0;
+        std::uint64_t references=0;
+        for(std::size_t i=0;i+1u<frame.tile_cpu.size();i+=2u) {
+            const auto popcount=[](std::uint32_t word) {
+                std::uint32_t count=0;
+                while(word) {
+                    word&=word-1u;
+                    ++count;
+                }
+                return count;
+            };
+            const std::uint32_t count=
+                popcount(frame.tile_cpu[i])+
+                popcount(frame.tile_cpu[i+1u]);
+            lit_tiles+=count!=0u;
+            references+=count;
+        }
         return {data.light_count,eligible,data.lighting_pixel_rate,
-                frame.dynamic_count};
+                frame.dynamic_count,lit_tiles,
+                data.tile_columns*data.tile_rows,references};
     }
 
     void updated(std::uint32_t image)
