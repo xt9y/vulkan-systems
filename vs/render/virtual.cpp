@@ -48,7 +48,9 @@ void clusterize(virtual_level& level,const float* positions,
 virtual_mesh virtualize(const void* vertices,std::size_t vertex_count,
                         std::size_t stride,std::size_t position_offset,
                         std::span<const std::uint32_t> indices,
-                        std::uint32_t max_levels)
+                        std::uint32_t max_levels,
+                        std::span<const float> attributes,
+                        std::span<const float> attribute_weights)
 {
     virtual_mesh result;
     if(!vertex_count || indices.empty())return result;
@@ -58,6 +60,12 @@ virtual_mesh virtualize(const void* vertices,std::size_t vertex_count,
     for(const auto id:indices)
         if(id>=vertex_count)
             throw std::out_of_range("Virtual geometry has invalid indices");
+    const auto attribute_count=attribute_weights.size();
+    if(attribute_count>32u ||
+       attributes.empty()!=attribute_weights.empty() ||
+       (attribute_count && (attributes.size()%attribute_count!=0u ||
+                            attributes.size()/attribute_count!=vertex_count)))
+        throw std::invalid_argument("Invalid virtual geometry attributes");
     const auto* positions=reinterpret_cast<const float*>(
         static_cast<const unsigned char*>(vertices)+position_offset);
     virtual_level finest{};
@@ -72,9 +80,16 @@ virtual_mesh virtualize(const void* vertices,std::size_t vertex_count,
         virtual_level coarse{};
         coarse.indices.resize(source.indices.size());
         float error=0.f;
-        const auto n=meshopt_simplify(
-            coarse.indices.data(),source.indices.data(),source.indices.size(),
-            positions,vertex_count,stride,target,1.0f,0u,&error);
+        const auto n=attribute_count ?
+            meshopt_simplifyWithAttributes(
+                coarse.indices.data(),source.indices.data(),source.indices.size(),
+                positions,vertex_count,stride,attributes.data(),
+                attribute_count*sizeof(float),attribute_weights.data(),
+                attribute_count,nullptr,target,1.0f,
+                meshopt_SimplifyLockBorder,&error) :
+            meshopt_simplify(
+                coarse.indices.data(),source.indices.data(),source.indices.size(),
+                positions,vertex_count,stride,target,1.0f,0u,&error);
         if(n>=source.indices.size()*9u/10u || n<3u)break;
         coarse.indices.resize(n);
         coarse.error=std::max(source.error,error);
