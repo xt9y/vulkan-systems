@@ -250,8 +250,22 @@ void main()
         ivec2 base=ivec2(gl_GlobalInvocationID.xy)*rate;
         if(any(greaterThanEqual(base,size)))return;
         ivec2 center=min(base+ivec2(rate/2),size-1);
-        vec4 center_color=vs_crowd_shade(center,size);
         float center_depth=texelFetch(g_depth,center,0).r;
+        // A mostly empty sky should not fetch normals, albedo or materials
+        // for every pixel just to discover that their final lighting is zero.
+        // Geometry silhouettes still receive the original full-rate shading.
+        if(center_depth>=0.999999) {
+            for(int y=0;y<rate;++y)
+            for(int x=0;x<rate;++x) {
+                ivec2 p=base+ivec2(x,y);
+                if(any(greaterThanEqual(p,size)))continue;
+                float depth=texelFetch(g_depth,p,0).r;
+                imageStore(hdr,p,depth>=0.999999 ?
+                    vec4(0.0,0.0,0.0,1.0) : vs_crowd_shade(p,size));
+            }
+            return;
+        }
+        vec4 center_color=vs_crowd_shade(center,size);
         vec3 center_normal=texelFetch(g_normal,center,0).xyz*2.0-1.0;
         vec4 center_albedo=texelFetch(g_albedo,center,0);
         vec2 center_material=texelFetch(g_material,center,0).rg;
