@@ -106,13 +106,20 @@ namespace vs::pcloud
     };
     // CPU-only BVH refit can run before swapchain acquisition; GPU uploads
     // remain indexed by the acquired frame, so in-flight buffers are safe.
-    void prepare_dynamic_geometry(const std::vector<triangle>& triangles,
-                                  const std::vector<shadow_sphere>& spheres={});
+    // Optional stable owner IDs allow a two-level shadow BVH: one exact
+    // subtree per animated instance, underneath a scene-wide TLAS.
+    void prepare_dynamic_geometry(
+        const std::vector<triangle>& triangles,
+        const std::vector<shadow_sphere>& spheres={},
+        std::span<const std::uint32_t> triangle_owners={},
+        std::span<const std::uint32_t> sphere_owners={});
     void upload_dynamic_geometry(std::uint32_t image);
     // Compatibility one-call path for existing clients.
-    void update_dynamic_geometry(std::uint32_t image,
-                                 const std::vector<triangle>& triangles,
-                                 const std::vector<shadow_sphere>& spheres={});
+    void update_dynamic_geometry(
+        std::uint32_t image,const std::vector<triangle>& triangles,
+        const std::vector<shadow_sphere>& spheres={},
+        std::span<const std::uint32_t> triangle_owners={},
+        std::span<const std::uint32_t> sphere_owners={});
     // Update light color/intensity without rebuilding unchanged scene geometry.
     // Position, radius, active mask and light count must be unchanged.
     void update_lights(const std::vector<light>&);
