@@ -2057,9 +2057,14 @@ namespace vs::pcloud
             for(std::uint32_t i=0;i<data.snapshot->lights.size();++i)
             {
                 const auto& light=data.snapshot->lights[i];
-                if(light.radius<=0.f || light.strength==0.f)continue;
+                if(!light.enabled || light.radius<=0.f ||
+                   light.strength<=0.f)continue;
                 const vec3 delta=light.position-frame.position;
                 const float z=dot(delta,forward),r=light.radius;
+                // A sphere fully behind the camera plane cannot affect any
+                // rasterized world or first-person receiver. The old fallback
+                // assigned these lights to *every* tile, wasting shadow rays.
+                if(z+r<=0.f)continue;
                 std::uint32_t x0=0,x1=data.tile_columns;
                 std::uint32_t y0=0,y1=data.tile_rows;
                 if(z>r && tan_v>0.f && tan_h>0.f)
