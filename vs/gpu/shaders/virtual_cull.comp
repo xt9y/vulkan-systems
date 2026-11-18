@@ -67,9 +67,9 @@ bool occluded(vec4 sphere)
     // occlude static geometry when they move, so reject Hi-Z where either
     // their previous or current conservative screen bounds intersect.
     for(int i=0;i<int(visible.animated_count.x);++i) {
-        vec4 dynamic=visible.animated_rects[i];
-        if(all(greaterThan(hi,dynamic.xy)) &&
-           all(lessThan(lo,dynamic.zw)))return false;
+        vec4 occluder_rect=visible.animated_rects[i];
+        if(all(greaterThan(hi,occluder_rect.xy)) &&
+           all(lessThan(lo,occluder_rect.zw)))return false;
     }
     float footprint=max((hi.x-lo.x)*visible.options.y,
                         (hi.y-lo.y)*visible.options.z);
