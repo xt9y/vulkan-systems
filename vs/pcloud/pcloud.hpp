@@ -174,6 +174,8 @@ namespace vs::pcloud
         std::uint32_t dynamic_shadow_lights=0;
         std::uint32_t pixel_rate=1;
         std::uint32_t dynamic_primitives=0;
+        std::uint32_t lit_tiles=0,total_tiles=0;
+        std::uint64_t tile_light_refs=0;
     };
     lighting_statistics lighting_stats(std::uint32_t image);
     // Call only after the frame command buffer was successfully submitted.
