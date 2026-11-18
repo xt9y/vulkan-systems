@@ -169,6 +169,13 @@ namespace vs::pcloud
         bool pending=false,initialized=false;
     };
     gi_progress progress(std::uint32_t image);
+    struct lighting_statistics {
+        std::uint32_t lights=0;
+        std::uint32_t dynamic_shadow_lights=0;
+        std::uint32_t pixel_rate=1;
+        std::uint32_t dynamic_primitives=0;
+    };
+    lighting_statistics lighting_stats(std::uint32_t image);
     // Call only after the frame command buffer was successfully submitted.
     void updated(std::uint32_t);
     void set_exposure(float);
