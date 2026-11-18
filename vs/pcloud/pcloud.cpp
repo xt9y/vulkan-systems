@@ -46,6 +46,8 @@ namespace vs::pcloud
             std::vector<std::uint8_t> dynamic_packet;
             std::vector<std::uint32_t> affected_cpu;
             std::uint32_t gi_interval=0;
+            std::uint32_t gi_cursor=0;
+            bool gi_complete=false,cloud_submitted=false;
             collision_box dynamic_bounds{};
             bool has_dynamic_bounds=false,cloud_partial=false;
             std::uint32_t changed_count=0;
@@ -238,9 +240,15 @@ namespace vs::pcloud
     void updated(std::uint32_t image)
     {
         auto& frame=get().frames.at(image);
+        if(!frame.dirty)return;
+        frame.cloud_submitted=true;
+        if(!frame.gi_complete)return;
         frame.dirty=false;
         frame.partial_grid=false;
         frame.cloud_partial=false;
+        frame.gi_cursor=0;
+        frame.gi_complete=false;
+        frame.cloud_submitted=false;
     }
 
     void set_exposure(float exposure)
@@ -668,6 +676,9 @@ namespace vs::pcloud
            lower[2]>=upper[2])return;
         for(auto& frame:data.frames) {
             frame.cloud_partial=false;
+            frame.cloud_submitted=false;
+            frame.gi_cursor=0;
+            frame.gi_complete=false;
             if(!frame.dirty) {
                 frame.partial_grid=true;
                 frame.grid_first=lower;
@@ -1128,6 +1139,9 @@ namespace vs::pcloud
         for(auto& frame:data.frames) {
             frame.has_dynamic_bounds=false;
             frame.gi_interval=0;
+            frame.gi_cursor=0;
+            frame.gi_complete=false;
+            frame.cloud_submitted=false;
             frame.dynamic_refit.clear();
             frame.dynamic_cpu.clear();
             frame.affected_cpu.clear();
@@ -1309,8 +1323,7 @@ namespace vs::pcloud
             }
         }
 
-        if(frame.dirty && frame.cloud_partial)
-            frame.cloud_partial=false;
+        if(frame.dirty)return;
         const bool had=frame.has_dynamic_bounds;
         const auto previous=frame.dynamic_bounds;
         const bool has=!faces.empty();
@@ -1415,6 +1428,9 @@ namespace vs::pcloud
             frame.dirty=true;
             frame.partial_grid=true;
             frame.cloud_partial=true;
+            frame.cloud_submitted=false;
+            frame.gi_cursor=0;
+            frame.gi_complete=false;
             frame.grid_first=first;
             frame.grid_end=last;
         } else if(frame.partial_grid) {
@@ -1518,7 +1534,9 @@ namespace vs::pcloud
 
     void cloud(vk::CommandBuffer command,std::uint32_t image)
     {
-        if(!get().frames.at(image).dirty || !get().point_count)return;
+        if(!get().frames.at(image).dirty ||
+           get().frames.at(image).cloud_submitted ||
+           !get().point_count)return;
         const auto& frame=get().frames.at(image);
         const auto count=frame.cloud_partial?frame.changed_count:get().point_count;
         if(!count)return;
@@ -1530,26 +1548,59 @@ namespace vs::pcloud
 
     void gi(vk::CommandBuffer command,std::uint32_t image)
     {
-        if(!get().frames.at(image).dirty)return;
-        const auto& data=get();
-        const auto& frame=data.frames.at(image);
+        auto& data=get();
+        auto& frame=data.frames.at(image);
+        if(!frame.dirty || frame.gi_complete)return;
         const std::array<std::uint32_t,3> begin=frame.partial_grid?
             frame.grid_first:std::array<std::uint32_t,3>{};
         const std::array<std::uint32_t,3> end=frame.partial_grid?
             frame.grid_end:std::array<std::uint32_t,3>{
                 data.grid_extent.width,data.grid_extent.height,data.grid_extent.depth};
-        const grid_push push{
-            data.point_count,data.vertex_count,data.node_count,data.light_count,
-            {data.grid_origin.x,data.grid_origin.y,data.grid_origin.z,
-             data.grid_spacing},
-            {begin[0],begin[1],begin[2],0},
-            data.glass_node_count
+        if(end[0]<=begin[0] || end[1]<=begin[1] || end[2]<=begin[2]) {
+            frame.gi_complete=true;
+            return;
+        }
+        const std::array<std::uint32_t,3> groups{
+            (end[0]-begin[0]+3u)/4u,
+            (end[1]-begin[1]+3u)/4u,
+            (end[2]-begin[2]+3u)/4u
         };
-        if(end[0]>begin[0] && end[1]>begin[1] && end[2]>begin[2])
-            data.gi_program->dispatch(command,
-                (end[0]-begin[0]+3)/4,(end[1]-begin[1]+3)/4,
-                (end[2]-begin[2]+3)/4,
-                {frame.gi},&push,sizeof(push));
+        const auto dispatch=[&](std::uint32_t x,std::uint32_t y,
+                                std::uint32_t z,std::uint32_t count_x,
+                                std::uint32_t count_y,std::uint32_t count_z) {
+            const grid_push push{
+                data.point_count,data.vertex_count,data.node_count,
+                data.light_count,
+                {data.grid_origin.x,data.grid_origin.y,data.grid_origin.z,
+                 data.grid_spacing},
+                {begin[0]+x*4u,begin[1]+y*4u,begin[2]+z*4u,0},
+                data.glass_node_count
+            };
+            data.gi_program->dispatch(command,count_x,count_y,count_z,
+                                       {frame.gi},&push,sizeof(push));
+        };
+        if(!frame.partial_grid) {
+            // Full-scene initialization is still completed in one pass.
+            dispatch(0,0,0,groups[0],groups[1],groups[2]);
+            frame.gi_complete=true;
+            return;
+        }
+        // Dynamic GI is processed in bounded 4x4x4 workgroups. Splitting
+        // rows avoids large one-frame spikes when invalidation spans a room.
+        constexpr std::uint32_t max_groups_per_frame=32;
+        const std::uint32_t total=groups[0]*groups[1]*groups[2];
+        std::uint32_t remaining=max_groups_per_frame;
+        while(frame.gi_cursor<total && remaining) {
+            const auto index=frame.gi_cursor;
+            const auto x=index%groups[0];
+            const auto y=(index/groups[0])%groups[1];
+            const auto z=index/(groups[0]*groups[1]);
+            const auto count=std::min(remaining,groups[0]-x);
+            dispatch(x,y,z,count,1,1);
+            frame.gi_cursor+=count;
+            remaining-=count;
+        }
+        frame.gi_complete=frame.gi_cursor>=total;
     }
 
     void lighting(vk::CommandBuffer command, std::uint32_t image,
