@@ -8,10 +8,19 @@ void main()
 {
     ivec2 dest=ivec2(gl_GlobalInvocationID.xy);
     if(any(greaterThanEqual(dest,imageSize(output_depth))))return;
-    ivec2 limit=textureSize(source_depth,0)-ivec2(1);
+    ivec2 source_size=textureSize(source_depth,0);
+    ivec2 output_size=imageSize(output_depth);
+    ivec2 limit=source_size-ivec2(1);
+    // An odd-sized previous mip can shrink 3->1. Fold its last row and
+    // column into the final texel; otherwise that geometry is never tested.
+    ivec2 gather=ivec2(2)+ivec2(
+        (source_size.x>2 && (source_size.x&1)!=0 &&
+         dest.x==output_size.x-1) ? 1 : 0,
+        (source_size.y>2 && (source_size.y&1)!=0 &&
+         dest.y==output_size.y-1) ? 1 : 0);
     float depth=pc.reverse_z!=0u?1.0:0.0;
-    for(int y=0;y<2;++y)
-    for(int x=0;x<2;++x) {
+    for(int y=0;y<gather.y;++y)
+    for(int x=0;x<gather.x;++x) {
         float sample_depth=texelFetch(source_depth,
             min(dest*2+ivec2(x,y),limit),0).r;
         depth=pc.reverse_z!=0u?

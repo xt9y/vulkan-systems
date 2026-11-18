@@ -14,11 +14,12 @@ void depth_pyramid::create(vk::ImageView source,vk::Extent2D size,
                          std::max(1u,(size.height+1u)/2u)};
     reverse_=reverse_z?1u:0u;
     auto width=extent_.width,height=extent_.height;
-    do {
-        ++levels_;
+    levels_=1u;
+    while(width>1u || height>1u) {
         width=std::max(1u,width/2u);
         height=std::max(1u,height/2u);
-    } while(width>1u || height>1u);
+        ++levels_;
+    }
     try {
         const auto features=vk::physical_device::get()->handle
             .getFormatProperties(vk::Format::eR32Sfloat).optimalTilingFeatures;
