@@ -69,7 +69,16 @@ bool virtual_page_pool::stage(const virtual_page& source,const geometry& owner,
        source.indices.size()!=source.count ||
        source.indices.size()>std::numeric_limits<std::uint32_t>::max())
         throw std::invalid_argument("Invalid virtual page");
-    if(pages_.contains(source.id)) {
+    // A page ID refers to one immutable index payload and vertex allocation.
+    // Reusing it for a replacement mesh would silently draw the old geometry.
+    std::uint64_t fingerprint=14695981039346656037ull;
+    for(const auto index:source.indices)
+        fingerprint=(fingerprint^index)*1099511628211ull;
+    if(const auto previous=pages_.find(source.id);previous!=pages_.end()) {
+        if(previous->second->vertices!=owner.vertex_buffer() ||
+           previous->second->index_count!=source.count ||
+           previous->second->fingerprint!=fingerprint)
+            return false;
         touch(source.id,serial);
         return true;
     }
@@ -80,6 +89,7 @@ bool virtual_page_pool::stage(const virtual_page& source,const geometry& owner,
         auto page=std::make_shared<item>();
         page->vertices=owner.vertex_buffer();
         page->index_count=source.count;
+        page->fingerprint=fingerprint;
         page->last_used=serial;
         page->indices=::vs::gpu::owned_buffer(transfer.add(
             source.indices.data(),bytes,vk::BufferUsageFlagBits::eIndexBuffer));
