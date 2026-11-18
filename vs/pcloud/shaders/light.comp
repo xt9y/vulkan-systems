@@ -331,10 +331,22 @@ void main()
                 continue;
             }
             float depth=texelFetch(g_depth,p,0).r;
+            // Sky has no direct-light or GI contribution in this pass.
+            // Avoid fetching G-buffer normals/materials and running the
+            // expensive edge fallback for sky pixels at silhouettes.
+            if(depth>=0.999999) {
+                imageStore(hdr,p,vec4(0.0,0.0,0.0,1.0));
+                continue;
+            }
+            // The first-person viewmodel always uses full-rate shading.
+            // It does not need any of the edge-classification fetches.
+            if(depth<0.1) {
+                imageStore(hdr,p,vs_crowd_shade(p,size));
+                continue;
+            }
             vec3 normal=texelFetch(g_normal,p,0).xyz*2.0-1.0;
             vec2 material=texelFetch(g_material,p,0).rg;
-            bool edge=(depth<0.1)!=(center_depth<0.1) ||
-                (depth>=0.999999)!=(center_depth>=0.999999) ||
+            bool edge=(center_depth<0.1) ||
                 abs(depth-center_depth)>0.002 ||
                 dot(normal,center_normal)<0.85 ||
                 abs(material.x-center_material.x)>0.25 ||
@@ -342,7 +354,7 @@ void main()
             // Viewmodel occupies few pixels compared with the crowd. Keep
             // full-rate hand/weapon normal and GI shading even when the
             // world is reconstructed from coarse lighting samples.
-            if(edge || depth<0.1) {
+            if(edge) {
                 imageStore(hdr,p,vs_crowd_shade(p,size));
                 continue;
             }
