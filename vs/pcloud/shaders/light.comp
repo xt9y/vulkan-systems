@@ -185,7 +185,8 @@ vec4 vs_crowd_shade(ivec2 p,ivec2 size)
     float metallic=clamp(material.g,0.0,1.0);
     float ao=clamp(material.b,0.0,1.0);
     vec3 color=vec3(0.0);
-    shared_brdf_state brdf=shared_brdf_prepare(
+    shared_brdf_state brdf;
+    if(count!=0u)brdf=shared_brdf_prepare(
         albedo.rgb,metallic,roughness,N,V);
     uint remaining_low=light_mask.x,remaining_high=light_mask.y;
     for(uint candidate=0u;candidate<count;++candidate)
@@ -241,9 +242,12 @@ vec4 vs_crowd_shade(ivec2 p,ivec2 size)
     // First-person hands/weapons are physical diffuse GI receivers too.
     // P is camera-local for the reserved-depth viewmodel, so sample the same
     // world-space probe field and energy scale as the rest of the scene.
-    color+=albedo.rgb*(1.0-metallic)*ao*
-        shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*
-        (0.01*min(1.0,roughness*1.5));
+    // The same diffuse GI term is exactly zero on purely metallic,
+    // fully occluded or black-albedo pixels. Avoid the 8-probe gather there.
+    if(ao>0.0 && metallic<1.0 && any(greaterThan(albedo.rgb,vec3(0.0))))
+        color+=albedo.rgb*(1.0-metallic)*ao*
+            shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*
+            (0.01*min(1.0,roughness*1.5));
     vec3 emission=vec3(albedo.a,n.a,material.a);
     color+=emission/max(vec3(1.0)-emission,vec3(1.0/255.0));
     return vec4(max(color,vec3(0.0)),1.0);
@@ -364,7 +368,8 @@ void main()
     float metallic=clamp(material.g,0.0,1.0);
     float ao=clamp(material.b,0.0,1.0);
     vec3 color=vec3(0.0);
-    shared_brdf_state brdf=shared_brdf_prepare(
+    shared_brdf_state brdf;
+    if(count!=0u)brdf=shared_brdf_prepare(
         albedo.rgb,metallic,roughness,N,V);
     uint remaining_low=light_mask.x,remaining_high=light_mask.y;
     for(uint candidate=0u;candidate<count;++candidate)
@@ -414,9 +419,12 @@ void main()
     // First-person hands/weapons are physical diffuse GI receivers too.
     // P is camera-local for the reserved-depth viewmodel, so sample the same
     // world-space probe field and energy scale as the rest of the scene.
-    color+=albedo.rgb*(1.0-metallic)*ao*
-        shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*
-        (0.01*min(1.0,roughness*1.5));
+    // The same diffuse GI term is exactly zero on purely metallic,
+    // fully occluded or black-albedo pixels. Avoid the 8-probe gather there.
+    if(ao>0.0 && metallic<1.0 && any(greaterThan(albedo.rgb,vec3(0.0))))
+        color+=albedo.rgb*(1.0-metallic)*ao*
+            shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*
+            (0.01*min(1.0,roughness*1.5));
     vec3 emission=vec3(albedo.a,n.a,material.a);
     color+=emission/max(vec3(1.0)-emission,vec3(1.0/255.0));
     imageStore(hdr,p,vec4(max(color,vec3(0.0)),1.0));
