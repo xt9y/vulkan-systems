@@ -85,7 +85,7 @@ virtual_mesh virtualize(const void* vertices,std::size_t vertex_count,
     // A cluster in a fine level belongs to its nearest coarse aggregate.
     // Parent links allow GPU traversal/streaming without requiring a world.
     for(std::size_t level=0;level+1<result.levels.size();++level) {
-        const auto& parents=result.levels[level+1].clusters;
+        auto& parents=result.levels[level+1].clusters;
         if(parents.empty())continue;
         for(auto& child:result.levels[level].clusters) {
             float best=std::numeric_limits<float>::max();
@@ -96,6 +96,14 @@ virtual_mesh virtualize(const void* vertices,std::size_t vertex_count,
                 const float z=child.center[2]-parent.center[2];
                 const float d=x*x+y*y+z*z;
                 if(d<best){best=d;child.parent=std::uint32_t(p);}
+            }
+            if(child.parent!=UINT32_MAX) {
+                // A parent must conservatively contain every assigned child.
+                // This remains valid for hierarchy traversal and residency
+                // even when simplification changes triangle connectivity.
+                auto& parent=parents[child.parent];
+                parent.radius=std::max(parent.radius,
+                    std::sqrt(best)+child.radius);
             }
         }
     }
