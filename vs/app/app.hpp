@@ -24,7 +24,9 @@ public:
     void open(const settings&);
     bool poll(); // returns false after the window is closed
     frame begin_frame(); // empty command while minimized/recreating swapchain
-    void present(frame);
+    // True only when the submitted frame remains valid after presentation.
+    // A resize/out-of-date swapchain rebuild returns false.
+    bool present(frame);
     void resize();
     // Safe boundary for replacing shared scene GPU resources/descriptors.
     // Waits for FPS renderer submissions, not the entire Vulkan device.

@@ -258,6 +258,26 @@ namespace vs::pcloud
         }
     }
 
+    gi_progress progress(std::uint32_t image)
+    {
+        const auto& data=get();
+        const auto& frame=data.frames.at(image);
+        const std::array<std::uint32_t,3> extent{
+            frame.partial_grid?
+                frame.grid_end[0]-frame.grid_first[0]:data.grid_extent.width,
+            frame.partial_grid?
+                frame.grid_end[1]-frame.grid_first[1]:data.grid_extent.height,
+            frame.partial_grid?
+                frame.grid_end[2]-frame.grid_first[2]:data.grid_extent.depth
+        };
+        const std::uint32_t total=
+            ((extent[0]+3u)/4u)*((extent[1]+3u)/4u)*
+            ((extent[2]+3u)/4u);
+        return {data.point_count,
+            frame.dirty?std::min(frame.gi_cursor,total):total,
+            total,frame.dirty,frame.grid_initialized};
+    }
+
     void updated(std::uint32_t image)
     {
         auto& frame=get().frames.at(image);

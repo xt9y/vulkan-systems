@@ -328,12 +328,20 @@ application::frame application::begin_frame() {
     try {return frames_.begin();}
     catch(const vk::OutOfDateKHRError&) {resize();return {};}
 }
-void application::present(frame ticket) {
-    if(!ticket.command)return;
+bool application::present(frame ticket) {
+    if(!ticket.command)return false;
     try {
         auto result=frames_.submit(ticket);
-        if(result==vk::Result::eSuboptimalKHR || result==vk::Result::eErrorOutOfDateKHR)resize();
-    } catch(const vk::OutOfDateKHRError&) {resize();}
+        if(result==vk::Result::eSuboptimalKHR ||
+           result==vk::Result::eErrorOutOfDateKHR) {
+            resize();
+            return false;
+        }
+        return true;
+    } catch(const vk::OutOfDateKHRError&) {
+        resize();
+        return false;
+    }
 }
 void application::on_swapchain(std::function<void()> release,
                               std::function<void()> rebuild) {

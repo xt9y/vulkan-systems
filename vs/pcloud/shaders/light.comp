@@ -228,10 +228,12 @@ vec4 vs_crowd_shade(ivec2 p,ivec2 size)
             light.color_intensity.rgb*transmission*
             cone*(light.color_intensity.w*attenuation);
     }
-    // Rogue uses a 0.01 diffuse bounce factor after normalized probe sampling.
-    if(!viewmodel)
-        color+=albedo.rgb*(1.0-metallic)*ao*
-            shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*(0.01*min(1.0,roughness*1.5));
+    // First-person hands/weapons are physical diffuse GI receivers too.
+    // P is camera-local for the reserved-depth viewmodel, so sample the same
+    // world-space probe field and energy scale as the rest of the scene.
+    color+=albedo.rgb*(1.0-metallic)*ao*
+        shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*
+        (0.01*min(1.0,roughness*1.5));
     vec3 emission=vec3(albedo.a,n.a,material.a);
     color+=emission/max(vec3(1.0)-emission,vec3(1.0/255.0));
     return vec4(max(color,vec3(0.0)),1.0);
@@ -266,7 +268,10 @@ void main()
                 dot(normal,center_normal)<0.85 ||
                 abs(material.x-center_material.x)>0.25 ||
                 abs(material.y-center_material.y)>0.25;
-            if(edge) {
+            // Viewmodel occupies few pixels compared with the crowd. Keep
+            // full-rate hand/weapon normal and GI shading even when the
+            // world is reconstructed from coarse lighting samples.
+            if(edge || depth<0.1) {
                 imageStore(hdr,p,vs_crowd_shade(p,size));
                 continue;
             }
@@ -380,10 +385,12 @@ void main()
             light.color_intensity.rgb*transmission*
             cone*(light.color_intensity.w*attenuation);
     }
-    // Rogue uses a 0.01 diffuse bounce factor after normalized probe sampling.
-    if(!viewmodel)
-        color+=albedo.rgb*(1.0-metallic)*ao*
-            shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*(0.01*min(1.0,roughness*1.5));
+    // First-person hands/weapons are physical diffuse GI receivers too.
+    // P is camera-local for the reserved-depth viewmodel, so sample the same
+    // world-space probe field and energy scale as the rest of the scene.
+    color+=albedo.rgb*(1.0-metallic)*ao*
+        shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*
+        (0.01*min(1.0,roughness*1.5));
     vec3 emission=vec3(albedo.a,n.a,material.a);
     color+=emission/max(vec3(1.0)-emission,vec3(1.0/255.0));
     imageStore(hdr,p,vec4(max(color,vec3(0.0)),1.0));

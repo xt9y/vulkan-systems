@@ -161,6 +161,15 @@ namespace vs::pcloud
     vk::ImageView reflection_ldr_view(std::uint32_t);
     targets reflection_images(std::uint32_t);
 
+    // Per-swapchain-image GI build state. A complete grid may still contain
+    // zero radiance when no light reaches the probe coverage volume.
+    struct gi_progress {
+        std::uint32_t points=0;
+        std::uint32_t completed_groups=0,total_groups=0;
+        bool pending=false,initialized=false;
+    };
+    gi_progress progress(std::uint32_t image);
+    // Call only after the frame command buffer was successfully submitted.
     void updated(std::uint32_t);
     void set_exposure(float);
     targets images(std::uint32_t);
