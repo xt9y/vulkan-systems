@@ -1583,9 +1583,21 @@ namespace vs::pcloud
                 owners.insert(owners.end(),sphere_owners.begin(),sphere_owners.end());
                 data.dynamic_topology=::vs::bvh::build_grouped_stackless(
                     initial,owners,dynamic_max_leaf/2u,dynamic_max_leaf);
+                std::sort(owners.begin(),owners.end());
+                const auto group_count=std::unique(
+                    owners.begin(),owners.end())-owners.begin();
+                std::cout<<"pc: dynamic shadow BVH grouped, owners="
+                         <<group_count<<", primitives="<<primitive_count
+                         <<", nodes="<<data.dynamic_topology.size()
+                         <<", leaf="<<dynamic_max_leaf<<'\n';
             } else {
                 data.dynamic_topology=::vs::bvh::build_stackless(
                     initial,dynamic_max_leaf/2u,dynamic_max_leaf);
+                if(primitive_count)
+                    std::cout<<"pc: dynamic shadow BVH ungrouped, primitives="
+                             <<primitive_count
+                             <<", nodes="<<data.dynamic_topology.size()
+                             <<", leaf="<<dynamic_max_leaf<<'\n';
             }
             data.dynamic_group_signature=signature;
             data.dynamic_reference_cost=0.f;
