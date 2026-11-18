@@ -100,6 +100,7 @@ namespace vs::pcloud
             std::vector<std::uint32_t> dynamic_order;
             std::vector<std::array<float,4>> prepared_vertices;
             collision_box prepared_bounds{};
+            std::array<std::uint32_t,2> dynamic_shadow_mask{~0u,~0u};
             std::uint32_t prepared_primitives=0;
             bool dynamic_prepared=false;
             configuration shader_paths{};
@@ -157,7 +158,10 @@ namespace vs::pcloud
 
         struct push {
             float exposure;
-            std::array<float,3> padding{};
+            float padding0=0.f;
+            // Exact conservative eligibility: a light with no overlapping
+            // dynamic geometry never needs animated BVH ray traversal.
+            std::array<std::uint32_t,2> dynamic_shadow_mask{};
             std::array<float,4> eye_near{};
             std::array<float,4> forward_far{};
             std::array<float,4> right_tan{};
@@ -239,7 +243,8 @@ namespace vs::pcloud
             const auto& grid=get();
             const push controls{
                 exposure_value.load(std::memory_order_relaxed),
-                {},
+                0.f,
+                grid.dynamic_shadow_mask,
                 {position.x,position.y,position.z,0.1f},
                 {basis.forward.x,basis.forward.y,basis.forward.z,1000.0f},
                 {basis.right.x,basis.right.y,basis.right.z,tan_half*aspect},
@@ -632,7 +637,8 @@ namespace vs::pcloud
         const float aspect=float(extent.width)/float(extent.height);
         const push controls{
             exposure_value.load(std::memory_order_relaxed),
-            {},
+            0.f,
+            data.dynamic_shadow_mask,
             {view.eye.x,view.eye.y,view.eye.z,.1f},
             {view.forward.x,view.forward.y,view.forward.z,1000.f},
             {view.right.x,view.right.y,view.right.z,tangent*aspect},
@@ -1598,6 +1604,29 @@ namespace vs::pcloud
         data.prepared_bounds=bounds;
         data.prepared_primitives=std::uint32_t(primitive_count);
         data.dynamic_prepared=true;
+        // Every shadow segment lies inside its point-light influence sphere.
+        // If no animated primitive bounds touch that sphere, a dynamic shadow
+        // hit is mathematically impossible for this light. This mask is
+        // conservative and used for main and reflected lighting alike.
+        data.dynamic_shadow_mask={0u,0u};
+        if(primitive_count)
+            for(std::size_t i=0;i<data.live_lights.size() && i<64u;++i) {
+                const auto& light=data.live_lights[i];
+                if(!light.enabled || light.strength<=0.f || light.radius<=0.f)
+                    continue;
+                const float x=std::max({
+                    bounds.minimum.x-light.position.x,0.f,
+                    light.position.x-bounds.maximum.x});
+                const float y=std::max({
+                    bounds.minimum.y-light.position.y,0.f,
+                    light.position.y-bounds.maximum.y});
+                const float z=std::max({
+                    bounds.minimum.z-light.position.z,0.f,
+                    light.position.z-bounds.maximum.z});
+                const float radius=light.radius+0.001f;
+                if(x*x+y*y+z*z<=radius*radius)
+                    data.dynamic_shadow_mask[i>>5u]|=1u<<(i&31u);
+            }
     }
 
     void upload_dynamic_geometry(std::uint32_t image)
