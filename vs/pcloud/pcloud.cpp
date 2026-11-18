@@ -812,6 +812,91 @@ namespace vs::pcloud
         }
     }
 
+    // Recompute direct-radiance points and GI cells only within a bounded
+    // affected region. This handles illumination revisions; changes to
+    // underlying static triangle topology still require set_scene/sync.
+    void invalidate_radiance(const collision_box& affected_bounds)
+    {
+        auto& data=get();
+        if(!data.snapshot)return;
+        using namespace vk::util::math;
+        if(!std::isfinite(affected_bounds.minimum.x) ||
+           !std::isfinite(affected_bounds.minimum.y) ||
+           !std::isfinite(affected_bounds.minimum.z) ||
+           !std::isfinite(affected_bounds.maximum.x) ||
+           !std::isfinite(affected_bounds.maximum.y) ||
+           !std::isfinite(affected_bounds.maximum.z) ||
+           affected_bounds.minimum.x>affected_bounds.maximum.x ||
+           affected_bounds.minimum.y>affected_bounds.maximum.y ||
+           affected_bounds.minimum.z>affected_bounds.maximum.z)
+            throw std::invalid_argument("Invalid PCloud radiance invalidation");
+        constexpr auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
+        constexpr auto host=vk::MemoryPropertyFlagBits::eHostVisible |
+                            vk::MemoryPropertyFlagBits::eHostCoherent;
+        const auto component=[](vec3 p,int axis) {
+            return axis==0?p.x:axis==1?p.y:p.z;
+        };
+        std::array<std::uint32_t,3> first{},last{};
+        for(int axis=0;axis<3;++axis) {
+            const auto origin=component(data.grid_origin,axis);
+            const auto low=component(affected_bounds.minimum,axis);
+            const auto high=component(affected_bounds.maximum,axis);
+            const double start=std::floor((double(low)-bounce_reach-origin)/
+                                          data.grid_spacing)-1.0;
+            const double finish=std::ceil((double(high)+bounce_reach-origin)/
+                                          data.grid_spacing)+2.0;
+            const double maximum=double(axis==0?data.grid_extent.width:
+                              axis==1?data.grid_extent.height:data.grid_extent.depth);
+            first[axis]=std::uint32_t(std::clamp(start,0.0,maximum));
+            last[axis]=std::uint32_t(std::clamp(finish,0.0,maximum));
+        }
+        if(first[0]>=last[0] || first[1]>=last[1] || first[2]>=last[2])
+            return;
+        for(std::uint32_t image=0;image<data.frames.size();++image) {
+            auto& frame=data.frames[image];
+            if(frame.dirty && !frame.partial_grid)continue;
+            auto& affected=frame.affected_cpu;
+            if(!frame.dirty || !frame.cloud_partial)affected.clear();
+            for(std::uint32_t i=0;i<data.sample_positions.size();++i) {
+                const auto p=data.sample_positions[i];
+                if(p.x<affected_bounds.minimum.x-bounce_reach ||
+                   p.x>affected_bounds.maximum.x+bounce_reach ||
+                   p.y<affected_bounds.minimum.y-bounce_reach ||
+                   p.y>affected_bounds.maximum.y+bounce_reach ||
+                   p.z<affected_bounds.minimum.z-bounce_reach ||
+                   p.z>affected_bounds.maximum.z+bounce_reach)
+                    continue;
+                affected.push_back(i);
+            }
+            std::sort(affected.begin(),affected.end());
+            affected.erase(std::unique(affected.begin(),affected.end()),affected.end());
+            frame.changed_count=std::uint32_t(affected.size());
+            const auto bytes=affected.size()*sizeof(std::uint32_t);
+            if(frame.changed_points.size<std::max<std::size_t>(bytes,4u)) {
+                frame.changed_points=::vs::gpu::create_buffer(
+                    std::max<std::size_t>(bytes,4u)*2u,storage,host);
+                data.cloud_sets->write_buffer(image,8,
+                    vk::buffer::descriptor(frame.changed_points));
+            }
+            if(bytes)vk::buffer::write(frame.changed_points,affected.data(),bytes);
+            frame.cloud_partial=true;
+            frame.cloud_submitted=false;
+            frame.gi_cursor=0;
+            frame.gi_complete=false;
+            if(!frame.dirty) {
+                frame.dirty=true;
+                frame.partial_grid=true;
+                frame.grid_first=first;
+                frame.grid_end=last;
+            } else {
+                for(int axis=0;axis<3;++axis) {
+                    frame.grid_first[axis]=std::min(frame.grid_first[axis],first[axis]);
+                    frame.grid_end[axis]=std::max(frame.grid_end[axis],last[axis]);
+                }
+            }
+        }
+    }
+
     void update_transmission(const ::vs::scene::data& source)
     {
         auto& data=get();
