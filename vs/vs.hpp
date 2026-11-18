@@ -17,6 +17,7 @@
 #include <vs/lighting/transmission.hpp>
 #include <vs/bvh/stackless.hpp>
 #include <vs/bvh/regions.hpp>
+#include <vs/bvh/gpu_regions.hpp>
 #include <vs/pcloud/pcloud.hpp>
 #include <vs/optics/layered.hpp>
 #include <vs/spatial/index.hpp>

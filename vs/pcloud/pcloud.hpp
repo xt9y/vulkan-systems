@@ -1,6 +1,8 @@
 #pragma once
 #include <vk/vk.hpp>
 #include <vs/scene/scene.hpp>
+#include <vs/spatial/world.hpp>
+#include <span>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -118,6 +120,12 @@ namespace vs::pcloud
     // Geometry replacement must still use set_scene/synchronize_scene until
     // the static GPU BVH supports independent region pages.
     void invalidate_region(const ::vs::scene::collision_box& bounds);
+    // Region-local opaque shadows are built on CPU and uploaded lazily for
+    // the acquired swapchain image. World generation is not part of PCloud.
+    bool replace_shadow_region(::vs::spatial::region_id id,
+        std::uint64_t revision,std::span<const triangle> faces);
+    bool remove_shadow_region(::vs::spatial::region_id id,
+        std::uint64_t revision);
     // Region-scoped radiance/probe invalidation without static BVH rebuild.
     // Caller waits for in-flight frames before updating CPU-visible buffers.
     // Use set_scene() when triangles or probe topology have changed.

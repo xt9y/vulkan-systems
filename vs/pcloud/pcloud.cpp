@@ -2,6 +2,7 @@
 #include <vs/gpu/light.hpp>
 #include <vs/lighting/transmission.hpp>
 #include <vs/lighting/shadow_cache.hpp>
+#include <vs/bvh/gpu_regions.hpp>
 #include <vs/render/renderer.hpp>
 #include <vs/render/pipeline.hpp>
 #include <vs/gpu/compute.hpp>
@@ -82,6 +83,7 @@ namespace vs::pcloud
             ::vs::gpu::owned_buffer nodes;
             ::vs::gpu::owned_buffer shadow_light_ranges;
             ::vs::lighting::shadow_cache visibility;
+            ::vs::bvh::gpu_regions region_shadows;
             bool cache_enabled=true;
             std::optional<::vs::scene::collision_box> probe_coverage;
             bool coverage_dirty=false;
@@ -323,7 +325,7 @@ namespace vs::pcloud
             data.gi_sets=std::make_unique<::vs::gpu::descriptors>();
             data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,11),count);
             data.lighting_sets=std::make_unique<::vs::gpu::descriptors>();
-            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,13),count*2);
+            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,16),count*2);
             data.tone_sets=std::make_unique<::vs::gpu::descriptors>();
             data.tone_sets->create(bindings(1,1,vk::ShaderStageFlagBits::eCompute),count*2);
             data.present_sets=std::make_unique<::vs::gpu::descriptors>();
@@ -369,6 +371,7 @@ namespace vs::pcloud
             data.shadow_light_ranges=::vs::gpu::create_buffer(
                 64*sizeof(::vs::bvh::light_tree_range),storage,memory);
             data.visibility.create();
+            data.region_shadows.create(count);
             const char* cache=std::getenv("VS_SHADOW_CACHE");
             data.cache_enabled=!cache || *cache!='0';
             std::cout<<"pc: static shadow visibility cache "
@@ -485,6 +488,10 @@ namespace vs::pcloud
                     vk::buffer::descriptor(current.dynamic_nodes));
                 data.lighting_sets->write_buffer(i,18,
                     vk::buffer::descriptor(data.visibility.resource()));
+                const auto region=data.region_shadows.descriptors(i);
+                data.lighting_sets->write_buffer(i,19,region.records);
+                data.lighting_sets->write_buffer(i,20,region.vertices);
+                data.lighting_sets->write_buffer(i,21,region.nodes);
                 std::array<vk::DescriptorImageInfo,2> tone{};
                 tone[0].sampler = data.sampler;
                 tone[0].imageView = current.hdr.view;
@@ -574,6 +581,10 @@ namespace vs::pcloud
                  vk::buffer::descriptor(data.frames[i].dynamic_nodes));
              data.lighting_sets->write_buffer(i+count,18,
                  vk::buffer::descriptor(data.visibility.resource()));
+             const auto region=data.region_shadows.descriptors(i);
+             data.lighting_sets->write_buffer(i+count,19,region.records);
+             data.lighting_sets->write_buffer(i+count,20,region.vertices);
+             data.lighting_sets->write_buffer(i+count,21,region.nodes);
             vk::DescriptorImageInfo tone{};
             tone.sampler=data.sampler;
             tone.imageView=current.hdr.view;
@@ -587,6 +598,7 @@ namespace vs::pcloud
     void reflection_lighting(vk::CommandBuffer command,std::uint32_t image,
                              const view_basis& view)
     {
+        get().region_shadows.upload(image);
         const auto& data=get();
         const auto& current=data.reflections.at(image);
         const auto extent=data.output.extent;
@@ -895,6 +907,19 @@ namespace vs::pcloud
                 }
             }
         }
+    }
+
+    bool replace_shadow_region(::vs::spatial::region_id id,
+                               std::uint64_t revision,
+                               std::span<const triangle> faces)
+    {
+        // CPU build only; no device-wide sync or descriptor rebinding.
+        return get().region_shadows.replace(id,revision,faces);
+    }
+    bool remove_shadow_region(::vs::spatial::region_id id,
+                             std::uint64_t revision)
+    {
+        return get().region_shadows.erase(id,revision);
     }
 
     void invalidate_region(const ::vs::scene::collision_box& region)
@@ -1907,6 +1932,8 @@ namespace vs::pcloud
     void lighting(vk::CommandBuffer command, std::uint32_t image,
                   const camera_frame& frame)
     {
+        // Fence-completed image only: no shared in-flight buffer mutation.
+        get().region_shadows.upload(image);
         auto& data=get();
         auto& current=data.frames.at(image);
         // Conservatively rasterize each light's projected influence sphere into
