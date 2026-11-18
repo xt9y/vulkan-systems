@@ -106,6 +106,7 @@ namespace vs::pcloud
             configuration shader_paths{};
             presentation_target output{};
             std::uint32_t light_count=0, point_count=0, vertex_count=0, node_count=0;
+            std::uint32_t lighting_pixel_rate=1;
             std::uint32_t visual_node_count=0;
             std::uint32_t tile_columns=0, tile_rows=0;
             vk::util::math::vec3 grid_origin{};
