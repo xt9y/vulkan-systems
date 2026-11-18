@@ -1289,17 +1289,21 @@ namespace vs::pcloud
         frame.changed_count=0;
         if(!had && !has)return;
 
+        const auto component=[](vec3 v,int axis) {
+            return axis==0?v.x:axis==1?v.y:v.z;
+        };
         const auto intersects=[&](vec3 point,vec3 end,const collision_box& box) {
             const vec3 direction=end-point;
             float entry=0.f,exit=1.f;
             for(int axis=0;axis<3;++axis) {
-                const float d=direction[axis];
-                const float min=box.minimum[axis]-.01f;
-                const float max=box.maximum[axis]+.01f;
+                const float d=component(direction,axis);
+                const float min=component(box.minimum,axis)-.01f;
+                const float max=component(box.maximum,axis)+.01f;
+                const float p=component(point,axis);
                 if(std::abs(d)<1e-8f) {
-                    if(point[axis]<min || point[axis]>max)return false;
+                    if(p<min || p>max)return false;
                 } else {
-                    float a=(min-point[axis])/d,b=(max-point[axis])/d;
+                    float a=(min-p)/d,b=(max-p)/d;
                     if(a>b)std::swap(a,b);
                     entry=std::max(entry,a);
                     exit=std::min(exit,b);
@@ -1359,10 +1363,10 @@ namespace vs::pcloud
             data.grid_extent.width,data.grid_extent.height,data.grid_extent.depth};
         for(int axis=0;axis<3;++axis) {
             const double begin=std::floor(
-                (double(dirty_min[axis])-data.grid_origin[axis])/
+                (double(component(dirty_min,axis))-component(data.grid_origin,axis))/
                 data.grid_spacing)-1.0;
             const double end=std::ceil(
-                (double(dirty_max[axis])-data.grid_origin[axis])/
+                (double(component(dirty_max,axis))-component(data.grid_origin,axis))/
                 data.grid_spacing)+2.0;
             first[axis]=std::uint32_t(std::clamp(begin,0.0,double(extent[axis])));
             last[axis]=std::uint32_t(std::clamp(end,0.0,double(extent[axis])));
