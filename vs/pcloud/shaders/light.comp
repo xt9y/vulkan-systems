@@ -43,7 +43,7 @@ layout(std430,set=0,binding=10) readonly buffer ShadowRanges { uvec2 shadow_rang
 layout(push_constant) uniform Controls {
     float exposure;
     float padding0;
-    vec2 reserved1;
+    uvec2 dynamic_shadow_mask;
     vec4 eye_near;
     vec4 forward_far;
     vec4 right_tan;
@@ -148,7 +148,9 @@ bool any_hit(vec3 origin,vec3 ray,float distance,uint light_index)
 {
     return vs_static_visible_hit(origin,ray,distance,light_index) ||
            vs_region_static_hit(origin,ray,distance) ||
-           vs_dynamic_hit(origin,ray,distance);
+           ((pc.dynamic_shadow_mask[light_index>>5u] &
+            (1u<<(light_index&31u)))!=0u &&
+            vs_dynamic_hit(origin,ray,distance));
 }
 
 // Dense crowds use a lower-rate direct-light ray and edge-aware reconstruction.
