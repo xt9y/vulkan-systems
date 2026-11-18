@@ -1,6 +1,7 @@
 #include <vs/assets/gpu_assets.hpp>
 #include <vs/gpu/upload.hpp>
 #include <vs/assets/texture.hpp>
+#include <algorithm>
 #include <array>
 #include <climits>
 #include <memory>
@@ -21,6 +22,13 @@ void gpu_assets::initialize() {
     info.magFilter=info.minFilter=vk::Filter::eLinear;
     info.mipmapMode=vk::SamplerMipmapMode::eLinear;
     info.addressModeU=info.addressModeV=info.addressModeW=vk::SamplerAddressMode::eRepeat;
+    info.minLod=0.f;
+    info.maxLod=32.f;
+    if(anisotropy_enabled_ && vk::physical_device::get()->features.samplerAnisotropy) {
+        info.anisotropyEnable=VK_TRUE;
+        info.maxAnisotropy=std::min(8.f,
+            vk::physical_device::get()->properties.limits.maxSamplerAnisotropy);
+    }
     sampler_=device.createSampler(info);
     try {
         const std::array<std::uint8_t,4> white{255,255,255,255};
