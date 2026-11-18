@@ -1328,6 +1328,8 @@ namespace vs::pcloud
 
     void upload_dynamic_geometry(std::uint32_t image)
     {
+        using namespace vk::util::math;
+        constexpr float inf=std::numeric_limits<float>::infinity();
         auto& data=get();
         if(!data.snapshot || !data.dynamic_prepared)return;
         auto& frame=data.frames.at(image);
