@@ -72,6 +72,12 @@ public:
         }
         return result;
     }
+    // Enumerate desired regions for retrying producer requests that could
+    // not enter a bounded worker queue on an earlier tick.
+    template<class Visit>
+    void each(Visit&& visit) const {
+        for(const auto id:requested_)visit(id);
+    }
     bool contains(region_id id) const {return requested_.contains(id);}
     std::size_t size() const noexcept {return requested_.size();}
     void clear(){requested_.clear();}
