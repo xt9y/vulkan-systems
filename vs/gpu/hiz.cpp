@@ -100,6 +100,18 @@ void depth_pyramid::build(vk::CommandBuffer command)
                                 {},{},{},{barrier});
         initialized_=true;
     }
+    // The same frame may have sampled the previous pyramid before this
+    // update. Serialize those compute reads against the upcoming writes.
+    vk::ImageMemoryBarrier reuse{};
+    reuse.image=image_.handle();
+    reuse.oldLayout=vk::ImageLayout::eGeneral;
+    reuse.newLayout=vk::ImageLayout::eGeneral;
+    reuse.srcAccessMask=vk::AccessFlagBits::eShaderRead;
+    reuse.dstAccessMask=vk::AccessFlagBits::eShaderWrite;
+    reuse.subresourceRange={vk::ImageAspectFlagBits::eColor,0,levels_,0,1};
+    command.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                            vk::PipelineStageFlagBits::eComputeShader,
+                            {},{},{},{reuse});
     auto width=extent_.width,height=extent_.height;
     for(std::uint32_t i=0;i<levels_;++i) {
         kernel_.dispatch(command,(width+7u)/8u,(height+7u)/8u,1u,

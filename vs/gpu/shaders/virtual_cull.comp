@@ -10,14 +10,61 @@ struct Draw {
     uint first_instance;
 };
 layout(std430,set=0,binding=3) buffer Draws {Draw draws[];};
-layout(push_constant) uniform Selection {
+layout(set=1,binding=0) uniform sampler2D hiz_depth;
+layout(std140,set=1,binding=1) uniform VisibilityView {
     vec4 planes[6];
+    mat4 previous_vp;
+    vec4 previous_camera;
+    vec4 options; // enabled, viewport width, viewport height, mip count
+} visible;
+layout(push_constant) uniform Selection {
     vec4 camera;        // position.xyz, pixels per world unit at depth 1
     vec4 error;         // per-level geometric error / mesh radius
     uvec4 info;         // instance count, active levels
     uvec4 indices;      // index counts
 } pc;
 
+bool occluded(vec4 sphere)
+{
+    if(visible.options.x<0.5 || sphere.w<=0.0)return false;
+    // Project all eight corners of the bounding box. Its projection contains
+    // the sphere, including near-depth and the full screen-space footprint.
+    vec2 lo=vec2(1e9),hi=vec2(-1e9);
+    float near_depth=1.0;
+    for(int z=0;z<2;++z)
+    for(int y=0;y<2;++y)
+    for(int x=0;x<2;++x) {
+        vec3 corner=sphere.xyz+sphere.w*vec3(
+            x==0?-1.0:1.0,y==0?-1.0:1.0,z==0?-1.0:1.0);
+        vec4 clip=visible.previous_vp*vec4(corner,1.0);
+        if(clip.w<=0.0)return false;
+        vec3 ndc=clip.xyz/clip.w;
+        lo=min(lo,ndc.xy*0.5+0.5);
+        hi=max(hi,ndc.xy*0.5+0.5);
+        near_depth=min(near_depth,ndc.z);
+    }
+    if(any(lessThan(lo,vec2(0.0))) ||
+       any(greaterThan(hi,vec2(1.0))) || near_depth<=0.0)
+        return false;
+    // Leave a conservative pixel margin for subpixel motion and rasterization.
+    vec2 pad=2.0/max(visible.options.yz,vec2(1.0));
+    lo=max(vec2(0.0),lo-pad);
+    hi=min(vec2(0.999999),hi+pad);
+    float footprint=max((hi.x-lo.x)*visible.options.y,
+                        (hi.y-lo.y)*visible.options.z);
+    float level=clamp(ceil(log2(max(footprint,1.0))),
+                      0.0,visible.options.w-1.0);
+    int mip=int(level);
+    ivec2 dim=textureSize(hiz_depth,mip);
+    ivec2 mn=clamp(ivec2(floor(lo*vec2(dim))),ivec2(0),dim-1);
+    ivec2 mx=clamp(ivec2(floor(hi*vec2(dim))),ivec2(0),dim-1);
+    if(any(greaterThan(mx-mn,ivec2(1))))return false;
+    float farthest=0.0;
+    for(int y=mn.y;y<=mx.y;++y)
+    for(int x=mn.x;x<=mx.x;++x)
+        farthest=max(farthest,texelFetch(hiz_depth,ivec2(x,y),mip).r);
+    return near_depth>farthest+0.003;
+}
 void main()
 {
     uint id=gl_GlobalInvocationID.x;
@@ -32,8 +79,9 @@ void main()
     if(id>=pc.info.x)return;
     vec4 sphere=spheres[id];
     for(uint i=0u;i<6u;++i)
-        if(dot(pc.planes[i],vec4(sphere.xyz,1.0)) < -sphere.w)
+        if(dot(visible.planes[i],vec4(sphere.xyz,1.0)) < -sphere.w)
             return;
+    if(occluded(sphere))return;
 
     float distance=max(length(sphere.xyz-pc.camera.xyz)-sphere.w,0.1);
     float projected_radius=pc.camera.w*sphere.w/distance;

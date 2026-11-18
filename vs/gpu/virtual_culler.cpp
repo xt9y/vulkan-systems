@@ -5,10 +5,13 @@
 #include <stdexcept>
 
 namespace vs::gpu {
-void virtual_culler::create(const std::string& shader,vk::DescriptorSetLayout layout)
+void virtual_culler::create(const std::string& shader,
+                            vk::DescriptorSetLayout layout,
+                            vk::DescriptorSetLayout view_layout)
 {
-    if(!layout)throw std::invalid_argument("Missing virtual culler layout");
-    kernel_.create(shader,{layout},sizeof(parameters));
+    if(!layout || !view_layout)
+        throw std::invalid_argument("Missing virtual culler layouts");
+    kernel_.create(shader,{layout,view_layout},sizeof(parameters));
 }
 void virtual_culler::begin(vk::CommandBuffer cmd,const std::vector<draw_buffer>& buffers)
 {
@@ -28,17 +31,16 @@ void virtual_culler::begin(vk::CommandBuffer cmd,const std::vector<draw_buffer>&
         vk::PipelineStageFlagBits::eComputeShader,{}, {barrier},{},{});
 }
 void virtual_culler::dispatch(vk::CommandBuffer cmd,vk::DescriptorSet set,
-    const std::array<vk::util::math::vec4,6>& planes,
+    vk::DescriptorSet view_set,
     vk::util::math::vec3 eye,float pixel_scale,std::uint32_t instances,
     std::span<const std::uint32_t> indices,
     std::span<const float> errors) const
 {
     if(!instances)return;
-    if(!cmd || !set || indices.empty() || indices.size()>4u ||
+    if(!cmd || !set || !view_set || indices.empty() || indices.size()>4u ||
        errors.size()!=indices.size())
         throw std::invalid_argument("Invalid virtual culler dispatch");
     parameters push{};
-    push.planes=planes;
     push.camera={eye.x,eye.y,eye.z,pixel_scale};
     push.info={instances,std::uint32_t(indices.size()),0u,0u};
     for(std::size_t i=0;i<indices.size();++i) {
@@ -46,7 +48,7 @@ void virtual_culler::dispatch(vk::CommandBuffer cmd,vk::DescriptorSet set,
         push.errors[i]=std::max(0.f,errors[i]);
     }
     kernel_.dispatch(cmd,(instances+127u)/128u,1u,1u,
-        {set},&push,sizeof(push));
+        {set,view_set},&push,sizeof(push));
 }
 void virtual_culler::end(vk::CommandBuffer cmd) const
 {
