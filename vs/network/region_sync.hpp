@@ -90,6 +90,42 @@ private:
 // and delayed replies to old interests. Payload contents are caller-defined.
 class receiver {
 public:
+    using payload_ptr=std::shared_ptr<const std::vector<std::uint8_t>>;
+    struct update {
+        ::vs::spatial::region_id id{};
+        std::uint64_t revision=0;
+        payload_ptr payload; // Null on authoritative remove.
+    };
+    std::uint64_t serial() const noexcept {return regions_.serial();}
+    // The caller retains its own cursor. An expired journal throws, so
+    // consumers can discard derived state and call snapshot() instead.
+    std::vector<update> since(std::uint64_t cursor) const {
+        const auto changes=regions_.since(cursor);
+        std::unordered_set<::vs::spatial::region_id,
+                           ::vs::spatial::region_hash> ids;
+        std::vector<update> result;
+        for(const auto& change:changes)
+            ids.insert(change.id);
+        result.reserve(ids.size());
+        for(const auto id:ids) {
+            const auto* item=regions_.get(id);
+            if(item)result.push_back({id,item->revision,item->value});
+        }
+        std::sort(result.begin(),result.end(),[](const auto& a,const auto& b){
+            if(a.id.y!=b.id.y)return a.id.y<b.id.y;
+            if(a.id.z!=b.id.z)return a.id.z<b.id.z;
+            return a.id.x<b.id.x;
+        });
+        return result;
+    }
+    std::vector<update> snapshot() const {
+        std::vector<update> result;
+        regions_.each([&](auto id,auto revision,const auto& value) {
+            result.push_back({id,revision,
+                std::make_shared<const std::vector<std::uint8_t>>(value)});
+        });
+        return result;
+    }
     bool apply(const message& m) {
         if(m.action!=operation::replace && m.action!=operation::remove)
             return false;
