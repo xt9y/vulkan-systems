@@ -55,6 +55,14 @@ public:
                               std::size_t target_bytes=0) {
         return pages_.trim(completed_serial,target_bytes);
     }
+    // Return completed, unreferenced victims to destroy before uploading
+    // another page. No Vulkan calls occur in the residency policy itself.
+    std::vector<page_id> make_room(std::uint64_t completed_serial,
+                                    std::size_t required_bytes) {
+        if(required_bytes>pages_.budget())return {};
+        return pages_.trim_to(completed_serial,
+                              pages_.budget()-required_bytes);
+    }
     std::size_t used() const noexcept{return pages_.used();}
     std::size_t budget() const noexcept{return pages_.budget();}
     std::size_t regions() const noexcept{return regions_.size();}

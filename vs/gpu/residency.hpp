@@ -22,8 +22,10 @@ public:
         :budget_(budget_bytes){}
     bool insert(page_id id,std::size_t bytes,std::uint64_t submitted,
                 bool pinned=false) {
-        if(!bytes || bytes>budget_ || pages_.contains(id) ||
-           bytes>std::numeric_limits<std::size_t>::max()-used_)
+        // Enforce the total budget, not only each individual page size.
+        // The caller can evict completed, unreferenced pages and retry.
+        if(!bytes || pages_.contains(id) || used_>budget_ ||
+           bytes>budget_-used_)
             return false;
         pages_.emplace(id,page{bytes,submitted,pinned});
         used_+=bytes;
@@ -43,8 +45,14 @@ public:
     }
     std::vector<page_id> trim(std::uint64_t completed,
                              std::size_t target_bytes=0) {
-        // A zero target means the configured residency budget.
-        const auto target=target_bytes?std::min(target_bytes,budget_):budget_;
+        // Backward-compatible zero target means configured budget.
+        return trim_to(completed,target_bytes?
+            std::min(target_bytes,budget_):budget_);
+    }
+    // Strict target also accepts zero for a full budget reservation.
+    std::vector<page_id> trim_to(std::uint64_t completed,
+                                std::size_t target) {
+        target=std::min(target,budget_);
         std::vector<page_id> candidates;
         for(const auto& [id,page]:pages_)
             if(!page.pinned && page.last_used<=completed)
