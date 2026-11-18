@@ -24,8 +24,12 @@ struct virtual_mesh {
 // Vertices may have any stride; position_offset points at three floats.
 // Builds simplified index LODs and 64-vertex/124-triangle meshlet clusters.
 // Call once when loading a mesh, never from the render loop.
+// Optional per-vertex float attributes/weights allow preserving UVs, normals
+// and skinning across distant LODs. They are generic, not scene/model types.
 virtual_mesh virtualize(const void* vertices,std::size_t vertex_count,
                         std::size_t stride,std::size_t position_offset,
                         std::span<const std::uint32_t> indices,
-                        std::uint32_t max_levels=3);
+                        std::uint32_t max_levels=3,
+                        std::span<const float> attributes={},
+                        std::span<const float> attribute_weights={});
 }
