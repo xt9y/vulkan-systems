@@ -1,0 +1,46 @@
+#version 450
+layout(local_size_x=128) in;
+layout(std430,set=0,binding=1) readonly buffer Bounds { vec4 spheres[]; };
+layout(std430,set=0,binding=2) buffer Visible {uint visible_ids[];};
+struct Draw {
+    uint index_count;
+    uint instance_count;
+    uint first_index;
+    int vertex_offset;
+    uint first_instance;
+};
+layout(std430,set=0,binding=3) buffer Draws {Draw draws[];};
+layout(push_constant) uniform Selection {
+    vec4 planes[6];
+    vec4 camera;        // position.xyz, pixels per world unit at depth 1
+    vec4 error;         // per-level geometric error / mesh radius
+    uvec4 info;         // instance count, active levels
+    uvec4 indices;      // index counts
+} pc;
+
+void main()
+{
+    uint id=gl_GlobalInvocationID.x;
+    if(id==0u) {
+        for(uint level=0u;level<pc.info.y;++level) {
+            draws[level].index_count=pc.indices[level];
+            draws[level].first_index=0u;
+            draws[level].vertex_offset=0;
+            draws[level].first_instance=0u;
+        }
+    }
+    if(id>=pc.info.x)return;
+    vec4 sphere=spheres[id];
+    for(uint i=0u;i<6u;++i)
+        if(dot(pc.planes[i],vec4(sphere.xyz,1.0)) < -sphere.w)
+            return;
+
+    float distance=max(length(sphere.xyz-pc.camera.xyz)-sphere.w,0.1);
+    float projected_radius=pc.camera.w*sphere.w/distance;
+    uint lod=0u;
+    for(uint level=1u;level<pc.info.y;++level)
+        if(projected_radius*pc.error[level]<=1.25)
+            lod=level;
+    uint out_index=atomicAdd(draws[lod].instance_count,1u);
+    visible_ids[lod*pc.info.x+out_index]=id;
+}
