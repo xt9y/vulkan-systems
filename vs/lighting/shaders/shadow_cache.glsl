@@ -14,13 +14,14 @@ uint vs_hash(uint h)
     h *= 0x846ca68bu;
     return h^(h>>16u);
 }
-bool vs_static_visible_hit(vec3 origin,vec3 ray,float distance,uint light)
+bool vs_static_visible_hit(vec3 origin,vec3 ray,float distance,
+                           uint light,vec3 inverse_direction)
 {
     uint count=uint(vs_visibility.length());
     // Caching is worthwhile primarily when static BVH traversal dominates.
     // Keep the exact direct path for small scenes and explicit opt-out.
     if(pc.light_count.z<32768.0 || count==0u || distance<=0.001)
-        return static_hit(origin,ray,distance,light);
+        return static_hit(origin,ray,distance,light,inverse_direction);
 
     // One-centimeter spatial cells strongly limit inter-pixel shadow leaks.
     // Two independent keys distinguish collisions in the open-address cache.
@@ -41,7 +42,7 @@ bool vs_static_visible_hit(vec3 origin,vec3 ray,float distance,uint light)
         return vs_visibility[slot].w!=0u;
     if(state==0u &&
        atomicCompSwap(vs_visibility[slot].x,0u,1u)==0u) {
-        bool hit=static_hit(origin,ray,distance,light);
+        bool hit=static_hit(origin,ray,distance,light,inverse_direction);
         vs_visibility[slot].y=a;
         vs_visibility[slot].z=b;
         vs_visibility[slot].w=hit?1u:0u;
@@ -49,6 +50,6 @@ bool vs_static_visible_hit(vec3 origin,vec3 ray,float distance,uint light)
         atomicExchange(vs_visibility[slot].x,2u);
         return hit;
     }
-    return static_hit(origin,ray,distance,light);
+    return static_hit(origin,ray,distance,light,inverse_direction);
 }
 #endif
