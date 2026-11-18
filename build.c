@@ -82,7 +82,7 @@ void build(C_Build* b) {
     // Examples must work with a normal build; allow CPU-only use to opt out.
     if(!getenv("VS_SKIP_SHADERS"))shaders();
     C_Dependency* wrapper=c_git(b,"VulkanWrapper",
-        "https://github.com/xt9y/vulkan-wrapper.git",
+        "https://github.com/xt9y-org/vulkan-wrapper.git",
         "69bae1717dbcb5df838f4fc6de78de50507ed4ac");
     c_dep_cbuild(wrapper,"VulkanWrapper",C_TARGET_STATIC_LIBRARY);
     c_dep_include(wrapper,".");
