@@ -25,6 +25,9 @@ public:
     void wait();
     // True when every submitted frame has finished.
     bool idle() const;
+    // Monotonic queue submission/completion serials for safe page retirement.
+    std::uint64_t submitted_serial() const noexcept {return submitted_;}
+    std::uint64_t completed_serial() const;
     // Returns an open command buffer. May throw vk::OutOfDateKHRError.
     ticket begin();
     // Ends, submits, signals image completion and presents.
@@ -36,10 +39,12 @@ private:
         vk::CommandBuffer command{};
         vk::Semaphore image_ready{};
         vk::Fence fence{};
+        std::uint64_t serial=0;
     };
     std::vector<frame> frames_;
     std::vector<vk::Fence> image_fences_;
     std::vector<vk::Semaphore> render_ready_;
     std::size_t next_=0;
+    std::uint64_t submitted_=0,completed_=0;
 };
 }

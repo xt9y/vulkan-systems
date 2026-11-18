@@ -1,5 +1,6 @@
 #include <vs/render/frame.hpp>
 #include <stdexcept>
+#include <algorithm>
 #include <limits>
 
 namespace vs::render {
@@ -41,12 +42,23 @@ void frame_scheduler::wait() {
     if(vk::device::get()->handle.waitForFences(frames_[next_].fence,true,UINT64_MAX)
        !=vk::Result::eSuccess)
         throw std::runtime_error("frame fence wait failed");
+    completed_=std::max(completed_,frames_[next_].serial);
 }
 bool frame_scheduler::idle() const {
     auto device=vk::device::get()->handle;
     for(const auto& frame:frames_)
         if(device.getFenceStatus(frame.fence)!=vk::Result::eSuccess)return false;
     return true;
+}
+std::uint64_t frame_scheduler::completed_serial() const {
+    if(frames_.empty())return completed_;
+    auto completed=completed_;
+    const auto device=vk::device::get()->handle;
+    for(const auto& frame:frames_)
+        if(frame.serial &&
+           device.getFenceStatus(frame.fence)==vk::Result::eSuccess)
+            completed=std::max(completed,frame.serial);
+    return completed;
 }
 frame_scheduler::ticket frame_scheduler::begin() {
     if(image_fences_.empty())throw std::logic_error("frame scheduler requires resize");
@@ -82,6 +94,7 @@ vk::Result frame_scheduler::submit(ticket active) {
     submit_info.signalSemaphoreCount=1;
     submit_info.pSignalSemaphores=&render_ready_[active.image];
     vk::submit::queue(vk::queue::get()->graphics,{submit_info},current.fence);
+    current.serial=++submitted_;
     vk::PresentInfoKHR info{};
     info.waitSemaphoreCount=1;
     info.pWaitSemaphores=&render_ready_[active.image];
@@ -110,5 +123,6 @@ void frame_scheduler::reset() noexcept {
     render_ready_.clear();
     image_fences_.clear();
     next_=0;
+    submitted_=completed_=0;
 }
 }
