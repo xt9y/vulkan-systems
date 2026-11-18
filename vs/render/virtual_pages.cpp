@@ -74,7 +74,8 @@ bool virtual_page_pool::stage(const virtual_page& source,const geometry& owner,
         return true;
     }
     const auto bytes=source.indices.size()*sizeof(std::uint32_t);
-    if(!accounting_.insert(source.id,bytes,serial))return false;
+    if(!accounting_.insert(source.id,bytes,serial,
+                           references_.contains(source.id)))return false;
     try {
         auto page=std::make_shared<item>();
         page->vertices=owner.vertex_buffer();
@@ -113,6 +114,30 @@ void virtual_page_pool::touch(page_id id,std::uint64_t submitted_serial) {
     it->second->last_used=std::max(it->second->last_used,submitted_serial);
     accounting_.touch(id,submitted_serial);
 }
+void virtual_page_pool::attach_region(
+    ::vs::spatial::region_id region,std::span<const page_id> ids) {
+    auto& owned=regions_[region];
+    for(const auto id:ids) {
+        if(!id || !owned.insert(id).second)continue;
+        ++references_[id];
+        accounting_.pin(id,true);
+    }
+}
+void virtual_page_pool::detach_region(
+    ::vs::spatial::region_id region,std::uint64_t last_use_serial) {
+    const auto found=regions_.find(region);
+    if(found==regions_.end())return;
+    for(const auto id:found->second) {
+        const auto it=references_.find(id);
+        if(it==references_.end())continue;
+        if(!--it->second) {
+            references_.erase(it);
+            accounting_.pin(id,false);
+            accounting_.touch(id,last_use_serial);
+        }
+    }
+    regions_.erase(found);
+}
 void virtual_page_pool::evict(std::uint64_t completed_serial,
                              std::size_t target_bytes) {
     // A zero target requests full eviction of completed pages, not the
@@ -133,6 +158,8 @@ std::uint32_t virtual_page_pool::level_mask(const virtual_pages& catalog) const 
 }
 void virtual_page_pool::clear_idle() {
     pages_.clear();
+    regions_.clear();
+    references_.clear();
     accounting_.clear_idle();
 }
 } // namespace vs::render

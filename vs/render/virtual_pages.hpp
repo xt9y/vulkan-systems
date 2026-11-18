@@ -4,6 +4,8 @@
 #include <vs/gpu/residency.hpp>
 #include <vs/gpu/retirement.hpp>
 #include <vs/gpu/upload.hpp>
+#include <vs/spatial/world.hpp>
+#include <unordered_set>
 #include <cstddef>
 #include <cstdint>
 #include <array>
@@ -45,6 +47,14 @@ public:
     void confirm_uploads();
     bool view(page_id id,mesh& out) const;
     void touch(page_id id,std::uint64_t submitted_serial);
+    // Multiple regions can share an immutable asset page. Attached pages
+    // cannot be evicted; detaching the last owner makes a page reclaimable
+    // only after its final frame fence completes.
+    void attach_region(::vs::spatial::region_id region,
+                       std::span<const page_id> pages);
+    void detach_region(::vs::spatial::region_id region,
+                       std::uint64_t last_use_serial);
+    std::size_t region_count() const noexcept{return regions_.size();}
     void evict(std::uint64_t completed_serial,
                std::size_t target_bytes=0);
     std::size_t used() const noexcept{return accounting_.used();}
@@ -64,5 +74,8 @@ private:
     };
     ::vs::gpu::residency accounting_;
     std::unordered_map<page_id,std::shared_ptr<item>> pages_;
+    std::unordered_map<::vs::spatial::region_id,
+        std::unordered_set<page_id>,::vs::spatial::region_hash> regions_;
+    std::unordered_map<page_id,std::size_t> references_;
 };
 } // namespace vs::render
