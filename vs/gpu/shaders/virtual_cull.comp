@@ -33,7 +33,7 @@ layout(push_constant) uniform Selection {
     vec4 camera;        // position.xyz, pixels per world unit at depth 1
     vec4 error;         // per-level geometric error / mesh radius
     uvec4 info;         // instance count, active levels
-    uvec4 indices;      // index counts
+    uvec4 indices;      // whole-mesh index counts OR virtual LOD page starts
 } pc;
 
 bool occluded(vec4 sphere)
