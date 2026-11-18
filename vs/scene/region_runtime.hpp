@@ -1,6 +1,7 @@
 #pragma once
 #include <vs/scene/regions.hpp>
 #include <vs/render/invalidation.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -29,6 +30,10 @@ public:
     bool dirty() const noexcept {return !dirty_.empty();}
     std::vector<::vs::render::invalidation> take_changes() {
         return dirty_.consume();
+    }
+    std::vector<::vs::render::invalidation> take_changes(
+        std::size_t budget,::vs::spatial::region_id focus) {
+        return dirty_.consume(budget,focus);
     }
     void clear() {regions_.clear();dirty_.clear();}
 private:

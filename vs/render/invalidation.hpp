@@ -33,8 +33,14 @@ public:
         auto& current=regions_[dirty.id];
         if(dirty.revision<current.revision)return;
         current.id=dirty.id;
+        // Flags for older revisions are not merged with a newer
+        // authoritative state. A complete replacement supersedes old
+        // deferred work for the same region.
+        if(dirty.revision>current.revision)
+            current.changed=dirty.changed;
+        else
+            current.changed=current.changed|dirty.changed;
         current.revision=dirty.revision;
-        current.changed=current.changed|dirty.changed;
     }
     // Prioritize nearby work while keeping a hard per-frame budget.
     // Untouched changes remain queued, including their merged change masks.

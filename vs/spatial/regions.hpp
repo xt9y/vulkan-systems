@@ -68,7 +68,8 @@ public:
             if(item.value)visit(id,item.revision,*item.value);
     }
     void clear() {
-        items_.clear();journal_.clear();serial_=0;resident_=0;
+        items_.clear();previously_resident_.clear();
+        journal_.clear();serial_=0;resident_=0;
     }
 private:
     void record(change event) {

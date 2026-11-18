@@ -138,6 +138,11 @@ public:
         } catch(const std::out_of_range&) {
             result.full=true;
             result.entries=snapshot();
+        } catch(const std::invalid_argument&) {
+            // Receiver reset or reconnected, so the old cursor belongs
+            // to a different replication lifetime.
+            result.full=true;
+            result.entries=snapshot();
         }
         result.cursor=regions_.serial();
         cursor=result.cursor;
