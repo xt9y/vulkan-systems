@@ -97,8 +97,12 @@ namespace vs::pcloud
         vec3 center{};
         float radius=0.f;
     };
-    // Animated shadow triangles and compact bone spheres share one BVH.
-    // The static scene and probe samples remain unchanged.
+    // CPU-only BVH refit can run before swapchain acquisition; GPU uploads
+    // remain indexed by the acquired frame, so in-flight buffers are safe.
+    void prepare_dynamic_geometry(const std::vector<triangle>& triangles,
+                                  const std::vector<shadow_sphere>& spheres={});
+    void upload_dynamic_geometry(std::uint32_t image);
+    // Compatibility one-call path for existing clients.
     void update_dynamic_geometry(std::uint32_t image,
                                  const std::vector<triangle>& triangles,
                                  const std::vector<shadow_sphere>& spheres={});

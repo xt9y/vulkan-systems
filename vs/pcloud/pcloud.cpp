@@ -42,8 +42,7 @@ namespace vs::pcloud
             ::vs::gpu::owned_buffer tile_lights;
             ::vs::gpu::owned_buffer dynamic_vertices,dynamic_nodes,changed_points;
             std::vector<std::uint32_t> tile_cpu;
-            std::vector<std::array<float,4>> dynamic_cpu;
-            std::vector<::vs::bvh::stackless_node> dynamic_refit;
+            std::uint32_t dynamic_count=0;
             std::vector<std::uint8_t> dynamic_packet;
             std::vector<std::uint32_t> affected_cpu;
             std::uint32_t gi_interval=0;
@@ -89,8 +88,12 @@ namespace vs::pcloud
             std::shared_ptr<const ::vs::scene::data> incoming;
             std::vector<light> live_lights;
             std::vector<vec3> sample_positions;
-            std::vector<::vs::bvh::stackless_node> dynamic_topology;
+            std::vector<::vs::bvh::stackless_node> dynamic_topology,prepared_nodes;
             std::vector<std::uint32_t> dynamic_order;
+            std::vector<std::array<float,4>> prepared_vertices;
+            collision_box prepared_bounds{};
+            std::uint32_t prepared_primitives=0;
+            bool dynamic_prepared=false;
             configuration shader_paths{};
             presentation_target output{};
             std::uint32_t light_count=0, point_count=0, vertex_count=0, node_count=0;
@@ -1148,6 +1151,10 @@ namespace vs::pcloud
                 p.position[0],p.position[1],p.position[2]});
         data.dynamic_topology.clear();
         data.dynamic_order.clear();
+        data.prepared_nodes.clear();
+        data.prepared_vertices.clear();
+        data.prepared_primitives=0;
+        data.dynamic_prepared=false;
         for(auto& frame:data.frames) {
             frame.has_dynamic_bounds=false;
             frame.gi_interval=0;
@@ -1155,8 +1162,7 @@ namespace vs::pcloud
             frame.gi_complete=false;
             frame.grid_initialized=false;
             frame.cloud_submitted=false;
-            frame.dynamic_refit.clear();
-            frame.dynamic_cpu.clear();
+            frame.dynamic_count=0;
             frame.affected_cpu.clear();
             frame.changed_count=0;
             frame.cloud_partial=false;
@@ -1193,14 +1199,12 @@ namespace vs::pcloud
         }
     }
 
-    void update_dynamic_geometry(std::uint32_t image,
-                                 const std::vector<triangle>& faces,
-                                 const std::vector<shadow_sphere>& spheres)
+    void prepare_dynamic_geometry(const std::vector<triangle>& faces,
+                                  const std::vector<shadow_sphere>& spheres)
     {
         using namespace vk::util::math;
         auto& data=get();
         if(!data.snapshot) return;
-        auto& frame=data.frames.at(image);
 
         const auto primitive_count=faces.size()+spheres.size();
         if(data.dynamic_order.size()!=primitive_count) {
@@ -1225,13 +1229,13 @@ namespace vs::pcloud
             data.dynamic_topology=::vs::bvh::build_stackless(initial);
             // A topology change invalidates every image's previous node links,
             // even if the new tree happens to contain the same node count.
-            for(auto& frame:data.frames)frame.dynamic_refit.clear();
+            data.prepared_nodes.clear();
             data.dynamic_order.resize(primitive_count);
             for(std::size_t i=0;i<primitive_count;++i)
                 data.dynamic_order[i]=std::uint32_t(initial[i*3u][3]);
         }
 
-        auto& vertices=frame.dynamic_cpu;
+        auto& vertices=data.prepared_vertices;
         vertices.clear();
         vertices.reserve(primitive_count*3u);
         collision_box bounds{};
@@ -1273,7 +1277,7 @@ namespace vs::pcloud
             }
         }
 
-        auto& nodes=frame.dynamic_refit;
+        auto& nodes=data.prepared_nodes;
         if(nodes.size()!=data.dynamic_topology.size())
             nodes=data.dynamic_topology;
         for(std::size_t j=nodes.size();j-->0;) {
@@ -1317,6 +1321,21 @@ namespace vs::pcloud
             }
         }
 
+        data.prepared_bounds=bounds;
+        data.prepared_primitives=std::uint32_t(primitive_count);
+        data.dynamic_prepared=true;
+    }
+
+    void upload_dynamic_geometry(std::uint32_t image)
+    {
+        auto& data=get();
+        if(!data.snapshot || !data.dynamic_prepared)return;
+        auto& frame=data.frames.at(image);
+        const auto& vertices=data.prepared_vertices;
+        const auto& nodes=data.prepared_nodes;
+        const auto& bounds=data.prepared_bounds;
+        const auto primitive_count=data.prepared_primitives;
+        frame.dynamic_count=primitive_count;
         const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
         const auto host=vk::MemoryPropertyFlagBits::eHostVisible |
                         vk::MemoryPropertyFlagBits::eHostCoherent;
@@ -1508,6 +1527,14 @@ namespace vs::pcloud
                 state.point_count,state.visual_node_count,state.node_count};
     }
 
+    void update_dynamic_geometry(std::uint32_t image,
+                                 const std::vector<triangle>& faces,
+                                 const std::vector<shadow_sphere>& spheres)
+    {
+        prepare_dynamic_geometry(faces,spheres);
+        upload_dynamic_geometry(image);
+    }
+
     void release()
     {
         auto& data = get();
@@ -1659,7 +1686,7 @@ namespace vs::pcloud
         // Moving crowds invalidate many probe neighborhoods at once.
         // Distribute the expensive refresh over additional frames without
         // changing the probe grid, GI weights, or final converged result.
-        const bool dense_dynamic=frame.dynamic_cpu.size()/3u>=900u;
+        const bool dense_dynamic=frame.dynamic_count>=900u;
         const std::uint32_t max_groups_per_frame=
             dense_dynamic?(frame.partial_grid?1u:4u):
                           (frame.partial_grid?4u:12u);
@@ -1749,7 +1776,7 @@ namespace vs::pcloud
         // Static GLB geometry also dominates shadow-BVH traversal. The old
         // heuristic considered only animated primitives and therefore never
         // enabled the accelerated shader for the 87k-triangle mermaid scene.
-        const std::size_t dynamic_primitives=current.dynamic_cpu.size()/3u;
+        const std::size_t dynamic_primitives=current.dynamic_count;
         const std::size_t static_primitives=data.vertex_count/3u;
         const std::uint32_t pixel_rate=
             static_primitives>=60000u || dynamic_primitives>=900u ? 4u :
