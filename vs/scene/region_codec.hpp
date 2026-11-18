@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <type_traits>
@@ -49,7 +50,6 @@ private:
     std::vector<std::uint8_t> output_;
     std::size_t position_=0;
 };
-template<class A> void scalar(A& a,float& f){a.value(f);}
 template<class A> void vec(A& a,::vs::scene::vec3& v) {
     a.value(v.x);a.value(v.y);a.value(v.z);
 }
@@ -109,6 +109,10 @@ template<class A> void light(A& a,::vs::scene::point_light& l) {
 }
 template<class A,class T,class Visit>
 void list(A& a,std::vector<T>& items,std::uint32_t maximum,Visit visit) {
+    if constexpr(!A::reading) {
+        if(items.size()>maximum || items.size()>std::numeric_limits<std::uint32_t>::max())
+            throw std::runtime_error("Region element budget exceeded");
+    }
     std::uint32_t count=static_cast<std::uint32_t>(items.size());
     a.value(count);
     if(count>maximum)throw std::runtime_error("Region element budget exceeded");
@@ -132,13 +136,13 @@ inline std::vector<std::uint8_t> encode(const region_fragment& source) {
     detail::archive<false> writer;
     detail::fragment(writer,fragment);
     auto bytes=std::move(writer).finish();
-    if(bytes.size()>1024u*1024u)
-        throw std::runtime_error("Region exceeds the 1 MiB stream budget");
+    if(bytes.size()>8u*1024u*1024u)
+        throw std::runtime_error("Region exceeds the 8 MiB stream budget");
     return bytes;
 }
 inline std::shared_ptr<const region_fragment> decode(
     std::span<const std::uint8_t> bytes) {
-    if(bytes.size()>1024u*1024u)
+    if(bytes.size()>8u*1024u*1024u)
         throw std::runtime_error("Oversized region fragment");
     auto fragment=std::make_shared<region_fragment>();
     detail::archive<true> reader(bytes);
