@@ -1,5 +1,6 @@
 #include <vs/render/virtual_pages.hpp>
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 
@@ -16,6 +17,8 @@ virtual_pages paginate(const virtual_mesh& source,std::uint64_t asset,
         const auto& lod=source.levels[level];
         if(lod.indices.empty())continue;
         std::uint32_t start=0,count=0;
+        std::array<float,3> lo{},hi{};
+        bool has_bounds=false;
         const auto flush=[&]() {
             if(!count)return;
             virtual_page page{};
@@ -23,12 +26,19 @@ virtual_pages paginate(const virtual_mesh& source,std::uint64_t asset,
             page.level=std::uint32_t(level);
             page.first=start;
             page.count=count;
+            for(int axis=0;axis<3;++axis)
+                page.sphere[axis]=(lo[axis]+hi[axis])*0.5f;
+            const float x=(hi[0]-lo[0])*0.5f;
+            const float y=(hi[1]-lo[1])*0.5f;
+            const float z=(hi[2]-lo[2])*0.5f;
+            page.sphere[3]=std::sqrt(x*x+y*y+z*z);
             page.indices.assign(lod.indices.begin()+start,
                                 lod.indices.begin()+start+count);
             out.levels[level].push_back(page.id);
             out.pages.push_back(std::move(page));
             start+=count;
             count=0;
+            has_bounds=false;
         };
         for(const auto& cluster:lod.clusters) {
             if(cluster.first!=start+count ||
@@ -36,6 +46,14 @@ virtual_pages paginate(const virtual_mesh& source,std::uint64_t asset,
                 throw std::invalid_argument("Invalid cluster page sequence");
             if(count && std::size_t(count)+cluster.count>max_indices)
                 flush();
+            for(int axis=0;axis<3;++axis) {
+                const auto a=cluster.center[axis]-cluster.radius;
+                const auto b=cluster.center[axis]+cluster.radius;
+                if(!has_bounds){lo[axis]=a;hi[axis]=b;}
+                else {lo[axis]=std::min(lo[axis],a);
+                      hi[axis]=std::max(hi[axis],b);}
+            }
+            has_bounds=true;
             count+=cluster.count;
         }
         flush();

@@ -6,6 +6,7 @@
 #include <vs/gpu/upload.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <span>
 #include <unordered_map>
@@ -19,6 +20,7 @@ namespace vs::render {
 struct virtual_page {
     std::uint64_t id=0;
     std::uint32_t level=0,first=0,count=0;
+    std::array<float,4> sphere{}; // conservative union of page meshlets
     std::vector<std::uint32_t> indices;
 };
 struct virtual_pages {
