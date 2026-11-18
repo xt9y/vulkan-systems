@@ -25,17 +25,13 @@ layout(std430,set=0,binding=VS_REGION_VERTEX_BINDING) readonly buffer VsRegionVe
 layout(std430,set=0,binding=VS_REGION_NODE_BINDING) readonly buffer VsRegionNodes {
     ShadowNode vs_region_nodes[];
 };
-bool vs_region_static_hit(vec3 origin,vec3 ray,float distance)
+bool vs_region_static_hit(vec3 origin,vec3 ray,float distance,
+                          vec3 inv_dir)
 {
     if(vs_region_records.length()<2 || distance<=0.001)return false;
     uint count=min(vs_region_records[0].span.x,
                    uint(vs_region_records.length()-1));
     if(count==0u)return false;
-    vec3 safe=vec3(
-        abs(ray.x)<1e-7?(ray.x<0.0?-1e-7:1e-7):ray.x,
-        abs(ray.y)<1e-7?(ray.y<0.0?-1e-7:1e-7):ray.y,
-        abs(ray.z)<1e-7?(ray.z<0.0?-1e-7:1e-7):ray.z);
-    vec3 inv_dir=1.0/safe;
     for(uint page=1u;page<=count;++page) {
         VsRegionRecord region=vs_region_records[page];
         if(region.span.z==0u)continue;
@@ -74,4 +70,12 @@ bool vs_region_static_hit(vec3 origin,vec3 ray,float distance)
     }
     return false;
 }
+bool vs_region_static_hit(vec3 origin,vec3 ray,float distance)
+{
+    if(vs_region_records.length()<2 ||
+       vs_region_records[0].span.x==0u || distance<=0.001)return false;
+    return vs_region_static_hit(origin,ray,distance,
+                                vs_shadow_inverse_direction(ray));
+}
+
 #endif
