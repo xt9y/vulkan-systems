@@ -169,7 +169,7 @@ vec4 vs_crowd_shade(ivec2 p,ivec2 size)
     float depth=texelFetch(g_depth,p,0).r;
     bool viewmodel=depth<0.1;
     // Only called by the coarse-rate path, after shared masks are ready.
-    uint tiles_per_side=uint(pc.light_count.w+0.5)*1u/2u;
+    uint tiles_per_side=uint(pc.light_count.w+0.5)/2u;
     uvec2 local_tile=uvec2(p)/16u-gl_WorkGroupID.xy*tiles_per_side;
     uvec2 light_mask=coarse_tile_lights[
         local_tile.y*tiles_per_side+local_tile.x];
