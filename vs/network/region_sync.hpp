@@ -120,9 +120,9 @@ public:
     }
     std::vector<update> snapshot() const {
         std::vector<update> result;
-        regions_.each([&](auto id,auto revision,const auto& value) {
-            result.push_back({id,revision,
-                std::make_shared<const std::vector<std::uint8_t>>(value)});
+        regions_.each([&](auto id,auto revision,const auto&) {
+            const auto* entry=regions_.get(id);
+            result.push_back({id,revision,entry->value});
         });
         return result;
     }
