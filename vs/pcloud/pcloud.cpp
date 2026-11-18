@@ -215,7 +215,8 @@ namespace vs::pcloud
         }
 
         void compute(vk::CommandBuffer command,const ::vs::gpu::compute& program,
-                     vk::DescriptorSet set,const camera_frame& frame)
+                     vk::DescriptorSet set,const camera_frame& frame,
+                     std::uint32_t pixel_rate=1u)
         {
             const auto extent=get().output.extent;
             const auto& view=frame;
@@ -232,14 +233,15 @@ namespace vs::pcloud
                 {basis.right.x,basis.right.y,basis.right.z,tan_half*aspect},
                 {basis.up.x,basis.up.y,basis.up.z,tan_half},
                 {float(get().light_count),0.f,
-                 float(get().vertex_count),float(get().node_count)},
+                 float(get().vertex_count),float(pixel_rate)},
                 {grid.grid_origin.x,grid.grid_origin.y,grid.grid_origin.z,
                  grid.grid_spacing}
             };
             const auto width=extent.width;
             const auto height=extent.height;
-            program.dispatch(command,(width+7)/8,(height+7)/8,1,
-                             {set},&controls,sizeof(controls));
+            program.dispatch(command,(width+8u*pixel_rate-1u)/(8u*pixel_rate),
+                (height+8u*pixel_rate-1u)/(8u*pixel_rate),1,
+                {set},&controls,sizeof(controls));
         }
     }
 
@@ -577,7 +579,7 @@ namespace vs::pcloud
             {view.right.x,view.right.y,view.right.z,tangent*aspect},
             {view.up.x,view.up.y,view.up.z,tangent},
             {float(data.light_count),-1.f,float(data.vertex_count),
-             float(data.node_count)},
+             1.f},
             {data.grid_origin.x,data.grid_origin.y,data.grid_origin.z,
              data.grid_spacing}
         };
@@ -1738,7 +1740,12 @@ namespace vs::pcloud
         }
         vk::buffer::write(current.tile_lights,current.tile_cpu.data(),
                           current.tile_cpu.size()*sizeof(std::uint32_t));
-        compute(command,*data.lighting_program,current.lighting,frame);
+        // Crowd shadow rays run at an adaptive pixel rate; silhouettes
+        // and G-buffer edges retain native-resolution visibility.
+        const auto dynamic_primitives=current.dynamic_cpu.size()/3u;
+        const std::uint32_t pixel_rate=dynamic_primitives>=900u?4u:
+            dynamic_primitives>=512u?2u:1u;
+        compute(command,*data.lighting_program,current.lighting,frame,pixel_rate);
     }
 
     void tonemap(vk::CommandBuffer command, std::uint32_t image,
