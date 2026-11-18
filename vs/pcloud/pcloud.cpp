@@ -321,9 +321,9 @@ namespace vs::pcloud
             data.presentation->create(get().output.images,
                 get().output.format,get().output.extent);
             data.cloud_sets=std::make_unique<::vs::gpu::descriptors>();
-            data.cloud_sets->create(bindings(0,0,vk::ShaderStageFlagBits::eCompute,9),count);
+            data.cloud_sets->create(bindings(0,0,vk::ShaderStageFlagBits::eCompute,12),count);
             data.gi_sets=std::make_unique<::vs::gpu::descriptors>();
-            data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,11),count);
+            data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,14),count);
             data.lighting_sets=std::make_unique<::vs::gpu::descriptors>();
             data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,16),count*2);
             data.tone_sets=std::make_unique<::vs::gpu::descriptors>();
@@ -440,6 +440,10 @@ namespace vs::pcloud
                 data.cloud_sets->write_buffer(i,6,vk::buffer::descriptor(current.dynamic_vertices));
                 data.cloud_sets->write_buffer(i,7,vk::buffer::descriptor(current.dynamic_nodes));
                 data.cloud_sets->write_buffer(i,8,vk::buffer::descriptor(current.changed_points));
+                const auto region=data.region_shadows.descriptors(i);
+                data.cloud_sets->write_buffer(i,9,region.records);
+                data.cloud_sets->write_buffer(i,10,region.vertices);
+                data.cloud_sets->write_buffer(i,11,region.nodes);
                 data.gi_sets->write_buffer(i,1,vk::buffer::descriptor(current.points));
                 data.gi_sets->write_buffer(i,2,vk::buffer::descriptor(data.triangles));
                 data.gi_sets->write_buffer(i,3,vk::buffer::descriptor(data.nodes));
@@ -451,6 +455,9 @@ namespace vs::pcloud
                 data.gi_sets->write_buffer(i,9,vk::buffer::descriptor(data.glass_filters));
                 data.gi_sets->write_buffer(i,10,vk::buffer::descriptor(current.dynamic_vertices));
                 data.gi_sets->write_buffer(i,11,vk::buffer::descriptor(current.dynamic_nodes));
+                data.gi_sets->write_buffer(i,12,region.records);
+                data.gi_sets->write_buffer(i,13,region.vertices);
+                data.gi_sets->write_buffer(i,14,region.nodes);
 
                 std::array<vk::DescriptorImageInfo,6> lighting{};
                 for(std::size_t j=0;j<g.size();++j)

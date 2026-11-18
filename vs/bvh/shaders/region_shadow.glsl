@@ -7,13 +7,22 @@ struct VsRegionRecord {
     vec4 minimum,maximum;
     uvec4 span;
 };
-layout(std430,set=0,binding=19) readonly buffer VsRegionRecords {
+#ifndef VS_REGION_RECORD_BINDING
+#define VS_REGION_RECORD_BINDING 19
+#endif
+#ifndef VS_REGION_VERTEX_BINDING
+#define VS_REGION_VERTEX_BINDING 20
+#endif
+#ifndef VS_REGION_NODE_BINDING
+#define VS_REGION_NODE_BINDING 21
+#endif
+layout(std430,set=0,binding=VS_REGION_RECORD_BINDING) readonly buffer VsRegionRecords {
     VsRegionRecord vs_region_records[];
 };
-layout(std430,set=0,binding=20) readonly buffer VsRegionVertices {
+layout(std430,set=0,binding=VS_REGION_VERTEX_BINDING) readonly buffer VsRegionVertices {
     vec4 vs_region_vertices[];
 };
-layout(std430,set=0,binding=21) readonly buffer VsRegionNodes {
+layout(std430,set=0,binding=VS_REGION_NODE_BINDING) readonly buffer VsRegionNodes {
     ShadowNode vs_region_nodes[];
 };
 bool vs_region_static_hit(vec3 origin,vec3 ray,float distance)
