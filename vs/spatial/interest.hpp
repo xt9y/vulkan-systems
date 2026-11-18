@@ -22,7 +22,7 @@ public:
         bool load=false;
     };
     std::vector<change> update(region_id center,settings options) {
-        if(options.horizontal>128u || options.vertical>16u)
+        if(options.horizontal>32u || options.vertical>8u)
             throw std::invalid_argument("Unbounded region interest radius");
         struct candidate {region_id id; std::uint64_t distance;};
         std::vector<candidate> candidates;

@@ -22,21 +22,23 @@ public:
                  triangle_vertices triangles) {
         if(!revision || triangles.size()%3u)
             return false;
-        const auto it=trees_.find(id);
-        if(it!=trees_.end() && revision<=it->second.revision)return false;
+        const auto seen=revisions_.find(id);
+        if(seen!=revisions_.end() && revision<=seen->second)return false;
         tree next;
         next.revision=revision;
         next.nodes=build_stackless(triangles);
         store_triangle_edges(triangles);
         next.vertices=std::move(triangles);
         trees_.insert_or_assign(id,std::move(next));
+        revisions_[id]=revision;
         return true;
     }
     bool erase(::vs::spatial::region_id id,std::uint64_t revision) {
         if(!revision)return false;
-        const auto it=trees_.find(id);
-        if(it==trees_.end() || revision<=it->second.revision)return false;
-        trees_.erase(it);
+        const auto seen=revisions_.find(id);
+        if(seen!=revisions_.end() && revision<=seen->second)return false;
+        trees_.erase(id);
+        revisions_[id]=revision;
         return true;
     }
     const tree* find(::vs::spatial::region_id id) const {
@@ -44,12 +46,14 @@ public:
         return it==trees_.end()?nullptr:&it->second;
     }
     std::size_t size() const noexcept {return trees_.size();}
-    void clear(){trees_.clear();}
+    void clear(){trees_.clear();revisions_.clear();}
     template<class Visit>void each(Visit&& visit) const {
         for(const auto& [id,tree]:trees_)visit(id,tree);
     }
 private:
     std::unordered_map<::vs::spatial::region_id,tree,
                        ::vs::spatial::region_hash> trees_;
+    std::unordered_map<::vs::spatial::region_id,std::uint64_t,
+                       ::vs::spatial::region_hash> revisions_;
 };
 } // namespace vs::bvh

@@ -1,6 +1,7 @@
 #pragma once
 #include <vs/spatial/world.hpp>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -45,13 +46,14 @@ inline std::vector<std::uint8_t> encode(const message& m) {
     std::vector<std::uint8_t> out(header_bytes+m.payload.size());
     out[0]='V';out[1]='S';out[2]='R';out[3]='1';
     out[4]=static_cast<std::uint8_t>(m.action);
-    detail::write(out.data()+8,static_cast<std::uint64_t>(m.id.x));
-    detail::write(out.data()+16,static_cast<std::uint64_t>(m.id.y));
-    detail::write(out.data()+24,static_cast<std::uint64_t>(m.id.z));
+    detail::write(out.data()+8,std::bit_cast<std::uint64_t>(m.id.x));
+    detail::write(out.data()+16,std::bit_cast<std::uint64_t>(m.id.y));
+    detail::write(out.data()+24,std::bit_cast<std::uint64_t>(m.id.z));
     detail::write(out.data()+32,m.revision);
     detail::write(out.data()+40,
         (std::uint64_t(detail::hash(m.payload))<<32)|m.payload.size());
-    std::memcpy(out.data()+header_bytes,m.payload.data(),m.payload.size());
+    if(!m.payload.empty())
+        std::memcpy(out.data()+header_bytes,m.payload.data(),m.payload.size());
     return out;
 }
 inline std::optional<message> decode(std::span<const std::uint8_t> bytes) {
@@ -61,9 +63,9 @@ inline std::optional<message> decode(std::span<const std::uint8_t> bytes) {
         return std::nullopt;
     message m;
     m.action=static_cast<operation>(bytes[4]);
-    m.id={static_cast<std::int64_t>(detail::read(bytes.data()+8)),
-          static_cast<std::int64_t>(detail::read(bytes.data()+16)),
-          static_cast<std::int64_t>(detail::read(bytes.data()+24))};
+    m.id={std::bit_cast<std::int64_t>(detail::read(bytes.data()+8)),
+          std::bit_cast<std::int64_t>(detail::read(bytes.data()+16)),
+          std::bit_cast<std::int64_t>(detail::read(bytes.data()+24))};
     m.revision=detail::read(bytes.data()+32);
     const auto checksum=detail::read(bytes.data()+40);
     const auto length=static_cast<std::uint32_t>(checksum);

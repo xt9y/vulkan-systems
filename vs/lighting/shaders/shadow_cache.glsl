@@ -25,9 +25,14 @@ bool vs_static_visible_hit(vec3 origin,vec3 ray,float distance,uint light)
     // One-centimeter spatial cells strongly limit inter-pixel shadow leaks.
     // Two independent keys distinguish collisions in the open-address cache.
     ivec3 cell=ivec3(floor(origin*100.0));
+    // Light endpoints participate in both keys. A shadow query for a moving
+    // light must never reuse an entry computed for an earlier ray.
+    ivec3 target=ivec3(floor((origin+ray*distance)*100.0));
     uint a=vs_hash(uint(cell.x)^vs_hash(uint(cell.y))^
+                   uint(target.x)^vs_hash(uint(target.y))^
                    (light*0x9e3779b9u));
     uint b=vs_hash(uint(cell.z)^vs_hash(uint(cell.y))^
+                   uint(target.z)^vs_hash(uint(target.x))^
                    (uint(cell.x)*0x85ebca6bu)^light);
     uint slot=a&(count-1u);
     uint state=vs_visibility[slot].x;
