@@ -495,7 +495,6 @@ namespace vs::pcloud
                     vk::buffer::descriptor(current.dynamic_nodes));
                 data.lighting_sets->write_buffer(i,18,
                     vk::buffer::descriptor(data.visibility.resource()));
-                const auto region=data.region_shadows.descriptors(i);
                 data.lighting_sets->write_buffer(i,19,region.records);
                 data.lighting_sets->write_buffer(i,20,region.vertices);
                 data.lighting_sets->write_buffer(i,21,region.nodes);
