@@ -284,6 +284,18 @@ namespace vs::pcloud
             total,frame.dirty,frame.grid_initialized};
     }
 
+    lighting_statistics lighting_stats(std::uint32_t image)
+    {
+        const auto& data=get();
+        const auto& frame=data.frames.at(image);
+        std::uint32_t eligible=0;
+        for(std::uint32_t i=0;i<data.light_count && i<64u;++i)
+            if((data.dynamic_shadow_mask[i>>5u]&(1u<<(i&31u)))!=0u)
+                ++eligible;
+        return {data.light_count,eligible,data.lighting_pixel_rate,
+                frame.dynamic_count};
+    }
+
     void updated(std::uint32_t image)
     {
         auto& frame=get().frames.at(image);
@@ -2091,6 +2103,7 @@ namespace vs::pcloud
         const std::uint32_t pixel_rate=
             static_primitives>=60000u || dynamic_primitives>=900u ? 4u :
             static_primitives>=12000u || dynamic_primitives>=256u ? 2u : 1u;
+        data.lighting_pixel_rate=pixel_rate;
         static std::uint32_t previous_rate=0u;
         if(pixel_rate!=previous_rate) {
             std::cout << "pc: lighting pixel rate " << pixel_rate
