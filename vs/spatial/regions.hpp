@@ -49,6 +49,15 @@ public:
         const auto it=items_.find(id);
         return it==items_.end()?nullptr:&it->second;
     }
+    // Local interest eviction is not an authoritative deletion. Forget
+    // the old revision so the same content revision may be streamed again
+    // under a newer subscription lease, and journal the local removal.
+    bool forget(region_id id) {
+        if(!items_.contains(id))return false;
+        record({++serial_,0,id,false});
+        items_.erase(id);
+        return true;
+    }
     std::size_t resident_count() const noexcept {
         return resident_;
     }

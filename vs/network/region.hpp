@@ -13,11 +13,12 @@
 namespace vs::network::region {
 // A bounded application-level message transported by network::session/DTLS.
 // Replace, remove, and manifest are separate from model/texture asset blobs.
-enum class operation : std::uint8_t {replace=1,remove=2,manifest=3};
+enum class operation : std::uint8_t {replace=1,remove=2,manifest=3,release=4};
 struct message {
     operation action=operation::replace;
     ::vs::spatial::region_id id{};
     std::uint64_t revision=0;
+    std::uint32_t lease=0; // 24-bit subscription epoch, zero for legacy peers.
     std::vector<std::uint8_t> payload;
 };
 inline constexpr std::size_t header_bytes=48;
@@ -38,14 +39,18 @@ inline std::uint32_t hash(std::span<const std::uint8_t> data) {
 }
 }
 inline std::vector<std::uint8_t> encode(const message& m) {
-    if(m.revision==0 || m.payload.size()>max_payload ||
-       (m.action==operation::remove && !m.payload.empty()) ||
+    if(m.revision==0 || m.lease>0xffffffu || m.payload.size()>max_payload ||
+       ((m.action==operation::remove || m.action==operation::release) &&
+        !m.payload.empty()) ||
        (m.action!=operation::replace && m.action!=operation::remove &&
-        m.action!=operation::manifest))
+        m.action!=operation::manifest && m.action!=operation::release))
         throw std::invalid_argument("Invalid region network message");
     std::vector<std::uint8_t> out(header_bytes+m.payload.size());
     out[0]='V';out[1]='S';out[2]='R';out[3]='1';
     out[4]=static_cast<std::uint8_t>(m.action);
+    out[5]=std::uint8_t(m.lease);
+    out[6]=std::uint8_t(m.lease>>8u);
+    out[7]=std::uint8_t(m.lease>>16u);
     detail::write(out.data()+8,std::bit_cast<std::uint64_t>(m.id.x));
     detail::write(out.data()+16,std::bit_cast<std::uint64_t>(m.id.y));
     detail::write(out.data()+24,std::bit_cast<std::uint64_t>(m.id.z));
@@ -59,10 +64,13 @@ inline std::vector<std::uint8_t> encode(const message& m) {
 inline std::optional<message> decode(std::span<const std::uint8_t> bytes) {
     if(bytes.size()<header_bytes || bytes.size()>header_bytes+max_payload ||
        bytes[0]!='V'||bytes[1]!='S'||bytes[2]!='R'||bytes[3]!='1' ||
-       bytes[5]||bytes[6]||bytes[7]||bytes[4]<1||bytes[4]>3)
+       bytes[4]<1||bytes[4]>4)
         return std::nullopt;
     message m;
     m.action=static_cast<operation>(bytes[4]);
+    m.lease=std::uint32_t(bytes[5])|
+            (std::uint32_t(bytes[6])<<8u)|
+            (std::uint32_t(bytes[7])<<16u);
     m.id={std::bit_cast<std::int64_t>(detail::read(bytes.data()+8)),
           std::bit_cast<std::int64_t>(detail::read(bytes.data()+16)),
           std::bit_cast<std::int64_t>(detail::read(bytes.data()+24))};
@@ -70,7 +78,8 @@ inline std::optional<message> decode(std::span<const std::uint8_t> bytes) {
     const auto checksum=detail::read(bytes.data()+40);
     const auto length=static_cast<std::uint32_t>(checksum);
     if(!m.revision || length!=bytes.size()-header_bytes ||
-       (m.action==operation::remove && length))return std::nullopt;
+       ((m.action==operation::remove || m.action==operation::release) &&
+        length))return std::nullopt;
     m.payload.assign(bytes.begin()+header_bytes,bytes.end());
     if(detail::hash(m.payload)!=std::uint32_t(checksum>>32))return std::nullopt;
     return m;
