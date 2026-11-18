@@ -35,8 +35,13 @@ namespace vs::bvh
     // heuristic splits. Triangle positions and exact any-hit tests are
     // unchanged; this only reduces the average number of BVH visits.
     inline std::vector<stackless_node> build_stackless(
-        std::vector<std::array<float,4>>& triangles)
+        std::vector<std::array<float,4>>& triangles,
+        std::size_t minimum_leaf=4u,std::size_t maximum_leaf=8u)
     {
+        // The low four bits encode a leaf count. Keep leaves within 1..8;
+        // smaller leaves favor expensive animated any-hit shadow queries.
+        minimum_leaf=std::clamp(minimum_leaf,std::size_t(1),std::size_t(8));
+        maximum_leaf=std::clamp(maximum_leaf,minimum_leaf,std::size_t(8));
         using namespace vk::util::math;
         struct primitive
         {
@@ -80,8 +85,6 @@ namespace vs::bvh
             node.maximum={hi.x+0.0001f,hi.y+0.0001f,hi.z+0.0001f};
             const auto node_index=nodes.size();
             nodes.push_back(node);
-            constexpr std::size_t minimum_leaf=4;
-            constexpr std::size_t maximum_leaf=8;
             constexpr int bin_count=12;
             std::size_t middle=first;
             if(end-first>minimum_leaf)
