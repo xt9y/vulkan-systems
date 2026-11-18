@@ -3,6 +3,7 @@
 #include <vs/scene/scene.hpp>
 #include <vs/scene/environment.hpp>
 #include <vs/scene/regions.hpp>
+#include <vs/scene/region_runtime.hpp>
 #include <vs/assets/model.hpp>
 #include <vs/assets/animation.hpp>
 #include <vs/assets/gpu_assets.hpp>
@@ -22,6 +23,7 @@
 #include <vs/spatial/regions.hpp>
 #include <vs/spatial/paged_index.hpp>
 #include <vs/spatial/interest.hpp>
+#include <vs/spatial/region_scheduler.hpp>
 #include <vs/jobs/pool.hpp>
 #include <vs/network/network.hpp>
 #include <vs/network/region.hpp>

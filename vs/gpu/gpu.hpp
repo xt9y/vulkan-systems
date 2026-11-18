@@ -16,4 +16,6 @@
 #include <vs/gpu/virtual_culler.hpp>
 #include <vs/gpu/retirement.hpp>
 #include <vs/gpu/hiz.hpp>
+#include <vs/gpu/residency.hpp>
+#include <vs/gpu/region_residency.hpp>
 #include <vs/gpu/timestamps.hpp>
