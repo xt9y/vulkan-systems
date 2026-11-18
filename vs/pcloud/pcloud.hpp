@@ -126,6 +126,8 @@ namespace vs::pcloud
         std::uint64_t revision,std::span<const triangle> faces);
     bool remove_shadow_region(::vs::spatial::region_id id,
         std::uint64_t revision);
+    bool forget_shadow_region(::vs::spatial::region_id id);
+    void clear_shadow_regions();
     // Region-scoped radiance/probe invalidation without static BVH rebuild.
     // Caller waits for in-flight frames before updating CPU-visible buffers.
     // Use set_scene() when triangles or probe topology have changed.

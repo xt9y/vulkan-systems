@@ -922,6 +922,15 @@ namespace vs::pcloud
         return get().region_shadows.erase(id,revision);
     }
 
+    bool forget_shadow_region(::vs::spatial::region_id id)
+    {
+        return get().region_shadows.forget(id);
+    }
+    void clear_shadow_regions()
+    {
+        get().region_shadows.clear_regions();
+    }
+
     void invalidate_region(const ::vs::scene::collision_box& region)
     {
         auto& data=get();

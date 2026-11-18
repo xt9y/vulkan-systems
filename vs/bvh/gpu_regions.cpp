@@ -84,6 +84,18 @@ bool gpu_regions::erase(spatial::region_id id,std::uint64_t revision) {
     ++serial_;
     return true;
 }
+bool gpu_regions::forget(spatial::region_id id) {
+    const bool changed=entries_.erase(id)!=0u;
+    const bool known=versions_.erase(id)!=0u;
+    if(changed || known)++serial_;
+    return changed || known;
+}
+void gpu_regions::clear_regions() {
+    if(entries_.empty() && versions_.empty())return;
+    entries_.clear();
+    versions_.clear();
+    ++serial_;
+}
 bool gpu_regions::upload(std::uint32_t image) {
     auto& dest=*frames_.at(image);
     if(dest.serial==serial_)return false;

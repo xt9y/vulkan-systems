@@ -35,6 +35,10 @@ public:
     bool replace(spatial::region_id id,std::uint64_t revision,
                  std::span<const scene::triangle> triangles);
     bool erase(spatial::region_id id,std::uint64_t revision);
+    // Local interest release: forget the old revision so identical content
+    // can be reattached under a new network subscription lease.
+    bool forget(spatial::region_id id);
+    void clear_regions();
     // Must follow a successful frame/image fence wait. Stable buffer
     // allocations mean consumers' descriptors never change on replacement.
     bool upload(std::uint32_t image);
