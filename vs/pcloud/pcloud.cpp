@@ -1529,7 +1529,13 @@ namespace vs::pcloud
         auto& data=get();
         if(!data.snapshot) return;
 
-        const bool grouped=!face_owners.empty()||!sphere_owners.empty();
+        // A/B fallback for unvalidated GPUs; all shadow hit tests stay exact.
+        static const bool group_acceleration=[] {
+            const char* value=std::getenv("VS_DYNAMIC_BVH_GROUPS");
+            return !value || *value!='0';
+        }();
+        const bool grouped=group_acceleration &&
+            (!face_owners.empty()||!sphere_owners.empty());
         if(grouped && (face_owners.size()!=faces.size() ||
                        sphere_owners.size()!=spheres.size()))
             throw std::invalid_argument(
