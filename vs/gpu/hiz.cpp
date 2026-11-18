@@ -29,7 +29,7 @@ void depth_pyramid::create(vk::ImageView source,vk::Extent2D size,
             throw std::runtime_error("R32F depth pyramid unsupported");
         vk::ImageCreateInfo info{};
         info.imageType=vk::ImageType::e2D;
-        info.extent={extent_.width,extent_.height,1u};
+        info.extent=vk::Extent3D{extent_.width,extent_.height,1u};
         info.mipLevels=levels_;
         info.arrayLayers=1;
         info.format=vk::Format::eR32Sfloat;
