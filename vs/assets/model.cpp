@@ -126,20 +126,30 @@ namespace
         return first_texture + std::uint32_t(*ref.imageIndex);
     };
 
-    if (source.pbrData.baseColorTexture)
+    const auto uv_set = [](std::size_t index) -> std::uint32_t {
+        if (index > 1) throw std::runtime_error("glTF TEXCOORD_2+ is unsupported");
+        return static_cast<std::uint32_t>(index);
+    };
+    if (source.pbrData.baseColorTexture) {
         result.base_color_texture = id(source.pbrData.baseColorTexture->textureIndex);
-
-    if (source.pbrData.metallicRoughnessTexture)
+        result.texture_uv_sets |= uv_set(source.pbrData.baseColorTexture->texCoordIndex) << 0;
+    }
+    if (source.pbrData.metallicRoughnessTexture) {
         result.metallic_roughness_texture = id(source.pbrData.metallicRoughnessTexture->textureIndex);
-
-    if (source.normalTexture)
+        result.texture_uv_sets |= uv_set(source.pbrData.metallicRoughnessTexture->texCoordIndex) << 1;
+    }
+    if (source.normalTexture) {
         result.normal_texture = id(source.normalTexture->textureIndex);
-
-    if (source.occlusionTexture)
+        result.texture_uv_sets |= uv_set(source.normalTexture->texCoordIndex) << 2;
+    }
+    if (source.occlusionTexture) {
         result.occlusion_texture = id(source.occlusionTexture->textureIndex);
-
-    if (source.emissiveTexture)
+        result.texture_uv_sets |= uv_set(source.occlusionTexture->texCoordIndex) << 3;
+    }
+    if (source.emissiveTexture) {
         result.emissive_texture = id(source.emissiveTexture->textureIndex);
+        result.texture_uv_sets |= uv_set(source.emissiveTexture->texCoordIndex) << 4;
+    }
 
     return result;
 }
@@ -214,6 +224,7 @@ vk::util::math::vec3 normal(const fastgltf::math::nmat4x4 &m, fastgltf::math::fv
                 const auto& positions = asset.accessors.at(p->accessorIndex);
                 const auto n = primitive.findAttribute("NORMAL");
                 const auto u = primitive.findAttribute("TEXCOORD_0");
+                const auto u1 = primitive.findAttribute("TEXCOORD_1");
                 const auto joints = primitive.findAttribute("JOINTS_0");
                 const auto weights = primitive.findAttribute("WEIGHTS_0");
 if (skinned && (joints == primitive.attributes.end() || weights == primitive.attributes.end()))
@@ -222,6 +233,8 @@ if (skinned && (joints == primitive.attributes.end() || weights == primitive.att
                 mesh.id = first_mesh++;
                 mesh.skin_id = skinned ? first_skin + std::uint32_t(*node.skinIndex) : 0;
                 mesh.surface = material(asset, primitive, first_texture);
+                if (mesh.surface.texture_uv_sets && u1 == primitive.attributes.end())
+                    throw std::runtime_error("glTF material requires missing TEXCOORD_1");
                 mesh.vertices.resize(positions.count);
                 for (std::size_t i = 0; i < positions.count; ++i) {
                     auto& vertex = mesh.vertices[i];
@@ -237,6 +250,12 @@ vertex.normal = skinned ? vk::util::math::vec3{normal_value[0], normal_value[1],
 const auto uv = fastgltf::getAccessorElement<fastgltf::math::fvec2>( asset, asset.accessors[u->accessorIndex], i);
                         vertex.u = uv[0];
                         vertex.v = uv[1];
+                    }
+                    if (u1 != primitive.attributes.end()) {
+                        const auto uv = fastgltf::getAccessorElement<fastgltf::math::fvec2>(
+                            asset, asset.accessors[u1->accessorIndex], i);
+                        vertex.u1 = uv[0];
+                        vertex.v1 = uv[1];
                     }
                     if (skinned) {
                         const auto indices = fastgltf::getAccessorElement<

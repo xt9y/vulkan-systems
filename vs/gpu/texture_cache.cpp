@@ -22,11 +22,12 @@ namespace vs::gpu {
            it->second.width==width && it->second.height==height)return;
         texture incoming{};
         incoming.hash=hash;incoming.width=width;incoming.height=height;
-        incoming.image.adopt(transfers.add_image(rgba,width,height));
+        std::uint32_t levels=1;
+        incoming.image.adopt(transfers.add_image(rgba,width,height,&levels));
         vk::ImageViewCreateInfo info{};
         info.viewType=vk::ImageViewType::e2D;
         info.format=incoming.image.format();
-        info.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
+        info.subresourceRange={vk::ImageAspectFlagBits::eColor,0,levels,0,1};
         incoming.image.make_view(info);
         if(it==images_.end())
             images_.emplace(key,std::move(incoming));

@@ -15,7 +15,10 @@ public:
         ::vs::scene::material material{};
         ::vs::render::geometry geometry;
     };
-    gpu_assets()=default;
+    // Enable anisotropy only if the caller enabled samplerAnisotropy while
+    // creating its logical device. Otherwise keep ordinary trilinear sampling.
+    explicit gpu_assets(bool anisotropy_enabled=false)
+        :anisotropy_enabled_(anisotropy_enabled){}
     ~gpu_assets(){reset();}
     gpu_assets(const gpu_assets&)=delete;
     gpu_assets& operator=(const gpu_assets&)=delete;
@@ -37,5 +40,6 @@ private:
     ::vs::gpu::texture_cache cache_;
     std::unordered_set<std::uint32_t> live_;
     vk::Sampler sampler_{};
+    bool anisotropy_enabled_=false;
 };
 }

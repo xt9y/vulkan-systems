@@ -43,6 +43,9 @@ struct material
     bool double_sided = false;
 
     std::uint32_t procedural_pattern = 0;
+    // Five one-bit glTF UV selectors: base, metal/rough, normal, AO, emissive.
+    // Zero preserves the original TEXCOORD_0 behavior.
+    std::uint32_t texture_uv_sets = 0;
 };
 
 struct vertex
@@ -55,6 +58,8 @@ struct vertex
 
     std::array<std::uint32_t, 4> joints{};
     std::array<float, 4> weights{};
+    // Keep these after skin data to preserve old aggregate initializers.
+    float u1 = 0, v1 = 0;
 };
 
 struct mesh
