@@ -98,6 +98,7 @@ namespace vs::pcloud
             std::vector<vec3> sample_positions;
             std::vector<::vs::bvh::stackless_node> dynamic_topology,prepared_nodes;
             std::vector<std::uint32_t> dynamic_order;
+            std::uint64_t dynamic_group_signature=0;
             std::vector<std::array<float,4>> prepared_vertices;
             float dynamic_reference_cost=0.f;
             std::uint32_t dynamic_refit_age=0;
@@ -1463,6 +1464,7 @@ namespace vs::pcloud
         data.visibility.invalidate();
         data.dynamic_topology.clear();
         data.dynamic_order.clear();
+        data.dynamic_group_signature=0;
         data.dynamic_reference_cost=0.f;
         data.dynamic_refit_age=0;
         data.prepared_nodes.clear();
@@ -1517,15 +1519,32 @@ namespace vs::pcloud
         }
     }
 
-    void prepare_dynamic_geometry(const std::vector<triangle>& faces,
-                                  const std::vector<shadow_sphere>& spheres)
+    void prepare_dynamic_geometry(
+        const std::vector<triangle>& faces,
+        const std::vector<shadow_sphere>& spheres,
+        std::span<const std::uint32_t> face_owners,
+        std::span<const std::uint32_t> sphere_owners)
     {
         using namespace vk::util::math;
         auto& data=get();
         if(!data.snapshot) return;
 
+        const bool grouped=!face_owners.empty()||!sphere_owners.empty();
+        if(grouped && (face_owners.size()!=faces.size() ||
+                       sphere_owners.size()!=spheres.size()))
+            throw std::invalid_argument(
+                "Dynamic shadow owner counts do not match geometry");
+        std::uint64_t signature=grouped?1469598103934665603ull:0ull;
+        if(grouped) {
+            for(const auto owner:face_owners)
+                signature=(signature^owner)*1099511628211ull;
+            for(const auto owner:sphere_owners)
+                signature=(signature^owner)*1099511628211ull;
+        }
+
         const auto primitive_count=faces.size()+spheres.size();
-        if(data.dynamic_order.size()!=primitive_count) {
+        if(data.dynamic_order.size()!=primitive_count ||
+           data.dynamic_group_signature!=signature) {
             std::vector<std::array<float,4>> initial;
             initial.reserve(primitive_count*3u);
             for(std::uint32_t i=0;i<faces.size();++i) {
@@ -1551,8 +1570,18 @@ namespace vs::pcloud
                 const char* value=std::getenv("VS_DYNAMIC_BVH_LEAF");
                 return value && std::strcmp(value,"8")==0 ? 8u : 4u;
             }();
-            data.dynamic_topology=::vs::bvh::build_stackless(
-                initial,dynamic_max_leaf/2u,dynamic_max_leaf);
+            if(grouped) {
+                std::vector<std::uint32_t> owners;
+                owners.reserve(primitive_count);
+                owners.insert(owners.end(),face_owners.begin(),face_owners.end());
+                owners.insert(owners.end(),sphere_owners.begin(),sphere_owners.end());
+                data.dynamic_topology=::vs::bvh::build_grouped_stackless(
+                    initial,owners,dynamic_max_leaf/2u,dynamic_max_leaf);
+            } else {
+                data.dynamic_topology=::vs::bvh::build_stackless(
+                    initial,dynamic_max_leaf/2u,dynamic_max_leaf);
+            }
+            data.dynamic_group_signature=signature;
             data.dynamic_reference_cost=0.f;
             data.dynamic_refit_age=0;
             // A topology change invalidates every image's previous node links,
@@ -1667,7 +1696,8 @@ namespace vs::pcloud
             data.prepared_nodes.clear();
             data.dynamic_reference_cost=0.f;
             data.dynamic_refit_age=0;
-            prepare_dynamic_geometry(faces,spheres);
+            prepare_dynamic_geometry(
+                faces,spheres,face_owners,sphere_owners);
             return;
         }
 
@@ -1902,11 +1932,13 @@ namespace vs::pcloud
                 state.point_count,state.visual_node_count,state.node_count};
     }
 
-    void update_dynamic_geometry(std::uint32_t image,
-                                 const std::vector<triangle>& faces,
-                                 const std::vector<shadow_sphere>& spheres)
+    void update_dynamic_geometry(
+        std::uint32_t image,const std::vector<triangle>& faces,
+        const std::vector<shadow_sphere>& spheres,
+        std::span<const std::uint32_t> face_owners,
+        std::span<const std::uint32_t> sphere_owners)
     {
-        prepare_dynamic_geometry(faces,spheres);
+        prepare_dynamic_geometry(faces,spheres,face_owners,sphere_owners);
         upload_dynamic_geometry(image);
     }
 
