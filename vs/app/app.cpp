@@ -222,6 +222,21 @@ void application::resize() {
     info.preTransform=caps.currentTransform;
     info.compositeAlpha=vk::CompositeAlphaFlagBitsKHR::eOpaque;
     info.presentMode=vk::PresentModeKHR::eFifo;
+    // FIFO remains the production default. Allow benchmarking WSI latency
+    // separately from shader execution without changing the renderer.
+    if(const char* requested=std::getenv("VS_PRESENT_MODE")) {
+        const auto modes=vk::physical_device::get()->handle
+            .getSurfacePresentModesKHR(vk::surface::get()->handle);
+        const auto available=[&](vk::PresentModeKHR mode) {
+            return std::find(modes.begin(),modes.end(),mode)!=modes.end();
+        };
+        if(std::strcmp(requested,"mailbox")==0 &&
+           available(vk::PresentModeKHR::eMailbox))
+            info.presentMode=vk::PresentModeKHR::eMailbox;
+        else if(std::strcmp(requested,"immediate")==0 &&
+                available(vk::PresentModeKHR::eImmediate))
+            info.presentMode=vk::PresentModeKHR::eImmediate;
+    }
     info.clipped=true;
     vk::swapchain::init(info);
     frames_.resize(std::uint32_t(vk::swapchain::get()->images.size()));
