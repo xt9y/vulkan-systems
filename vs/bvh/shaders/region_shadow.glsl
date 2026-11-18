@@ -35,6 +35,8 @@ bool vs_region_static_hit(vec3 origin,vec3 ray,float distance)
         bounds.maximum=region.maximum.xyz;
         bounds.next=0u;bounds.first_and_count=0u;
         if(!shadow_box(origin,inv_dir,distance,bounds))continue;
+        if(region.span.y>=uint(vs_region_nodes.length()) ||
+           region.span.x>=uint(vs_region_vertices.length()))continue;
         uint at=0u;
         uint end=min(region.span.z,
                      uint(vs_region_nodes.length())-region.span.y);
