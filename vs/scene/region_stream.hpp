@@ -29,6 +29,16 @@ public:
                       region_runtime& destination,Decode&& decode,
                       std::size_t budget=4) {
         auto batch=receiver.poll(cursor_);
+        return apply(std::move(batch),destination,
+                     std::forward<Decode>(decode),budget);
+    }
+    // FPS and other networking clients poll under their own receive mutex,
+    // then transfer immutable changes to a renderer thread without holding it.
+    template<class Decode>
+    std::size_t apply(::vs::network::region::receiver::batch batch,
+                      region_runtime& destination,Decode&& decode,
+                      std::size_t budget=4) {
+        cursor_=batch.cursor;
         if(batch.full) {
             pending_.clear();
             destination.clear_and_invalidate();
@@ -43,10 +53,10 @@ public:
         // If the application falls behind the journal, resnapshot instead
         // of retaining unbounded intermediate revisions.
         if(pending_.size()>max_pending_) {
-            pending_.clear();
-            for(auto& entry:receiver.snapshot())
-                pending_[entry.id]=std::move(entry);
-            destination.clear_and_invalidate();
+            // A full network snapshot is required to recover without
+            // silently discarding still-resident regions. Signal backpressure
+            // to the caller; the receiver-based overload can resnapshot.
+            throw std::runtime_error("Region decoder backlog exceeds budget");
         }
         if(!budget || pending_.empty())return 0;
         std::vector<::vs::spatial::region_id> ids;

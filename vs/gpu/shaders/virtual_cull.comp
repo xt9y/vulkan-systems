@@ -26,6 +26,8 @@ layout(std140,set=1,binding=1) uniform VisibilityView {
     mat4 previous_vp;
     vec4 previous_camera;
     vec4 options; // enabled, viewport width, viewport height, mip count
+    vec4 animated_count;
+    vec4 animated_rects[64]; // previous/current animated occluder footprints
 } visible;
 layout(push_constant) uniform Selection {
     vec4 camera;        // position.xyz, pixels per world unit at depth 1
@@ -61,6 +63,14 @@ bool occluded(vec4 sphere)
     vec2 pad=2.0/max(visible.options.yz,vec2(1.0));
     lo=max(vec2(0.0),lo-pad);
     hi=min(vec2(0.999999),hi+pad);
+    // The depth pyramid includes moving characters. Their old depth cannot
+    // occlude static geometry when they move, so reject Hi-Z where either
+    // their previous or current conservative screen bounds intersect.
+    for(int i=0;i<int(visible.animated_count.x);++i) {
+        vec4 occluder_rect=visible.animated_rects[i];
+        if(all(greaterThan(hi,occluder_rect.xy)) &&
+           all(lessThan(lo,occluder_rect.zw)))return false;
+    }
     float footprint=max((hi.x-lo.x)*visible.options.y,
                         (hi.y-lo.y)*visible.options.z);
     float level=clamp(ceil(log2(max(footprint,1.0))),
@@ -80,7 +90,7 @@ void main()
 {
     uint id=gl_GlobalInvocationID.x;
     if(id==0u) {
-        uint total=pc.info.z!=0u?pc.info.z:pc.info.y;
+        uint total=pc.info.z!=0u?pc.info.z:(pc.info.y&15u);
         for(uint i=0u;i<total;++i) {
             draws[i].index_count=pc.info.z!=0u?
                 page_meta[i].info.y:pc.indices[i];
@@ -94,20 +104,21 @@ void main()
     for(uint i=0u;i<6u;++i)
         if(dot(visible.planes[i],vec4(sphere.xyz,1.0)) < -sphere.w)
             return;
-    if(occluded(sphere))return;
+    if((pc.info.y&0x80000000u)==0u && occluded(sphere))return;
 
     float distance=max(length(sphere.xyz-pc.camera.xyz)-sphere.w,0.1);
     float projected_radius=pc.camera.w*sphere.w/distance;
     uint lod=0u;
-    for(uint level=1u;level<pc.info.y;++level)
+    uint levels=pc.info.y&15u;
+    for(uint level=1u;level<levels;++level)
         if(projected_radius*pc.error[level]<=1.25)
             lod=level;
     // Whole-level fallback avoids holes when only some cluster pages have
     // arrived. Never select an LOD unless its complete page set is resident.
     uint selected=lod;
-    while(selected<pc.info.y && (pc.info.w&(1u<<selected))==0u)
+    while(selected<levels && (pc.info.w&(1u<<selected))==0u)
         ++selected;
-    if(selected>=pc.info.y) {
+    if(selected>=levels) {
         selected=lod;
         while(selected>0u && (pc.info.w&(1u<<selected))==0u)
             --selected;
@@ -124,9 +135,8 @@ void main()
             Page item=page_meta[page];
             if(item.info.x!=lod || item.info.y==0u)continue;
             vec3 center=(model*vec4(item.sphere.xyz,1.0)).xyz;
-            // Conservative skinning/animation slack without relying on a
-            // game-specific skeletal layout.
-            vec4 bound=vec4(center,item.sphere.w*r*2.0);
+            // Virtual cluster pages contain static instances only.
+            vec4 bound=vec4(center,item.sphere.w*r*1.05);
             bool page_in_frustum=true;
             for(uint plane=0u;plane<6u;++plane)
                 if(dot(visible.planes[plane],vec4(center,1.0))<-bound.w) {

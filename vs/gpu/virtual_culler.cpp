@@ -36,7 +36,7 @@ void virtual_culler::dispatch(vk::CommandBuffer cmd,vk::DescriptorSet set,
     std::span<const std::uint32_t> indices,
     std::span<const float> errors,
     std::uint32_t resident_mask,
-    std::uint32_t page_count) const
+    std::uint32_t page_count,bool allow_occlusion) const
 {
     if(!instances)return;
     if(!cmd || !set || !view_set || indices.empty() || indices.size()>4u ||
@@ -44,7 +44,8 @@ void virtual_culler::dispatch(vk::CommandBuffer cmd,vk::DescriptorSet set,
         throw std::invalid_argument("Invalid virtual culler dispatch");
     parameters push{};
     push.camera={eye.x,eye.y,eye.z,pixel_scale};
-    push.info={instances,std::uint32_t(indices.size()),
+    push.info={instances,std::uint32_t(indices.size()) |
+               (allow_occlusion?0u:0x80000000u),
                page_count,resident_mask};
     for(std::size_t i=0;i<indices.size();++i) {
         push.indices[i]=indices[i];
