@@ -17,7 +17,9 @@ uint vs_hash(uint h)
 bool vs_static_visible_hit(vec3 origin,vec3 ray,float distance,uint light)
 {
     uint count=uint(vs_visibility.length());
-    if(pc.light_count.z<0.0 || count==0u || distance<=0.001)
+    // Caching is worthwhile primarily when static BVH traversal dominates.
+    // Keep the exact direct path for small scenes and explicit opt-out.
+    if(pc.light_count.z<32768.0 || count==0u || distance<=0.001)
         return static_hit(origin,ray,distance,light);
 
     // One-centimeter spatial cells strongly limit inter-pixel shadow leaks.
