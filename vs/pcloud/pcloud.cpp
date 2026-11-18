@@ -1,6 +1,7 @@
 #include <vs/pcloud/pcloud.hpp>
 #include <vs/gpu/light.hpp>
 #include <vs/lighting/transmission.hpp>
+#include <vs/lighting/shadow_cache.hpp>
 #include <vs/render/renderer.hpp>
 #include <vs/render/pipeline.hpp>
 #include <vs/gpu/compute.hpp>
@@ -26,6 +27,7 @@
 #include <optional>
 #include <cstring>
 #include <iostream>
+#include <cstdlib>
 namespace vs::pcloud
 {
     namespace
@@ -79,6 +81,8 @@ namespace vs::pcloud
             ::vs::gpu::owned_buffer triangles;
             ::vs::gpu::owned_buffer nodes;
             ::vs::gpu::owned_buffer shadow_light_ranges;
+            ::vs::lighting::shadow_cache visibility;
+            bool cache_enabled=true;
             ::vs::gpu::owned_buffer transmission;
             ::vs::gpu::owned_buffer glass_vertices,glass_nodes,glass_filters;
             std::uint32_t glass_node_count=0;
@@ -237,7 +241,8 @@ namespace vs::pcloud
                 {basis.right.x,basis.right.y,basis.right.z,tan_half*aspect},
                 {basis.up.x,basis.up.y,basis.up.z,tan_half},
                 {float(get().light_count),0.f,
-                 float(get().vertex_count),float(pixel_rate)},
+                 get().cache_enabled?float(get().vertex_count):-1.f,
+                 float(pixel_rate)},
                 {grid.grid_origin.x,grid.grid_origin.y,grid.grid_origin.z,
                  grid.grid_spacing}
             };
@@ -316,7 +321,7 @@ namespace vs::pcloud
             data.gi_sets=std::make_unique<::vs::gpu::descriptors>();
             data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,11),count);
             data.lighting_sets=std::make_unique<::vs::gpu::descriptors>();
-            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,12),count*2);
+            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,13),count*2);
             data.tone_sets=std::make_unique<::vs::gpu::descriptors>();
             data.tone_sets->create(bindings(1,1,vk::ShaderStageFlagBits::eCompute),count*2);
             data.present_sets=std::make_unique<::vs::gpu::descriptors>();
@@ -361,6 +366,12 @@ namespace vs::pcloud
             data.nodes=::vs::gpu::create_buffer(sizeof(shadow_node),storage,memory);
             data.shadow_light_ranges=::vs::gpu::create_buffer(
                 64*sizeof(::vs::bvh::light_tree_range),storage,memory);
+            data.visibility.create();
+            const char* cache=std::getenv("VS_SHADOW_CACHE");
+            data.cache_enabled=!cache || *cache!='0';
+            std::cout<<"pc: static shadow visibility cache "
+                     <<(data.cache_enabled?"enabled":"disabled")
+                     <<" ("<<::vs::lighting::shadow_cache::slots<<" entries)\n";
             const std::array<::vs::bvh::light_tree_range,64> initial_ranges{};
             vk::buffer::write(data.shadow_light_ranges,initial_ranges.data(),
                               sizeof(initial_ranges));
@@ -470,6 +481,8 @@ namespace vs::pcloud
                     vk::buffer::descriptor(current.dynamic_vertices));
                 data.lighting_sets->write_buffer(i,17,
                     vk::buffer::descriptor(current.dynamic_nodes));
+                data.lighting_sets->write_buffer(i,18,
+                    vk::buffer::descriptor(data.visibility.resource()));
                 std::array<vk::DescriptorImageInfo,2> tone{};
                 tone[0].sampler = data.sampler;
                 tone[0].imageView = current.hdr.view;
@@ -557,6 +570,8 @@ namespace vs::pcloud
                  vk::buffer::descriptor(data.frames[i].dynamic_vertices));
              data.lighting_sets->write_buffer(i+count,17,
                  vk::buffer::descriptor(data.frames[i].dynamic_nodes));
+             data.lighting_sets->write_buffer(i+count,18,
+                 vk::buffer::descriptor(data.visibility.resource()));
             vk::DescriptorImageInfo tone{};
             tone.sampler=data.sampler;
             tone.imageView=current.hdr.view;
@@ -582,8 +597,8 @@ namespace vs::pcloud
             {view.forward.x,view.forward.y,view.forward.z,1000.f},
             {view.right.x,view.right.y,view.right.z,tangent*aspect},
             {view.up.x,view.up.y,view.up.z,tangent},
-            {float(data.light_count),-1.f,float(data.vertex_count),
-             1.f},
+            {float(data.light_count),-1.f,
+             data.cache_enabled?float(data.vertex_count):-1.f,1.f},
             {data.grid_origin.x,data.grid_origin.y,data.grid_origin.z,
              data.grid_spacing}
         };
@@ -1149,6 +1164,8 @@ namespace vs::pcloud
         for(const auto& p:points)
             data.sample_positions.push_back({
                 p.position[0],p.position[1],p.position[2]});
+        // The caller has synchronized the GPU before static BVH replacement.
+        data.visibility.invalidate();
         data.dynamic_topology.clear();
         data.dynamic_order.clear();
         data.prepared_nodes.clear();

@@ -136,6 +136,7 @@ bool static_hit(vec3 origin,vec3 ray,float distance,uint light_index)
     }
     return false;
 }
+#include "shadow_cache.glsl"
 // The viewmodel uses a reserved depth interval. It is still a physical
 // receiver of world light: walls and mirrors must occlude point lights.
 // Cache each light's visibility from the camera eye once per 8x8 workgroup
@@ -144,7 +145,7 @@ shared uint has_viewmodel;
 shared uint viewmodel_occluded[64];
 bool any_hit(vec3 origin,vec3 ray,float distance,uint light_index)
 {
-    return static_hit(origin,ray,distance,light_index) ||
+    return vs_static_visible_hit(origin,ray,distance,light_index) ||
            vs_dynamic_hit(origin,ray,distance);
 }
 
