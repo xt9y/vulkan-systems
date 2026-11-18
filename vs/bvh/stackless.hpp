@@ -10,6 +10,8 @@
 #include <functional>
 #include <limits>
 #include <numeric>
+#include <span>
+#include <unordered_map>
 #include <vector>
 
 namespace vs::bvh
@@ -247,6 +249,104 @@ namespace vs::bvh
         if(!order.empty())build(0,order.size());
         triangles=std::move(ordered);
         return nodes;
+    }
+
+
+    // Two-level dynamic acceleration flattened into the same stackless node
+    // layout consumed by static shadow rays. Each owner gets a local BLAS;
+    // a one-primitive-per-leaf TLAS replaces its leaves with the corresponding
+    // BLAS, so the GPU shader needs no extra buffers, branches or stack.
+    // Refit can update both levels in the usual reverse node order.
+    inline std::vector<stackless_node> build_grouped_stackless(
+        std::vector<std::array<float,4>>& triangles,
+        std::span<const std::uint32_t> owners,
+        std::size_t minimum_leaf=2u,std::size_t maximum_leaf=4u)
+    {
+        if(triangles.size()%3u || triangles.size()/3u!=owners.size())
+            throw std::invalid_argument("Grouped BVH owners do not match primitives");
+        if(owners.empty() || std::all_of(owners.begin()+1,owners.end(),
+            [&](std::uint32_t id){return id==owners.front();}))
+            return build_stackless(triangles,minimum_leaf,maximum_leaf);
+
+        struct group {
+            std::vector<std::array<float,4>> vertices;
+            std::vector<stackless_node> nodes;
+        };
+        std::vector<group> groups;
+        std::unordered_map<std::uint32_t,std::size_t> by_owner;
+        by_owner.reserve(owners.size());
+        for(std::size_t i=0;i<owners.size();++i) {
+            const auto [it,created]=by_owner.try_emplace(
+                owners[i],groups.size());
+            if(created)groups.emplace_back();
+            auto& payload=groups[it->second].vertices;
+            payload.insert(payload.end(),triangles.begin()+i*3u,
+                           triangles.begin()+i*3u+3u);
+        }
+        std::vector<std::array<float,4>> proxies;
+        proxies.reserve(groups.size()*3u);
+        for(std::size_t i=0;i<groups.size();++i) {
+            auto& group=groups[i];
+            group.nodes=build_stackless(
+                group.vertices,minimum_leaf,maximum_leaf);
+            const auto& root=group.nodes.front();
+            proxies.push_back({root.minimum[0],root.minimum[1],
+                               root.minimum[2],float(i)});
+            proxies.push_back({root.maximum[0],root.maximum[1],
+                               root.maximum[2],0.f});
+            proxies.push_back({
+                (root.minimum[0]+root.maximum[0])*.5f,
+                (root.minimum[1]+root.maximum[1])*.5f,
+                (root.minimum[2]+root.maximum[2])*.5f,0.f});
+        }
+
+        // TLAS leaves encode one owner index, not a shadow primitive. Their
+        // whole node span is replaced with its BLAS while copying the graph.
+        const auto top=build_stackless(proxies,1u,1u);
+        std::vector<stackless_node> output;
+        std::vector<std::array<float,4>> ordered;
+        output.reserve(top.size());
+        ordered.reserve(triangles.size());
+        std::function<void(std::uint32_t)> flatten=
+            [&](std::uint32_t index)
+        {
+            const auto node=top[index];
+            const auto count=node.first_and_count&15u;
+            if(count) {
+                const auto proxy_index=node.first_and_count>>4u;
+                const auto group_index=std::size_t(
+                    proxies[std::size_t(proxy_index)*3u][3]);
+                const auto& group=groups.at(group_index);
+                const auto node_offset=output.size();
+                const auto primitive_offset=ordered.size()/3u;
+                for(const auto& original:group.nodes) {
+                    auto copied=original;
+                    copied.next+=static_cast<std::uint32_t>(node_offset);
+                    const auto leaf_count=copied.first_and_count&15u;
+                    if(leaf_count) {
+                        const auto first=copied.first_and_count>>4u;
+                        const auto global=primitive_offset+first;
+                        if(global>(std::numeric_limits<std::uint32_t>::max()>>4u))
+                            throw std::length_error("Grouped BVH primitive range overflow");
+                        copied.first_and_count=
+                            (static_cast<std::uint32_t>(global)<<4u)|leaf_count;
+                    }
+                    output.push_back(copied);
+                }
+                ordered.insert(ordered.end(),group.vertices.begin(),
+                               group.vertices.end());
+            } else {
+                const auto current=output.size();
+                output.push_back(node);
+                for(std::uint32_t child=index+1u;child<node.next;
+                    child=top[child].next)
+                    flatten(child);
+                output[current].next=static_cast<std::uint32_t>(output.size());
+            }
+        };
+        flatten(0u);
+        triangles=std::move(ordered);
+        return output;
     }
 
     // Precompute two edges for each triangle after every BVH has been
