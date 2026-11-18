@@ -38,18 +38,35 @@ inline std::int64_t checked_region(long double value) {
         throw std::out_of_range("World region coordinate overflow");
     return static_cast<std::int64_t>(value);
 }
+// Preserve adjacent region indices even on platforms where long double
+// has the same 53-bit mantissa as double (including Apple Silicon).
+inline std::int64_t shift_region(std::int64_t region,std::int64_t delta) {
+    if((delta>0 && region>std::numeric_limits<std::int64_t>::max()-delta) ||
+       (delta<0 && region<std::numeric_limits<std::int64_t>::min()-delta))
+        throw std::out_of_range("World region coordinate overflow");
+    return region+delta;
+}
+inline std::int64_t integer_shift(std::int64_t region,long double delta) {
+    constexpr auto lo=static_cast<long double>(
+        std::numeric_limits<std::int64_t>::min());
+    constexpr auto hi=-lo;
+    if(!std::isfinite(delta) || delta<lo || delta>=hi)
+        throw std::out_of_range("World region displacement overflow");
+    return shift_region(region,static_cast<std::int64_t>(delta));
+}
+
 inline world_position normalize(world_position value) {
     auto coordinate=[&](std::int64_t& region,double& local) {
         if(!std::isfinite(local))throw std::invalid_argument("Invalid world position");
         const auto delta=std::floor(static_cast<long double>(local)/region_extent);
-        region=checked_region(static_cast<long double>(region)+delta);
+        region=integer_shift(region,delta);
         local-=static_cast<double>(delta*region_extent);
         // Compensate for a rounded local result at the tile boundary.
         if(local<0.0) {
-            region=checked_region(static_cast<long double>(region)-1.0L);
+            region=shift_region(region,-1);
             local+=region_extent;
         } else if(local>=region_extent) {
-            region=checked_region(static_cast<long double>(region)+1.0L);
+            region=shift_region(region,1);
             local-=region_extent;
         }
     };
@@ -69,10 +86,16 @@ inline world_position translated(world_position position,std::array<double,3> de
 }
 inline std::array<float,3> camera_relative(const world_position& position,
                                             const world_position& origin) {
+    const auto exact_delta=[](std::int64_t a,std::int64_t b) {
+        if(a>=b)return static_cast<long double>(
+            std::uint64_t(a)-std::uint64_t(b));
+        return -static_cast<long double>(
+            std::uint64_t(b)-std::uint64_t(a));
+    };
     const std::array<long double,3> region_delta{
-        static_cast<long double>(position.region.x)-origin.region.x,
-        static_cast<long double>(position.region.y)-origin.region.y,
-        static_cast<long double>(position.region.z)-origin.region.z
+        exact_delta(position.region.x,origin.region.x),
+        exact_delta(position.region.y,origin.region.y),
+        exact_delta(position.region.z,origin.region.z)
     };
     std::array<float,3> result{};
     for(int i=0;i<3;++i) {

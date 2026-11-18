@@ -34,9 +34,9 @@ public:
         for(std::int64_t z=-h;z<=h;++z)
         for(std::int64_t x=-h;x<=h;++x) {
             region_id id{
-                checked_region(static_cast<long double>(center.x)+x),
-                checked_region(static_cast<long double>(center.y)+y),
-                checked_region(static_cast<long double>(center.z)+z)};
+                shift_region(center.x,x),
+                shift_region(center.y,y),
+                shift_region(center.z,z)};
             const auto d=std::uint64_t(x*x+z*z+4*y*y);
             candidates.push_back({id,d});
             desired.emplace(id);
