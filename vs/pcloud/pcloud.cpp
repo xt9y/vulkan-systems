@@ -1279,6 +1279,8 @@ namespace vs::pcloud
                 vk::buffer::descriptor(frame.dynamic_nodes));
         }
 
+        if(frame.dirty && frame.cloud_partial)
+            frame.cloud_partial=false;
         const bool had=frame.has_dynamic_bounds;
         const auto previous=frame.dynamic_bounds;
         const bool has=!faces.empty();
