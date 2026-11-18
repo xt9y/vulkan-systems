@@ -69,6 +69,7 @@ private:
         ::vs::gpu::owned_buffer indices;
         vk::Buffer vertices{};
         std::uint32_t index_count=0;
+        std::uint64_t fingerprint=0;
         bool confirmed=false;
         std::uint64_t last_used=0;
     };
