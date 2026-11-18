@@ -9,6 +9,23 @@ layout(std430,set=0,binding=VS_DYNAMIC_NODE_BINDING) readonly buffer VsDynamicNo
     ShadowNode vs_dynamic_nodes[];
 };
 
+bool vs_dynamic_triangle_hit(vec3 origin,vec3 ray,float limit,
+                             vec3 a,vec3 e1,vec3 e2)
+{
+    vec3 p=cross(ray,e2);
+    float det=dot(e1,p);
+    if(abs(det)<.00001)return false;
+    float inv=1.0/det;
+    vec3 t=origin-a;
+    float u=dot(t,p)*inv;
+    if(u<0.0 || u>1.0)return false;
+    vec3 q=cross(t,e1);
+    float v=dot(ray,q)*inv;
+    if(v<0.0 || u+v>1.0)return false;
+    float distance=dot(e2,q)*inv;
+    return distance>.001 && distance<limit;
+}
+
 bool vs_dynamic_hit(vec3 origin,vec3 ray,float distance)
 {
     uint total=min(vs_dynamic_counts.x,uint(vs_dynamic_nodes.length()));
@@ -32,7 +49,7 @@ bool vs_dynamic_hit(vec3 origin,vec3 ray,float distance)
             uint end=min(first+count,vertex_count/3u);
             for(uint i=first;i<end;++i) {
                 uint v=i*3u;
-                if(triangle_hit(origin,ray,distance,
+                if(vs_dynamic_triangle_hit(origin,ray,distance,
                     vs_dynamic_vertices[v].xyz,
                     vs_dynamic_vertices[v+1u].xyz,
                     vs_dynamic_vertices[v+2u].xyz))
