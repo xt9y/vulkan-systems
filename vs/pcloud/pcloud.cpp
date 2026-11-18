@@ -602,6 +602,17 @@ namespace vs::pcloud
             {data.grid_origin.x,data.grid_origin.y,data.grid_origin.z,
              data.grid_spacing}
         };
+        if(data.cache_enabled) {
+            // Main-camera and reflected-camera dispatches share one persistent
+            // visibility table. Make prior shader writes visible across passes.
+            vk::MemoryBarrier cache_barrier{
+                vk::AccessFlagBits::eShaderWrite,
+                vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite
+            };
+            command.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {},{cache_barrier},{},{});
+        }
         data.lighting_program->dispatch(command,
             (extent.width+7)/8,(extent.height+7)/8,1,
             {current.lighting},&controls,sizeof(controls));
@@ -1806,6 +1817,17 @@ namespace vs::pcloud
                       << "x, static triangles=" << static_primitives
                       << ", dynamic primitives=" << dynamic_primitives << '\n';
             previous_rate=pixel_rate;
+        }
+        if(data.cache_enabled) {
+            // Serialize cache metadata/visibility across frames without
+            // requiring a whole-device idle or host-side readback.
+            vk::MemoryBarrier cache_barrier{
+                vk::AccessFlagBits::eShaderWrite,
+                vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite
+            };
+            command.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {},{cache_barrier},{},{});
         }
         compute(command,*data.lighting_program,current.lighting,frame,pixel_rate);
     }
