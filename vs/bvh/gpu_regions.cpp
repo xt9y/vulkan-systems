@@ -141,6 +141,30 @@ bool gpu_regions::upload(std::uint32_t image) {
     dest.serial=serial_;
     return true;
 }
+std::optional<::vs::scene::collision_box>
+gpu_regions::bounds(spatial::region_id id) const {
+    const auto it=entries_.find(id);
+    if(it==entries_.end() || it->second.nodes.empty())return {};
+    const auto& root=it->second.nodes.front();
+    return ::vs::scene::collision_box{
+        {root.minimum[0],root.minimum[1],root.minimum[2]},
+        {root.maximum[0],root.maximum[1],root.maximum[2]}};
+}
+std::optional<::vs::scene::collision_box> gpu_regions::all_bounds() const {
+    std::optional<::vs::scene::collision_box> result;
+    for(const auto& [id,_]:entries_) {
+        const auto next=bounds(id);
+        if(!next)continue;
+        if(!result){result=next;continue;}
+        auto& a=result->minimum;
+        auto& b=result->maximum;
+        const auto& c=next->minimum;
+        const auto& d=next->maximum;
+        a={std::min(a.x,c.x),std::min(a.y,c.y),std::min(a.z,c.z)};
+        b={std::max(b.x,d.x),std::max(b.y,d.y),std::max(b.z,d.z)};
+    }
+    return result;
+}
 gpu_regions::bindings gpu_regions::descriptors(std::uint32_t image) const {
     const auto& frame=*frames_.at(image);
     return {vk::buffer::descriptor(frame.records),

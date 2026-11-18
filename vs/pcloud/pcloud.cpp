@@ -920,22 +920,39 @@ namespace vs::pcloud
                                std::uint64_t revision,
                                std::span<const triangle> faces)
     {
-        // CPU build only; no device-wide sync or descriptor rebinding.
-        return get().region_shadows.replace(id,revision,faces);
+        auto& data=get();
+        const auto previous=data.region_shadows.bounds(id);
+        if(!data.region_shadows.replace(id,revision,faces))return false;
+        // Only the changed region's probes lose their cached radiance.
+        if(previous)invalidate_region(*previous);
+        if(const auto updated=data.region_shadows.bounds(id))
+            invalidate_region(*updated);
+        return true;
     }
     bool remove_shadow_region(::vs::spatial::region_id id,
                              std::uint64_t revision)
     {
-        return get().region_shadows.erase(id,revision);
+        auto& data=get();
+        const auto previous=data.region_shadows.bounds(id);
+        if(!data.region_shadows.erase(id,revision))return false;
+        if(previous)invalidate_region(*previous);
+        return true;
     }
 
     bool forget_shadow_region(::vs::spatial::region_id id)
     {
-        return get().region_shadows.forget(id);
+        auto& data=get();
+        const auto previous=data.region_shadows.bounds(id);
+        if(!data.region_shadows.forget(id))return false;
+        if(previous)invalidate_region(*previous);
+        return true;
     }
     void clear_shadow_regions()
     {
-        get().region_shadows.clear_regions();
+        auto& data=get();
+        const auto previous=data.region_shadows.all_bounds();
+        data.region_shadows.clear_regions();
+        if(previous)invalidate_region(*previous);
     }
 
     void invalidate_region(const ::vs::scene::collision_box& region)
@@ -1849,6 +1866,7 @@ namespace vs::pcloud
 
     void cloud(vk::CommandBuffer command,std::uint32_t image)
     {
+        get().region_shadows.upload(image);
         if(!get().frames.at(image).dirty ||
            get().frames.at(image).cloud_submitted ||
            !get().point_count)return;
@@ -1863,6 +1881,7 @@ namespace vs::pcloud
 
     void gi(vk::CommandBuffer command,std::uint32_t image)
     {
+        get().region_shadows.upload(image);
         auto& data=get();
         auto& frame=data.frames.at(image);
         if(!frame.dirty || frame.gi_complete)return;

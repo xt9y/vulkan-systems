@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -46,6 +47,8 @@ public:
     void reset() noexcept;
     std::size_t size() const noexcept {return entries_.size();}
     std::uint64_t revision() const noexcept{return serial_;}
+    std::optional<::vs::scene::collision_box> bounds(spatial::region_id id) const;
+    std::optional<::vs::scene::collision_box> all_bounds() const;
 private:
     struct entry {
         std::uint64_t revision=0;
