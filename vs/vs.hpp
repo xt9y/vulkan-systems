@@ -25,6 +25,7 @@
 #include <vs/jobs/pool.hpp>
 #include <vs/network/network.hpp>
 #include <vs/network/region.hpp>
+#include <vs/network/environment.hpp>
 #include <vs/editor/editor.hpp>
 #include <vs/editor/widgets.hpp>
 #include <vs/visual/inspector.hpp>
