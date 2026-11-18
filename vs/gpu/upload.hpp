@@ -66,6 +66,50 @@ namespace vs::gpu::upload
         std::vector<vk::buffer::resource> staging;
         vk::Fence fence{};
         bool submitted = false;
+        std::size_t shared_staging = std::numeric_limits<std::size_t>::max();
+        vk::DeviceSize shared_used = 0;
+        static constexpr vk::DeviceSize staging_block = 2u * 1024u * 1024u;
+
+        struct staged_range {
+            vk::Buffer buffer{};
+            vk::DeviceSize offset = 0;
+        };
+
+        // One persistently mapped, host-coherent block backs many small mesh,
+        // index, page and texture uploads. Offsets are kept distinct until
+        // the transfer fence retires the complete batch.
+        staged_range stage(const void* data, std::size_t bytes)
+        {
+            constexpr vk::DeviceSize alignment = 16;
+            const bool dedicated = bytes > staging_block;
+            vk::DeviceSize offset = (shared_used + alignment - 1) &
+                                    ~(alignment - 1);
+            if(dedicated || shared_staging == std::numeric_limits<std::size_t>::max() ||
+               offset > staging_block || bytes > staging_block - offset) {
+                auto resource = vk::buffer::create(
+                    dedicated ? bytes : staging_block,
+                    vk::BufferUsageFlagBits::eTransferSrc,
+                    vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent);
+                try {
+                    staging.push_back(resource);
+                } catch (...) {
+                    vk::buffer::destroy(resource);
+                    throw;
+                }
+                if(!dedicated) {
+                    shared_staging = staging.size() - 1u;
+                    shared_used = 0;
+                }
+                offset = 0;
+            }
+            const std::size_t index = dedicated ? staging.size() - 1u :
+                shared_staging;
+            auto& source = staging[index];
+            vk::buffer::write(source, data, bytes, offset);
+            if(!dedicated) shared_used = offset + bytes;
+            return {source.handle,offset};
+        }
 
     public:
         batch() = default;
@@ -79,30 +123,23 @@ namespace vs::gpu::upload
             if (!data || !bytes)
                 throw std::invalid_argument("Invalid GPU buffer upload");
 
-            vk::buffer::resource source{};
             vk::buffer::resource destination{};
+            const auto source = stage(data, bytes);
             try
             {
-                source = vk::buffer::create(
-                    bytes, vk::BufferUsageFlagBits::eTransferSrc,
-                    vk::MemoryPropertyFlagBits::eHostVisible |
-                    vk::MemoryPropertyFlagBits::eHostCoherent
-                );
-                vk::buffer::write(source, data, bytes);
                 destination = vk::buffer::create(
                     std::max<vk::DeviceSize>(bytes, capacity),
                     usage | vk::BufferUsageFlagBits::eTransferDst,
                     vk::MemoryPropertyFlagBits::eDeviceLocal
                 );
                 if (!command) command = vk::command::begin_one_time();
-
-                ::vs::gpu::transfer::copy(command, source.handle, destination.handle, bytes);
-                staging.push_back(source);
+                ::vs::gpu::transfer::copy(command, source.buffer,
+                                           destination.handle, bytes,
+                                           source.offset);
                 return destination;
             }
             catch (...)
             {
-                if (source.handle) vk::buffer::destroy(source);
                 if (destination.handle) vk::buffer::destroy(destination);
                 throw;
             }
@@ -135,15 +172,10 @@ namespace vs::gpu::upload
                     ++levels;
                 }
             }
-            auto source = vk::buffer::create(
-                bytes, vk::BufferUsageFlagBits::eTransferSrc,
-                vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent
-            );
+            const auto source = stage(pixels,bytes);
             vk::image::resource image{};
             try
             {
-                vk::buffer::write(source,pixels,bytes);
                 vk::ImageCreateInfo info{};
                 info.imageType=vk::ImageType::e2D;
                 info.format=vk::Format::eR8G8B8A8Unorm;
@@ -171,11 +203,12 @@ namespace vs::gpu::upload
                     {},{},{},{barrier});
 
                 vk::BufferImageCopy copy{};
+                copy.bufferOffset=source.offset;
                 copy.imageSubresource=vk::ImageSubresourceLayers{
                     vk::ImageAspectFlagBits::eColor,0,0,1};
                 copy.imageExtent=vk::Extent3D{width,height,1u};
                 command.copyBufferToImage(
-                    source.handle,image.handle,
+                    source.buffer,image.handle,
                     vk::ImageLayout::eTransferDstOptimal,{copy});
 
                 auto src_width=width,src_height=height;
@@ -229,14 +262,12 @@ namespace vs::gpu::upload
                         vk::PipelineStageFlagBits::eFragmentShader,
                         {},{},{},{barrier});
                 }
-                staging.push_back(source);
                 if(uploaded_levels)*uploaded_levels=levels;
                 return image;
             }
             catch (...)
             {
                 if(image.handle)vk::image::destroy(image);
-                vk::buffer::destroy(source);
                 throw;
             }
         }
@@ -247,23 +278,11 @@ namespace vs::gpu::upload
             if (!data || !bytes || offset > target.size || bytes > target.size - offset)
                 throw std::invalid_argument("Invalid staged buffer update");
 
-            auto source = vk::buffer::create(
-                bytes, vk::BufferUsageFlagBits::eTransferSrc,
-                vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent
-            );
-            try
-            {
-                vk::buffer::write(source, data, bytes);
-                if (!command) command = vk::command::begin_one_time();
-                ::vs::gpu::transfer::copy(command, source.handle, target.handle, bytes, 0, offset);
-                staging.push_back(source);
-            }
-            catch (...)
-            {
-                vk::buffer::destroy(source);
-                throw;
-            }
+            const auto source = stage(data,bytes);
+            if (!command) command = vk::command::begin_one_time();
+            ::vs::gpu::transfer::copy(command, source.buffer,
+                                     target.handle, bytes,
+                                     source.offset, offset);
         }
 
         void finish()
