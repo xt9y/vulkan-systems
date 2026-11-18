@@ -1220,6 +1220,9 @@ namespace vs::pcloud
                 initial.push_back({p.x,p.y,p.z,0.f});
             }
             data.dynamic_topology=::vs::bvh::build_stackless(initial);
+            // A topology change invalidates every image's previous node links,
+            // even if the new tree happens to contain the same node count.
+            for(auto& frame:data.frames)frame.dynamic_refit.clear();
             data.dynamic_order.resize(primitive_count);
             for(std::size_t i=0;i<primitive_count;++i)
                 data.dynamic_order[i]=std::uint32_t(initial[i*3u][3]);
