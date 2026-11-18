@@ -4,6 +4,7 @@
 #include <vs/render/postprocess.hpp>
 #include <vs/render/mesh.hpp>
 #include <vs/render/geometry.hpp>
+#include <vs/render/virtual.hpp>
 #include <vs/render/attachments.hpp>
 #include <vs/render/sequence.hpp>
 #include <vs/render/material.hpp>
