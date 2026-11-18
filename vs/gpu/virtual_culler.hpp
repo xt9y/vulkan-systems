@@ -14,8 +14,10 @@ struct alignas(16) virtual_view {
     std::array<float,16> previous_vp{};
     std::array<float,4> previous_camera{}; // xyz, previous pixel focal length
     std::array<float,4> options{};         // enabled, width, height, mip count
+    std::array<float,4> animated_count{};  // count of conservative blockers
+    std::array<std::array<float,4>,64> animated_rects{}; // xy min/max in UV space
 };
-static_assert(sizeof(virtual_view)==192);
+static_assert(sizeof(virtual_view)==1232);
 // Set-0 binding 10 page descriptors, independent of the renderer's material
 // and vertex formats. Index counts come from each resident meshlet page.
 struct alignas(16) virtual_page_meta {
@@ -37,7 +39,8 @@ public:
                   std::span<const std::uint32_t> indices,
                   std::span<const float> errors,
                   std::uint32_t resident_mask=15u,
-                  std::uint32_t page_count=0u) const;
+                  std::uint32_t page_count=0u,
+                  bool allow_occlusion=true) const;
     void end(vk::CommandBuffer) const;
 private:
     struct parameters {
