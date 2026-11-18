@@ -1618,7 +1618,7 @@ namespace vs::pcloud
         }
         // Keep animated GI inexpensive while allowing initial scene lighting
         // to converge promptly. Both paths have fixed per-frame work bounds.
-        constexpr std::uint32_t max_groups_per_frame=
+        const std::uint32_t max_groups_per_frame=
             frame.partial_grid?4u:12u;
         const std::uint32_t total=groups[0]*groups[1]*groups[2];
         std::uint32_t remaining=max_groups_per_frame;
