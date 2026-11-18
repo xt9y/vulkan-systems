@@ -1465,6 +1465,9 @@ namespace vs::pcloud
         data.prepared_vertices.clear();
         data.prepared_primitives=0;
         data.dynamic_prepared=false;
+        // Do not retain eligibility from the previous scene before new
+        // animated geometry is prepared. All-one masks are conservative.
+        data.dynamic_shadow_mask={~0u,~0u};
         for(auto& frame:data.frames) {
             frame.has_dynamic_bounds=false;
             frame.gi_interval=0;
