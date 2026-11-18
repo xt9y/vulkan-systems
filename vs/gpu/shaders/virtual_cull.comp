@@ -10,6 +10,16 @@ struct Draw {
     uint first_instance;
 };
 layout(std430,set=0,binding=3) buffer Draws {Draw draws[];};
+// Optional virtual page path. The existing whole-mesh LOD path runs if
+// pc.info.z is zero; both modes share exactly one instance/visibility layout.
+struct Instance {mat4 model;mat4 normal;vec4 tint;};
+layout(std430,set=0,binding=0) readonly buffer Instances {
+    Instance instances[];
+};
+struct Page {vec4 sphere;uvec4 info;};
+layout(std430,set=0,binding=10) readonly buffer Pages {
+    Page page_meta[];
+};
 layout(set=1,binding=0) uniform sampler2D hiz_depth;
 layout(std140,set=1,binding=1) uniform VisibilityView {
     vec4 planes[6];
@@ -41,7 +51,8 @@ bool occluded(vec4 sphere)
         vec3 ndc=clip.xyz/clip.w;
         lo=min(lo,ndc.xy*0.5+0.5);
         hi=max(hi,ndc.xy*0.5+0.5);
-        near_depth=min(near_depth,ndc.z);
+        // Raster viewport stores depth in [0.1,1], not raw NDC [0,1].
+        near_depth=min(near_depth,ndc.z*0.9+0.1);
     }
     if(any(lessThan(lo,vec2(0.0))) ||
        any(greaterThan(hi,vec2(1.0))) || near_depth<=0.0)
@@ -69,11 +80,13 @@ void main()
 {
     uint id=gl_GlobalInvocationID.x;
     if(id==0u) {
-        for(uint level=0u;level<pc.info.y;++level) {
-            draws[level].index_count=pc.indices[level];
-            draws[level].first_index=0u;
-            draws[level].vertex_offset=0;
-            draws[level].first_instance=0u;
+        uint total=pc.info.z!=0u?pc.info.z:pc.info.y;
+        for(uint i=0u;i<total;++i) {
+            draws[i].index_count=pc.info.z!=0u?
+                page_meta[i].info.y:pc.indices[i];
+            draws[i].first_index=0u;
+            draws[i].vertex_offset=0;
+            draws[i].first_instance=0u;
         }
     }
     if(id>=pc.info.x)return;
@@ -101,6 +114,31 @@ void main()
     }
     if((pc.info.w&(1u<<selected))==0u)return;
     lod=selected;
+    if(pc.info.z!=0u) {
+        // Per-page bounds allow independent meshlet visibility while the
+        // complete LOD fallback guarantees no missing geometry from paging.
+        mat4 model=instances[id].model;
+        float r=max(length(model[0].xyz),
+                    max(length(model[1].xyz),length(model[2].xyz)));
+        for(uint page=0u;page<pc.info.z;++page) {
+            Page item=page_meta[page];
+            if(item.info.x!=lod || item.info.y==0u)continue;
+            vec3 center=(model*vec4(item.sphere.xyz,1.0)).xyz;
+            // Conservative skinning/animation slack without relying on a
+            // game-specific skeletal layout.
+            vec4 bound=vec4(center,item.sphere.w*r*2.0);
+            bool visible=true;
+            for(uint plane=0u;plane<6u;++plane)
+                if(dot(visible.planes[plane],vec4(center,1.0))<-bound.w) {
+                    visible=false;
+                    break;
+                }
+            if(!visible || occluded(bound))continue;
+            uint out_index=atomicAdd(draws[page].instance_count,1u);
+            visible_ids[page*pc.info.x+out_index]=id;
+        }
+        return;
+    }
     uint out_index=atomicAdd(draws[lod].instance_count,1u);
     visible_ids[lod*pc.info.x+out_index]=id;
 }

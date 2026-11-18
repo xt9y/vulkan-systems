@@ -17,7 +17,7 @@ void virtual_culler::begin(vk::CommandBuffer cmd,const std::vector<draw_buffer>&
 {
     if(!cmd)throw std::invalid_argument("Invalid culler command");
     for(const auto& buffer:buffers) {
-        if(!buffer.handle || !buffer.levels || buffer.levels>4u)
+        if(!buffer.handle || !buffer.levels || buffer.levels>4096u)
             throw std::invalid_argument("Invalid virtual culler buffer");
         ::vs::gpu::transfer::fill(cmd,buffer.handle,0u,
             buffer.levels*sizeof(vk::DrawIndexedIndirectCommand),0u);
@@ -35,15 +35,17 @@ void virtual_culler::dispatch(vk::CommandBuffer cmd,vk::DescriptorSet set,
     vk::util::math::vec3 eye,float pixel_scale,std::uint32_t instances,
     std::span<const std::uint32_t> indices,
     std::span<const float> errors,
-    std::uint32_t resident_mask) const
+    std::uint32_t resident_mask,
+    std::uint32_t page_count) const
 {
     if(!instances)return;
     if(!cmd || !set || !view_set || indices.empty() || indices.size()>4u ||
-       errors.size()!=indices.size())
+       errors.size()!=indices.size() || page_count>4096u)
         throw std::invalid_argument("Invalid virtual culler dispatch");
     parameters push{};
     push.camera={eye.x,eye.y,eye.z,pixel_scale};
-    push.info={instances,std::uint32_t(indices.size()),0u,resident_mask};
+    push.info={instances,std::uint32_t(indices.size()),
+               page_count,resident_mask};
     for(std::size_t i=0;i<indices.size();++i) {
         push.indices[i]=indices[i];
         push.errors[i]=std::max(0.f,errors[i]);

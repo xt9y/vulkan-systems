@@ -16,6 +16,13 @@ struct alignas(16) virtual_view {
     std::array<float,4> options{};         // enabled, width, height, mip count
 };
 static_assert(sizeof(virtual_view)==192);
+// Set-0 binding 10 page descriptors, independent of the renderer's material
+// and vertex formats. Index counts come from each resident meshlet page.
+struct alignas(16) virtual_page_meta {
+    std::array<float,4> sphere{}; // Local-space conservative page bound
+    std::array<std::uint32_t,4> info{}; // x: level, y: index count
+};
+static_assert(sizeof(virtual_page_meta)==32);
 class virtual_culler {
 public:
     struct draw_buffer {vk::Buffer handle{};std::uint32_t levels=1;};
@@ -29,7 +36,8 @@ public:
                   std::uint32_t instances,
                   std::span<const std::uint32_t> indices,
                   std::span<const float> errors,
-                  std::uint32_t resident_mask=15u) const;
+                  std::uint32_t resident_mask=15u,
+                  std::uint32_t page_count=0u) const;
     void end(vk::CommandBuffer) const;
 private:
     struct parameters {
