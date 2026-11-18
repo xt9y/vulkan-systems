@@ -126,6 +126,23 @@ public:
         });
         return result;
     }
+    struct batch {
+        std::uint64_t cursor=0;
+        bool full=false; // Consumer must discard old derived region state.
+        std::vector<update> entries;
+    };
+    batch poll(std::uint64_t& cursor) const {
+        batch result{};
+        try {
+            result.entries=since(cursor);
+        } catch(const std::out_of_range&) {
+            result.full=true;
+            result.entries=snapshot();
+        }
+        result.cursor=regions_.serial();
+        cursor=result.cursor;
+        return result;
+    }
     bool apply(const message& m) {
         if(m.action!=operation::replace && m.action!=operation::remove)
             return false;
