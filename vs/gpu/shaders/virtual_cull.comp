@@ -33,7 +33,7 @@ layout(push_constant) uniform Selection {
     vec4 camera;        // position.xyz, pixels per world unit at depth 1
     vec4 error;         // per-level geometric error / mesh radius
     uvec4 info;         // instance count, active levels
-    uvec4 indices;      // index counts
+    uvec4 indices;      // whole-mesh index counts OR virtual LOD page starts
 } pc;
 
 bool occluded(vec4 sphere)
@@ -131,7 +131,13 @@ void main()
         mat4 model=instances[id].model;
         float r=max(length(model[0].xyz),
                     max(length(model[1].xyz),length(model[2].xyz)));
-        for(uint page=0u;page<pc.info.z;++page) {
+        // Pages are packed by ascending LOD at import time. In the page
+        // path pc.indices[] holds per-level first-page offsets instead of
+        // whole-mesh index counts. Scan only the selected complete LOD.
+        uint first_page=min(pc.indices[lod],pc.info.z);
+        uint end_page=lod+1u<levels?
+            min(pc.indices[lod+1u],pc.info.z):pc.info.z;
+        for(uint page=first_page;page<end_page;++page) {
             Page item=page_meta[page];
             if(item.info.x!=lod || item.info.y==0u)continue;
             vec3 center=(model*vec4(item.sphere.xyz,1.0)).xyz;
