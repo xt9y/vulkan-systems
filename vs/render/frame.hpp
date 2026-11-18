@@ -31,6 +31,12 @@ public:
     // Monotonic queue submission/completion serials for safe page retirement.
     std::uint64_t submitted_serial() const noexcept {return submitted_;}
     std::uint64_t completed_serial() const;
+    struct wait_timings {
+        double frame_fence_ms=0.0,acquire_ms=0.0,image_fence_ms=0.0;
+    };
+    // The previous begin()'s individual waits, measured on the CPU.
+    // FIFO pacing can spend time in acquire with no GPU bottleneck.
+    wait_timings last_wait_timings() const noexcept {return wait_times_;}
     // Returns an open command buffer. May throw vk::OutOfDateKHRError.
     ticket begin();
     // Ends, submits, signals image completion and presents.
@@ -49,5 +55,6 @@ private:
     std::vector<vk::Semaphore> render_ready_;
     std::size_t next_=0;
     std::uint64_t submitted_=0,completed_=0;
+    wait_timings wait_times_{};
 };
 }

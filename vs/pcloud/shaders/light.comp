@@ -185,7 +185,8 @@ vec4 vs_crowd_shade(ivec2 p,ivec2 size)
     float metallic=clamp(material.g,0.0,1.0);
     float ao=clamp(material.b,0.0,1.0);
     vec3 color=vec3(0.0);
-    shared_brdf_state brdf=shared_brdf_prepare(
+    shared_brdf_state brdf;
+    if(count!=0u)brdf=shared_brdf_prepare(
         albedo.rgb,metallic,roughness,N,V);
     uint remaining_low=light_mask.x,remaining_high=light_mask.y;
     for(uint candidate=0u;candidate<count;++candidate)
@@ -223,13 +224,9 @@ vec4 vs_crowd_shade(ivec2 p,ivec2 size)
         // weapon use camera-local visibility cached once per tile/light:
         // the viewmodel's reserved depth must not disable occlusion.
         if(viewmodel) {
-            vec3 eye_to_light=light.position_range.xyz-eye;
-            float eye_dist=length(eye_to_light);
-            if(eye_dist>0.008) {
-                vec3 eye_ray=eye_to_light/eye_dist;
-                if(any_hit(eye+eye_ray*0.004,eye_ray,eye_dist-0.008,i))
-                    continue;
-            }
+            // One exact camera-to-light ray is shared by every viewmodel
+            // receiver in the workgroup, including low-rate crowd shading.
+            if(viewmodel_occluded[i]!=0u)continue;
         } else if(any_hit(P+N*0.004,direction,dist-0.008,i))
             continue;
         vec3 transmission=vs_exact_light_transmission_ray(
@@ -241,9 +238,12 @@ vec4 vs_crowd_shade(ivec2 p,ivec2 size)
     // First-person hands/weapons are physical diffuse GI receivers too.
     // P is camera-local for the reserved-depth viewmodel, so sample the same
     // world-space probe field and energy scale as the rest of the scene.
-    color+=albedo.rgb*(1.0-metallic)*ao*
-        shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*
-        (0.01*min(1.0,roughness*1.5));
+    // The same diffuse GI term is exactly zero on purely metallic,
+    // fully occluded or black-albedo pixels. Avoid the 8-probe gather there.
+    if(ao>0.0 && metallic<1.0 && any(greaterThan(albedo.rgb,vec3(0.0))))
+        color+=albedo.rgb*(1.0-metallic)*ao*
+            shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*
+            (0.01*min(1.0,roughness*1.5));
     vec3 emission=vec3(albedo.a,n.a,material.a);
     color+=emission/max(vec3(1.0)-emission,vec3(1.0/255.0));
     return vec4(max(color,vec3(0.0)),1.0);
@@ -254,6 +254,53 @@ void main()
     if(rate>1) {
         ivec2 size=imageSize(hdr);
         ivec2 base=ivec2(gl_GlobalInvocationID.xy)*rate;
+        // All 64 lanes must participate before invoking vs_crowd_shade().
+        // One workgroup spans 8*rate pixels, potentially multiple 16px
+        // light tiles when rate=4. Union their masks conservatively.
+        if(gl_LocalInvocationIndex==0u)has_viewmodel=0u;
+        barrier();
+        bool local_viewmodel=false;
+        for(int y=0;y<rate;++y)
+        for(int x=0;x<rate;++x) {
+            ivec2 p=base+ivec2(x,y);
+            if(all(lessThan(p,size)) && texelFetch(g_depth,p,0).r<0.1)
+                local_viewmodel=true;
+        }
+        if(local_viewmodel)atomicOr(has_viewmodel,1u);
+        barrier();
+        if(pc.light_count.y>=0.0 && has_viewmodel!=0u &&
+           gl_LocalInvocationIndex<64u) {
+            ivec2 first_tile=ivec2(gl_WorkGroupID.xy)*8*rate/16;
+            ivec2 last_tile=min(
+                (ivec2(gl_WorkGroupID.xy+uvec2(1u))*8*rate-ivec2(1))/16,
+                (size-1)/16);
+            uint columns=uint((size.x+15)/16);
+            uvec2 mask=uvec2(0u);
+            for(int y=first_tile.y;y<=last_tile.y;++y)
+            for(int x=first_tile.x;x<=last_tile.x;++x) {
+                uint tile=uint(y)*columns+uint(x);
+                mask|=uvec2(tile_lights[tile*2u],
+                            tile_lights[tile*2u+1u]);
+            }
+            uint light_index=gl_LocalInvocationIndex;
+            bool selected=light_index<32u?
+                ((mask.x>>(light_index&31u))&1u)!=0u:
+                ((mask.y>>(light_index&31u))&1u)!=0u;
+            if(selected) {
+                PointLight light=lights[light_index];
+                vec3 delta=light.position_range.xyz-pc.eye_near.xyz;
+                float dist2=dot(delta,delta);
+                uint blocked=0u;
+                if(dist2>0.000064 && light.color_intensity.w>0.0) {
+                    float dist=sqrt(dist2);
+                    vec3 ray=delta/dist;
+                    blocked=any_hit(pc.eye_near.xyz+ray*0.004,ray,
+                                    dist-0.008,light_index)?1u:0u;
+                }
+                viewmodel_occluded[light_index]=blocked;
+            }
+        }
+        barrier();
         if(any(greaterThanEqual(base,size)))return;
         ivec2 center=min(base+ivec2(rate/2),size-1);
         float center_depth=texelFetch(g_depth,center,0).r;
@@ -364,7 +411,8 @@ void main()
     float metallic=clamp(material.g,0.0,1.0);
     float ao=clamp(material.b,0.0,1.0);
     vec3 color=vec3(0.0);
-    shared_brdf_state brdf=shared_brdf_prepare(
+    shared_brdf_state brdf;
+    if(count!=0u)brdf=shared_brdf_prepare(
         albedo.rgb,metallic,roughness,N,V);
     uint remaining_low=light_mask.x,remaining_high=light_mask.y;
     for(uint candidate=0u;candidate<count;++candidate)
@@ -414,9 +462,12 @@ void main()
     // First-person hands/weapons are physical diffuse GI receivers too.
     // P is camera-local for the reserved-depth viewmodel, so sample the same
     // world-space probe field and energy scale as the rest of the scene.
-    color+=albedo.rgb*(1.0-metallic)*ao*
-        shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*
-        (0.01*min(1.0,roughness*1.5));
+    // The same diffuse GI term is exactly zero on purely metallic,
+    // fully occluded or black-albedo pixels. Avoid the 8-probe gather there.
+    if(ao>0.0 && metallic<1.0 && any(greaterThan(albedo.rgb,vec3(0.0))))
+        color+=albedo.rgb*(1.0-metallic)*ao*
+            shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*
+            (0.01*min(1.0,roughness*1.5));
     vec3 emission=vec3(albedo.a,n.a,material.a);
     color+=emission/max(vec3(1.0)-emission,vec3(1.0/255.0));
     imageStore(hdr,p,vec4(max(color,vec3(0.0)),1.0));
