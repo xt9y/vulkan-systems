@@ -57,14 +57,15 @@ vec3 shared_indirect_lighting(sampler3D grid,vec3 origin,float spacing,
 {
     if(spacing<=0.0)return vec3(0.0);
     vec3 coords=(world-origin)/spacing;
+    ivec3 size=textureSize(grid,0);
+    // Reject noncovered world pixels *before* converting to integer probe
+    // indices: a far-away world position could overflow an ivec3 cast.
+    // This also skips the entire 8-tap gather outside the grid.
+    if(any(lessThan(coords,vec3(-1.0))) ||
+       any(greaterThanEqual(coords,vec3(size))))return vec3(0.0);
     ivec3 base=ivec3(floor(coords));
     vec3 blend=fract(coords);
-    ivec3 size=textureSize(grid,0);
-    // If even the nearest eight corners are outside the volume, all
-    // weighted probes are zero. Avoid eight bounds checks/texture probes
-    // for the large part of the world beyond local-light GI coverage.
-    if(any(lessThan(base,ivec3(-1))) ||
-       any(greaterThanEqual(base,size)))return vec3(0.0);
+    vec3 relative_probe=origin+vec3(base)*spacing-world;
     vec3 sum=vec3(0.0);
     float weight_sum=0.0;
     for(int z=0;z<2;++z)
@@ -74,7 +75,7 @@ vec3 shared_indirect_lighting(sampler3D grid,vec3 origin,float spacing,
         ivec3 offset=ivec3(x,y,z),probe=base+offset;
         if(any(lessThan(probe,ivec3(0))) ||
            any(greaterThanEqual(probe,size)))continue;
-        vec3 to_probe=origin+vec3(probe)*spacing-world;
+        vec3 to_probe=relative_probe+vec3(offset)*spacing;
         if(dot(normal,to_probe)<=0.0)continue;
         vec3 factors=mix(vec3(1.0)-blend,blend,vec3(offset));
         float weight=factors.x*factors.y*factors.z;
