@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 namespace vs::pcloud
@@ -92,6 +93,10 @@ namespace vs::pcloud
     void create(const std::vector<gbuffer>&,
                 const configuration& shaders={});
     void set_scene(std::shared_ptr<const ::vs::scene::data>);
+    // Optional user-authored outdoor GI coverage, independent of local
+    // point-light radius. The atmosphere itself is supplied later.
+    // Call synchronize_scene() after changing coverage at an idle boundary.
+    void set_probe_coverage(std::optional<::vs::scene::collision_box> bounds);
     void synchronize_scene();
     struct shadow_sphere {
         vec3 center{};

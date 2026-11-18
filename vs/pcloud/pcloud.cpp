@@ -83,6 +83,8 @@ namespace vs::pcloud
             ::vs::gpu::owned_buffer shadow_light_ranges;
             ::vs::lighting::shadow_cache visibility;
             bool cache_enabled=true;
+            std::optional<::vs::scene::collision_box> probe_coverage;
+            bool coverage_dirty=false;
             ::vs::gpu::owned_buffer transmission;
             ::vs::gpu::owned_buffer glass_vertices,glass_nodes,glass_filters;
             std::uint32_t glass_node_count=0;
@@ -829,11 +831,25 @@ namespace vs::pcloud
         upload_transmission(&source);
     }
 
+    void set_probe_coverage(std::optional<::vs::scene::collision_box> bounds)
+    {
+        auto& data=get();
+        if(bounds && (bounds->maximum.x<bounds->minimum.x ||
+           bounds->maximum.y<bounds->minimum.y ||
+           bounds->maximum.z<bounds->minimum.z ||
+           !std::isfinite(bounds->minimum.x) || !std::isfinite(bounds->minimum.y) ||
+           !std::isfinite(bounds->minimum.z) || !std::isfinite(bounds->maximum.x) ||
+           !std::isfinite(bounds->maximum.y) || !std::isfinite(bounds->maximum.z)))
+            throw std::invalid_argument("Invalid PCloud coverage bounds");
+        data.probe_coverage=bounds;
+        data.coverage_dirty=true;
+    }
+
     void synchronize_scene()
     {
         auto& data=get();
         const auto source=data.incoming;
-        if(source==data.snapshot)return;
+        if(source==data.snapshot && !data.coverage_dirty)return;
 
         using namespace vk::util::math;
 
@@ -843,7 +859,7 @@ namespace vs::pcloud
         vec3 origin{};
         float spacing=min_grid_spacing;
         vk::Extent3D extent{1,1,1};
-        if(source && !source->lights.empty())
+        if(source && (!source->lights.empty() || data.probe_coverage))
         {
             const float inf=std::numeric_limits<float>::infinity();
             vec3 minimum{inf,inf,inf},maximum{-inf,-inf,-inf};
@@ -866,6 +882,18 @@ namespace vs::pcloud
                 maximum={std::max(maximum.x,high.x),
                          std::max(maximum.y,high.y),
                          std::max(maximum.z,high.z)};
+                any=true;
+            }
+            if(data.probe_coverage) {
+                const auto& b=*data.probe_coverage;
+                minimum={
+                    std::min(minimum.x,b.minimum.x),
+                    std::min(minimum.y,b.minimum.y),
+                    std::min(minimum.z,b.minimum.z)};
+                maximum={
+                    std::max(maximum.x,b.maximum.x),
+                    std::max(maximum.y,b.maximum.y),
+                    std::max(maximum.z,b.maximum.z)};
                 any=true;
             }
             if(any)
@@ -949,7 +977,13 @@ namespace vs::pcloud
                     if(p.x<origin.x || p.y<origin.y || p.z<origin.z ||
                        p.x>limit.x || p.y>limit.y || p.z>limit.z)continue;
                     // Do not generate surface samples in dark gaps between lights.
-                    bool reached=false;
+                    bool reached=data.probe_coverage &&
+                        p.x>=data.probe_coverage->minimum.x &&
+                        p.y>=data.probe_coverage->minimum.y &&
+                        p.z>=data.probe_coverage->minimum.z &&
+                        p.x<=data.probe_coverage->maximum.x &&
+                        p.y<=data.probe_coverage->maximum.y &&
+                        p.z<=data.probe_coverage->maximum.z;
                     for(const auto& light:source->lights)
                     {
                         const float radius=light.radius+bounce_reach;
@@ -1198,6 +1232,7 @@ namespace vs::pcloud
             vk::buffer::write(frame.dynamic_nodes,empty.data(),sizeof(empty));
         }
         data.snapshot=source;
+        data.coverage_dirty=false;
         data.live_lights=source?source->lights:std::vector<light>{};
         // The reflected view has its own conservative all-light lists.
         // In the single-planar-mirror path there are at most two

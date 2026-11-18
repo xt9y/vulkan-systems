@@ -10,8 +10,8 @@ void depth_pyramid::create(vk::ImageView source,vk::Extent2D size,
     if(levels_ || !source || !size.width || !size.height)
         throw std::invalid_argument("Invalid depth pyramid configuration");
     const auto device=vk::device::get()->handle;
-    extent_={std::max(1u,(size.width+1u)/2u),
-             std::max(1u,(size.height+1u)/2u)};
+    extent_=vk::Extent2D{std::max(1u,(size.width+1u)/2u),
+                         std::max(1u,(size.height+1u)/2u)};
     reverse_=reverse_z?1u:0u;
     auto width=extent_.width,height=extent_.height;
     do {
@@ -133,6 +133,6 @@ void depth_pyramid::reset() noexcept
         level_views_.clear();
         sampler_=vk::Sampler{};
     }
-    levels_=0;reverse_=0;initialized_=false;extent_={};
+    levels_=0;reverse_=0;initialized_=false;extent_=vk::Extent2D{};
 }
 } // namespace vs::gpu
