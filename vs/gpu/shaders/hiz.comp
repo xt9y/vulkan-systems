@@ -1,0 +1,21 @@
+#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(set=0,binding=0) uniform sampler2D source_depth;
+layout(r32f,set=0,binding=1) writeonly uniform image2D output_depth;
+layout(push_constant) uniform Settings {uint reverse_z;} pc;
+
+void main()
+{
+    ivec2 dest=ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(dest,imageSize(output_depth))))return;
+    ivec2 limit=textureSize(source_depth,0)-ivec2(1);
+    float depth=pc.reverse_z!=0u?1.0:0.0;
+    for(int y=0;y<2;++y)
+    for(int x=0;x<2;++x) {
+        float sample_depth=texelFetch(source_depth,
+            min(dest*2+ivec2(x,y),limit),0).r;
+        depth=pc.reverse_z!=0u?
+            min(depth,sample_depth):max(depth,sample_depth);
+    }
+    imageStore(output_depth,dest,vec4(depth,0.0,0.0,0.0));
+}

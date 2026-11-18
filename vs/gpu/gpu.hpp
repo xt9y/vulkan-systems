@@ -15,4 +15,5 @@
 #include <vs/gpu/culler.hpp>
 #include <vs/gpu/virtual_culler.hpp>
 #include <vs/gpu/retirement.hpp>
+#include <vs/gpu/hiz.hpp>
 #include <vs/gpu/timestamps.hpp>
