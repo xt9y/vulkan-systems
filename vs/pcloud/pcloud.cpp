@@ -1655,8 +1655,13 @@ namespace vs::pcloud
         }
         // Keep animated GI inexpensive while allowing initial scene lighting
         // to converge promptly. Both paths have fixed per-frame work bounds.
+        // Moving crowds invalidate many probe neighborhoods at once.
+        // Distribute the expensive refresh over additional frames without
+        // changing the probe grid, GI weights, or final converged result.
+        const bool dense_dynamic=frame.dynamic_cpu.size()/3u>=900u;
         const std::uint32_t max_groups_per_frame=
-            frame.partial_grid?4u:12u;
+            dense_dynamic?(frame.partial_grid?2u:6u):
+                          (frame.partial_grid?4u:12u);
         const std::uint32_t total=groups[0]*groups[1]*groups[2];
         std::uint32_t remaining=max_groups_per_frame;
         while(frame.gi_cursor<total && remaining) {
