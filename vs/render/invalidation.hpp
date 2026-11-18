@@ -71,6 +71,7 @@ public:
     }
     std::size_t size() const noexcept{return regions_.size();}
     bool empty() const noexcept{return regions_.empty();}
+    void forget(::vs::spatial::region_id id){regions_.erase(id);}
     void clear() {regions_.clear();}
 private:
     std::unordered_map<::vs::spatial::region_id,invalidation,

@@ -4,6 +4,7 @@
 #include <vs/scene/environment.hpp>
 #include <vs/scene/regions.hpp>
 #include <vs/scene/region_runtime.hpp>
+#include <vs/scene/region_stream.hpp>
 #include <vs/assets/model.hpp>
 #include <vs/assets/animation.hpp>
 #include <vs/assets/gpu_assets.hpp>

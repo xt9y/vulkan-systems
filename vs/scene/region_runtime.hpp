@@ -19,7 +19,8 @@ public:
                  std::shared_ptr<const region_fragment> fragment,
                  ::vs::render::region_change affected=
                      ::vs::render::region_change::all) {
-        if(!fragment)throw std::invalid_argument("Null region fragment");
+        if(!fragment || !revision)
+            throw std::invalid_argument("Invalid region fragment or revision");
         if(const auto* current=regions_.get(id);
            current && revision<=current->revision)return false;
         // Region-local collision geometry is prepared independently from
@@ -52,6 +53,15 @@ public:
     const region_fragment* find(::vs::spatial::region_id id) const {
         const auto* entry=regions_.get(id);
         return entry && entry->value?entry->value.get():nullptr;
+    }
+    // Evict an out-of-interest region without an authoritative tombstone:
+    // re-entering the region may reuse the same content revision.
+    bool release(::vs::spatial::region_id id) {
+        if(!regions_.forget(id))return false;
+        collision_.erase(id);
+        dirty_.forget(id);
+        dirty_.mark({id,1u,::vs::render::region_change::all});
+        return true;
     }
     const region_catalog& regions() const noexcept {return regions_;}
     bool dirty() const noexcept {return !dirty_.empty();}
