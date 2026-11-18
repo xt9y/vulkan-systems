@@ -1,6 +1,7 @@
 #include <vs/render/frame.hpp>
 #include <stdexcept>
 #include <algorithm>
+#include <chrono>
 #include <limits>
 
 namespace vs::render {
@@ -74,14 +75,25 @@ std::uint64_t frame_scheduler::completed_serial() const {
 }
 frame_scheduler::ticket frame_scheduler::begin() {
     if(image_fences_.empty())throw std::logic_error("frame scheduler requires resize");
+    using clock=std::chrono::steady_clock;
+    const auto milliseconds=[](clock::duration d) {
+        return std::chrono::duration<double,std::milli>(d).count();
+    };
+    wait_times_={};
+    const auto started=clock::now();
     wait();
+    const auto after_frame=clock::now();
+    wait_times_.frame_fence_ms=milliseconds(after_frame-started);
     auto device=vk::device::get()->handle;
     auto& current=frames_[next_];
     auto index=vk::swapchain::acquire(UINT64_MAX,current.image_ready).value;
+    const auto after_acquire=clock::now();
+    wait_times_.acquire_ms=milliseconds(after_acquire-after_frame);
     if(index>=image_fences_.size())throw std::runtime_error("invalid swapchain image index");
     if(image_fences_[index] &&
        device.waitForFences(image_fences_[index],true,UINT64_MAX)!=vk::Result::eSuccess)
         throw std::runtime_error("swapchain image fence wait failed");
+    wait_times_.image_fence_ms=milliseconds(clock::now()-after_acquire);
     for(auto& fence:image_fences_)
         if(fence==current.fence)fence=vk::Fence{};
     image_fences_[index]=current.fence;
@@ -136,5 +148,6 @@ void frame_scheduler::reset() noexcept {
     image_fences_.clear();
     next_=0;
     submitted_=completed_=0;
+    wait_times_={};
 }
 }
