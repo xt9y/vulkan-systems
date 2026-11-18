@@ -55,6 +55,7 @@ namespace vs::pcloud
             vk::ImageView grid_view{};
             bool dirty=true;
             bool partial_grid=false;
+            bool grid_initialized=false;
             std::array<std::uint32_t,3> grid_first{},grid_end{};
             vk::DescriptorSet cloud{};
             vk::DescriptorSet gi{};
@@ -198,6 +199,11 @@ namespace vs::pcloud
             view.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
             current.grid_view=vk::image_view::create(view);
             current.dirty=true;
+            current.grid_initialized=false;
+            current.gi_cursor=0;
+            current.gi_complete=false;
+            current.cloud_submitted=false;
+            current.partial_grid=false;
         }
 
         vk::PipelineLayout pipeline_layout(vk::DescriptorSetLayout set)
@@ -1141,6 +1147,7 @@ namespace vs::pcloud
             frame.gi_interval=0;
             frame.gi_cursor=0;
             frame.gi_complete=false;
+            frame.grid_initialized=false;
             frame.cloud_submitted=false;
             frame.dynamic_refit.clear();
             frame.dynamic_cpu.clear();
@@ -1567,27 +1574,49 @@ namespace vs::pcloud
         };
         const auto dispatch=[&](std::uint32_t x,std::uint32_t y,
                                 std::uint32_t z,std::uint32_t count_x,
-                                std::uint32_t count_y,std::uint32_t count_z) {
+                                std::uint32_t count_y,std::uint32_t count_z,
+                                std::uint32_t clear=0u) {
             const grid_push push{
                 data.point_count,data.vertex_count,data.node_count,
                 data.light_count,
                 {data.grid_origin.x,data.grid_origin.y,data.grid_origin.z,
                  data.grid_spacing},
-                {begin[0]+x*4u,begin[1]+y*4u,begin[2]+z*4u,0},
+                {begin[0]+x*4u,begin[1]+y*4u,begin[2]+z*4u,clear},
                 data.glass_node_count
             };
             data.gi_program->dispatch(command,count_x,count_y,count_z,
                                        {frame.gi},&push,sizeof(push));
         };
-        if(!frame.partial_grid) {
-            // Full-scene initialization is still completed in one pass.
-            dispatch(0,0,0,groups[0],groups[1],groups[2]);
-            frame.gi_complete=true;
-            return;
+        if(!frame.grid_initialized) {
+            const grid_push push{
+                data.point_count,data.vertex_count,data.node_count,
+                data.light_count,
+                {data.grid_origin.x,data.grid_origin.y,data.grid_origin.z,
+                 data.grid_spacing},
+                {0u,0u,0u,1u},data.glass_node_count
+            };
+            // Zero new 3D textures cheaply; full ray-traced GI is then
+            // populated incrementally without one large first-frame dispatch.
+            data.gi_program->dispatch(command,
+                (data.grid_extent.width+3u)/4u,
+                (data.grid_extent.height+3u)/4u,
+                (data.grid_extent.depth+3u)/4u,
+                {frame.gi},&push,sizeof(push));
+            vk::MemoryBarrier barrier{
+                vk::AccessFlagBits::eShaderWrite,
+                vk::AccessFlagBits::eShaderRead |
+                vk::AccessFlagBits::eShaderWrite
+            };
+            command.pipelineBarrier(
+                vk::PipelineStageFlagBits::eComputeShader,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {},{barrier},{},{});
+            frame.grid_initialized=true;
         }
-        // Dynamic GI is processed in bounded 4x4x4 workgroups. Splitting
-        // rows avoids large one-frame spikes when invalidation spans a room.
-        constexpr std::uint32_t max_groups_per_frame=32;
+        // A fixed bound applies to full initialization and dynamic updates.
+        // Only four 4x4x4 workgroups may execute expensive shadow rays
+        // for each acquired swapchain image in a single frame.
+        constexpr std::uint32_t max_groups_per_frame=4u;
         const std::uint32_t total=groups[0]*groups[1]*groups[2];
         std::uint32_t remaining=max_groups_per_frame;
         while(frame.gi_cursor<total && remaining) {

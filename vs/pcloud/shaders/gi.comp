@@ -111,6 +111,10 @@ void main()
 {
     ivec3 cell=ivec3(gl_GlobalInvocationID.xyz+pc.region_first.xyz);
     if(any(greaterThanEqual(cell,imageSize(grid))))return;
+    if(pc.region_first.w!=0u) {
+        imageStore(grid,cell,vec4(0.0));
+        return;
+    }
     vec3 position=pc.grid_origin_spacing.xyz+
                   vec3(cell)*pc.grid_origin_spacing.w;
     const float max_distance=2.6; // Rogue's original probe range
@@ -144,10 +148,12 @@ void main()
         vec3 value=points[i].radiance.rgb;
         if(dot(value,value)<=0.0)continue;
         vec3 delta=position-points[i].position.xyz;
-        float distance=length(delta);
-        if(distance<=0.02 || distance>=max_distance)continue;
+        float distance_squared=dot(delta,delta);
+        if(distance_squared<=0.0004 ||
+           distance_squared>=max_distance*max_distance)continue;
+        if(dot(points[i].normal.xyz,delta)<=0.0)continue;
+        float distance=sqrt(distance_squared);
         vec3 ray=delta/distance;
-        if(dot(points[i].normal.xyz,ray)<=0.0)continue;
         if(!any_hit(points[i].position.xyz+ray*0.003,ray,distance-0.006)) {
             vec3 transmittance=pc.glass_node_count>0u?
                 vs_glass_segment(points[i].position.xyz+ray*0.003,
