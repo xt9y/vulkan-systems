@@ -41,6 +41,11 @@ namespace vs::pcloud
             ::vs::gpu::owned_buffer tile_lights;
             ::vs::gpu::owned_buffer dynamic_vertices,dynamic_nodes,changed_points;
             std::vector<std::uint32_t> tile_cpu;
+            std::vector<std::array<float,4>> dynamic_cpu;
+            std::vector<::vs::bvh::stackless_node> dynamic_refit;
+            std::vector<std::uint8_t> dynamic_packet;
+            std::vector<std::uint32_t> affected_cpu;
+            std::uint32_t gi_interval=0;
             collision_box dynamic_bounds{};
             bool has_dynamic_bounds=false,cloud_partial=false;
             std::uint32_t changed_count=0;
@@ -1122,6 +1127,10 @@ namespace vs::pcloud
         data.dynamic_order.clear();
         for(auto& frame:data.frames) {
             frame.has_dynamic_bounds=false;
+            frame.gi_interval=0;
+            frame.dynamic_refit.clear();
+            frame.dynamic_cpu.clear();
+            frame.affected_cpu.clear();
             frame.changed_count=0;
             frame.cloud_partial=false;
             const std::array<std::uint32_t,4> empty{};
@@ -1180,7 +1189,8 @@ namespace vs::pcloud
                 data.dynamic_order[i]=std::uint32_t(initial[i*3u][3]);
         }
 
-        std::vector<std::array<float,4>> vertices;
+        auto& vertices=frame.dynamic_cpu;
+        vertices.clear();
         vertices.reserve(faces.size()*3u);
         collision_box bounds{};
         const float inf=std::numeric_limits<float>::infinity();
@@ -1208,7 +1218,9 @@ namespace vs::pcloud
             vertices.push_back({v.x,v.y,v.z,0.f});
         }
 
-        auto nodes=data.dynamic_topology;
+        auto& nodes=frame.dynamic_refit;
+        if(nodes.size()!=data.dynamic_topology.size())
+            nodes=data.dynamic_topology;
         for(std::size_t j=nodes.size();j-->0;) {
             auto& node=nodes[j];
             vec3 lo{inf,inf,inf},hi{-inf,-inf,-inf};
@@ -1247,17 +1259,21 @@ namespace vs::pcloud
         const auto host=vk::MemoryPropertyFlagBits::eHostVisible |
                         vk::MemoryPropertyFlagBits::eHostCoherent;
         const auto ensure=[&](::vs::gpu::owned_buffer& buffer,std::size_t bytes) {
-            if(buffer.size<bytes)
-                buffer=::vs::gpu::create_buffer(
-                    std::max(bytes,std::size_t(buffer.size)*2u),storage,host);
+            if(buffer.size>=bytes)return false;
+            buffer=::vs::gpu::create_buffer(
+                std::max(bytes,std::size_t(buffer.size)*2u),storage,host);
+            return true;
         };
         const auto vertex_bytes=vertices.size()*sizeof(std::array<float,4>);
-        ensure(frame.dynamic_vertices,std::max<std::size_t>(vertex_bytes,48));
+        const bool vertices_moved=ensure(frame.dynamic_vertices,
+            std::max<std::size_t>(vertex_bytes,48));
         if(vertex_bytes)
             vk::buffer::write(frame.dynamic_vertices,vertices.data(),vertex_bytes);
         const auto node_bytes=16u+nodes.size()*sizeof(shadow_node);
-        ensure(frame.dynamic_nodes,std::max<std::size_t>(node_bytes,16u+sizeof(shadow_node)));
-        std::vector<std::uint8_t> node_packet(node_bytes,0u);
+        const bool nodes_moved=ensure(frame.dynamic_nodes,
+            std::max<std::size_t>(node_bytes,16u+sizeof(shadow_node)));
+        auto& node_packet=frame.dynamic_packet;
+        node_packet.resize(node_bytes);
         const std::array<std::uint32_t,4> counts{
             std::uint32_t(nodes.size()),std::uint32_t(vertices.size()),0u,0u};
         std::memcpy(node_packet.data(),counts.data(),sizeof(counts));
@@ -1265,18 +1281,32 @@ namespace vs::pcloud
             std::memcpy(node_packet.data()+16,nodes.data(),
                         nodes.size()*sizeof(shadow_node));
         vk::buffer::write(frame.dynamic_nodes,node_packet.data(),node_packet.size());
-        data.cloud_sets->write_buffer(image,6,vk::buffer::descriptor(frame.dynamic_vertices));
-        data.cloud_sets->write_buffer(image,7,vk::buffer::descriptor(frame.dynamic_nodes));
-        data.gi_sets->write_buffer(image,10,vk::buffer::descriptor(frame.dynamic_vertices));
-        data.gi_sets->write_buffer(image,11,vk::buffer::descriptor(frame.dynamic_nodes));
-        data.lighting_sets->write_buffer(image,16,vk::buffer::descriptor(frame.dynamic_vertices));
-        data.lighting_sets->write_buffer(image,17,vk::buffer::descriptor(frame.dynamic_nodes));
-        if(!data.reflections.empty()) {
-            const std::uint32_t reflected=image+std::uint32_t(data.frames.size());
-            data.lighting_sets->write_buffer(reflected,16,
-                vk::buffer::descriptor(frame.dynamic_vertices));
-            data.lighting_sets->write_buffer(reflected,17,
-                vk::buffer::descriptor(frame.dynamic_nodes));
+        if(vertices_moved || nodes_moved) {
+            if(vertices_moved) {
+                data.cloud_sets->write_buffer(image,6,
+                    vk::buffer::descriptor(frame.dynamic_vertices));
+                data.gi_sets->write_buffer(image,10,
+                    vk::buffer::descriptor(frame.dynamic_vertices));
+                data.lighting_sets->write_buffer(image,16,
+                    vk::buffer::descriptor(frame.dynamic_vertices));
+            }
+            if(nodes_moved) {
+                data.cloud_sets->write_buffer(image,7,
+                    vk::buffer::descriptor(frame.dynamic_nodes));
+                data.gi_sets->write_buffer(image,11,
+                    vk::buffer::descriptor(frame.dynamic_nodes));
+                data.lighting_sets->write_buffer(image,17,
+                    vk::buffer::descriptor(frame.dynamic_nodes));
+            }
+            if(!data.reflections.empty()) {
+                const auto reflected=image+std::uint32_t(data.frames.size());
+                if(vertices_moved)
+                    data.lighting_sets->write_buffer(reflected,16,
+                        vk::buffer::descriptor(frame.dynamic_vertices));
+                if(nodes_moved)
+                    data.lighting_sets->write_buffer(reflected,17,
+                        vk::buffer::descriptor(frame.dynamic_nodes));
+            }
         }
 
         if(frame.dirty && frame.cloud_partial)
@@ -1284,10 +1314,15 @@ namespace vs::pcloud
         const bool had=frame.has_dynamic_bounds;
         const auto previous=frame.dynamic_bounds;
         const bool has=!faces.empty();
-        frame.dynamic_bounds=bounds;
-        frame.has_dynamic_bounds=has;
         frame.changed_count=0;
         if(!had && !has)return;
+        // Dynamic direct shadows remain exact every frame. Only diffuse GI
+        // is amortized, at most once per four acquired frames per image.
+        if(!frame.dirty && had && has && ++frame.gi_interval<4u)
+            return;
+        frame.gi_interval=0;
+        frame.dynamic_bounds=bounds;
+        frame.has_dynamic_bounds=has;
 
         const auto component=[](vec3 v,int axis) {
             return axis==0?v.x:axis==1?v.y:v.z;
@@ -1312,7 +1347,8 @@ namespace vs::pcloud
             }
             return true;
         };
-        std::vector<std::uint32_t> affected;
+        auto& affected=frame.affected_cpu;
+        affected.clear();
         affected.reserve(data.sample_positions.size()/8u+1u);
         vec3 dirty_min{inf,inf,inf},dirty_max{-inf,-inf,-inf};
         const auto dirty=[&](vec3 p,float reach) {
@@ -1352,11 +1388,13 @@ namespace vs::pcloud
 
         frame.changed_count=std::uint32_t(affected.size());
         const auto point_bytes=affected.size()*sizeof(std::uint32_t);
-        ensure(frame.changed_points,std::max<std::size_t>(point_bytes,4u));
+        const bool points_moved=ensure(frame.changed_points,
+            std::max<std::size_t>(point_bytes,4u));
         if(point_bytes)
             vk::buffer::write(frame.changed_points,affected.data(),point_bytes);
-        data.cloud_sets->write_buffer(image,8,
-            vk::buffer::descriptor(frame.changed_points));
+        if(points_moved)
+            data.cloud_sets->write_buffer(image,8,
+                vk::buffer::descriptor(frame.changed_points));
 
         std::array<std::uint32_t,3> first{},last{};
         const std::array<std::uint32_t,3> extent{
