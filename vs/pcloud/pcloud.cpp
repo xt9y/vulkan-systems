@@ -1745,11 +1745,21 @@ namespace vs::pcloud
         }
         vk::buffer::write(current.tile_lights,current.tile_cpu.data(),
                           current.tile_cpu.size()*sizeof(std::uint32_t));
-        // Crowd shadow rays run at an adaptive pixel rate; silhouettes
-        // and G-buffer edges retain native-resolution visibility.
-        const auto dynamic_primitives=current.dynamic_cpu.size()/3u;
-        const std::uint32_t pixel_rate=dynamic_primitives>=900u?4u:
-            dynamic_primitives>=512u?2u:1u;
+        // Static GLB geometry also dominates shadow-BVH traversal. The old
+        // heuristic considered only animated primitives and therefore never
+        // enabled the accelerated shader for the 87k-triangle mermaid scene.
+        const std::size_t dynamic_primitives=current.dynamic_cpu.size()/3u;
+        const std::size_t static_primitives=data.vertex_count/3u;
+        const std::uint32_t pixel_rate=
+            static_primitives>=60000u || dynamic_primitives>=900u ? 4u :
+            static_primitives>=12000u || dynamic_primitives>=256u ? 2u : 1u;
+        static std::uint32_t previous_rate=0u;
+        if(pixel_rate!=previous_rate) {
+            std::cout << "pc: lighting pixel rate " << pixel_rate
+                      << "x, static triangles=" << static_primitives
+                      << ", dynamic primitives=" << dynamic_primitives << '\n';
+            previous_rate=pixel_rate;
+        }
         compute(command,*data.lighting_program,current.lighting,frame,pixel_rate);
     }
 
