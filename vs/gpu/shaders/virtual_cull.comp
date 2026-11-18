@@ -127,13 +127,13 @@ void main()
             // Conservative skinning/animation slack without relying on a
             // game-specific skeletal layout.
             vec4 bound=vec4(center,item.sphere.w*r*2.0);
-            bool visible=true;
+            bool page_in_frustum=true;
             for(uint plane=0u;plane<6u;++plane)
                 if(dot(visible.planes[plane],vec4(center,1.0))<-bound.w) {
-                    visible=false;
+                    page_in_frustum=false;
                     break;
                 }
-            if(!visible || occluded(bound))continue;
+            if(!page_in_frustum || occluded(bound))continue;
             uint out_index=atomicAdd(draws[page].instance_count,1u);
             visible_ids[page*pc.info.x+out_index]=id;
         }
