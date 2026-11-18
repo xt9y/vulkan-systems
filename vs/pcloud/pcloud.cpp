@@ -294,15 +294,15 @@ namespace vs::pcloud
                 ++eligible;
         std::uint32_t lit_tiles=0;
         std::uint64_t references=0;
+        const auto popcount=[](std::uint32_t word) {
+            std::uint32_t count=0;
+            while(word) {
+                word&=word-1u;
+                ++count;
+            }
+            return count;
+        };
         for(std::size_t i=0;i+1u<frame.tile_cpu.size();i+=2u) {
-            const auto popcount=[](std::uint32_t word) {
-                std::uint32_t count=0;
-                while(word) {
-                    word&=word-1u;
-                    ++count;
-                }
-                return count;
-            };
             const std::uint32_t count=
                 popcount(frame.tile_cpu[i])+
                 popcount(frame.tile_cpu[i+1u]);
