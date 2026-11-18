@@ -1661,7 +1661,7 @@ namespace vs::pcloud
         // changing the probe grid, GI weights, or final converged result.
         const bool dense_dynamic=frame.dynamic_cpu.size()/3u>=900u;
         const std::uint32_t max_groups_per_frame=
-            dense_dynamic?(frame.partial_grid?2u:6u):
+            dense_dynamic?(frame.partial_grid?1u:4u):
                           (frame.partial_grid?4u:12u);
         const std::uint32_t total=groups[0]*groups[1]*groups[2];
         std::uint32_t remaining=max_groups_per_frame;
