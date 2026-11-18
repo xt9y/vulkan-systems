@@ -31,7 +31,7 @@ public:
         auto batch=receiver.poll(cursor_);
         if(batch.full) {
             pending_.clear();
-            destination.clear();
+            destination.clear_and_invalidate();
         }
         for(auto& entry:batch.entries) {
             if(const auto found=pending_.find(entry.id);found!=pending_.end()) {
@@ -46,7 +46,7 @@ public:
             pending_.clear();
             for(auto& entry:receiver.snapshot())
                 pending_[entry.id]=std::move(entry);
-            destination.clear();
+            destination.clear_and_invalidate();
         }
         if(!budget || pending_.empty())return 0;
         std::vector<::vs::spatial::region_id> ids;
