@@ -24,6 +24,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <cstring>
 namespace vs::pcloud
 {
     namespace
@@ -38,7 +39,11 @@ namespace vs::pcloud
             image_target ldr;
             ::vs::gpu::owned_buffer points;
             ::vs::gpu::owned_buffer tile_lights;
+            ::vs::gpu::owned_buffer dynamic_vertices,dynamic_nodes,changed_points;
             std::vector<std::uint32_t> tile_cpu;
+            collision_box dynamic_bounds{};
+            bool has_dynamic_bounds=false,cloud_partial=false;
+            std::uint32_t changed_count=0;
             ::vs::gpu::owned_image grid;
             vk::ImageView grid_view{};
             bool dirty=true;
@@ -74,6 +79,9 @@ namespace vs::pcloud
             std::shared_ptr<const ::vs::scene::data> snapshot;
             std::shared_ptr<const ::vs::scene::data> incoming;
             std::vector<light> live_lights;
+            std::vector<vec3> sample_positions;
+            std::vector<::vs::bvh::stackless_node> dynamic_topology;
+            std::vector<std::uint32_t> dynamic_order;
             configuration shader_paths{};
             presentation_target output{};
             std::uint32_t light_count=0, point_count=0, vertex_count=0, node_count=0;
@@ -117,7 +125,7 @@ namespace vs::pcloud
         static_assert(sizeof(probe_point)==48);
         using shadow_node=::vs::bvh::stackless_node;
         struct cloud_push {
-            std::uint32_t points,vertices,lights,nodes;
+            std::uint32_t points,vertices,lights,nodes,partial;
         };
         struct grid_push {
             std::uint32_t points,vertices,nodes,lights=0;
@@ -227,6 +235,7 @@ namespace vs::pcloud
         auto& frame=get().frames.at(image);
         frame.dirty=false;
         frame.partial_grid=false;
+        frame.cloud_partial=false;
     }
 
     void set_exposure(float exposure)
@@ -278,11 +287,11 @@ namespace vs::pcloud
             data.presentation->create(get().output.images,
                 get().output.format,get().output.extent);
             data.cloud_sets=std::make_unique<::vs::gpu::descriptors>();
-            data.cloud_sets->create(bindings(0,0,vk::ShaderStageFlagBits::eCompute,6),count);
+            data.cloud_sets->create(bindings(0,0,vk::ShaderStageFlagBits::eCompute,9),count);
             data.gi_sets=std::make_unique<::vs::gpu::descriptors>();
-            data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,9),count);
+            data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,11),count);
             data.lighting_sets=std::make_unique<::vs::gpu::descriptors>();
-            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,10),count*2);
+            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,12),count*2);
             data.tone_sets=std::make_unique<::vs::gpu::descriptors>();
             data.tone_sets->create(bindings(1,1,vk::ShaderStageFlagBits::eCompute),count*2);
             data.present_sets=std::make_unique<::vs::gpu::descriptors>();
@@ -354,6 +363,15 @@ namespace vs::pcloud
                 current.hdr={attachments.hdr,attachments.hdr_view};
                 current.ldr={attachments.ldr,attachments.ldr_view};
                 current.points=::vs::gpu::create_buffer(sizeof(probe_point),storage,memory);
+                current.dynamic_vertices=::vs::gpu::create_buffer(
+                    3*sizeof(std::array<float,4>),storage,memory);
+                current.dynamic_nodes=::vs::gpu::create_buffer(
+                    16+sizeof(shadow_node),storage,memory);
+                current.changed_points=::vs::gpu::create_buffer(
+                    sizeof(std::uint32_t),storage,memory);
+                const std::array<std::uint32_t,4> empty_dynamic{};
+                vk::buffer::write(current.dynamic_nodes,empty_dynamic.data(),
+                                  sizeof(empty_dynamic));
                 current.tile_cpu.resize(std::size_t(data.tile_columns)*
                     data.tile_rows*tile_mask_words);
                 current.tile_lights=::vs::gpu::create_buffer(
@@ -378,6 +396,9 @@ namespace vs::pcloud
                 data.cloud_sets->write_buffer(i,3,vk::buffer::descriptor(data.nodes));
                 data.cloud_sets->write_buffer(i,4,vk::buffer::descriptor(data.transmission));
                 data.cloud_sets->write_buffer(i,5,vk::buffer::descriptor(data.light_shapes));
+                data.cloud_sets->write_buffer(i,6,vk::buffer::descriptor(current.dynamic_vertices));
+                data.cloud_sets->write_buffer(i,7,vk::buffer::descriptor(current.dynamic_nodes));
+                data.cloud_sets->write_buffer(i,8,vk::buffer::descriptor(current.changed_points));
                 data.gi_sets->write_buffer(i,1,vk::buffer::descriptor(current.points));
                 data.gi_sets->write_buffer(i,2,vk::buffer::descriptor(data.triangles));
                 data.gi_sets->write_buffer(i,3,vk::buffer::descriptor(data.nodes));
@@ -387,6 +408,8 @@ namespace vs::pcloud
                 data.gi_sets->write_buffer(i,7,vk::buffer::descriptor(data.glass_vertices));
                 data.gi_sets->write_buffer(i,8,vk::buffer::descriptor(data.glass_nodes));
                 data.gi_sets->write_buffer(i,9,vk::buffer::descriptor(data.glass_filters));
+                data.gi_sets->write_buffer(i,10,vk::buffer::descriptor(current.dynamic_vertices));
+                data.gi_sets->write_buffer(i,11,vk::buffer::descriptor(current.dynamic_nodes));
 
                 std::array<vk::DescriptorImageInfo,6> lighting{};
                 for(std::size_t j=0;j<g.size();++j)
@@ -418,6 +441,10 @@ namespace vs::pcloud
                     vk::buffer::descriptor(data.glass_filters));
                 data.lighting_sets->write_buffer(i,15,
                     vk::buffer::descriptor(data.light_shapes));
+                data.lighting_sets->write_buffer(i,16,
+                    vk::buffer::descriptor(current.dynamic_vertices));
+                data.lighting_sets->write_buffer(i,17,
+                    vk::buffer::descriptor(current.dynamic_nodes));
                 std::array<vk::DescriptorImageInfo,2> tone{};
                 tone[0].sampler = data.sampler;
                 tone[0].imageView = current.hdr.view;
@@ -501,6 +528,10 @@ namespace vs::pcloud
                 vk::buffer::descriptor(data.glass_filters));
             data.lighting_sets->write_buffer(i+count,15,
                 vk::buffer::descriptor(data.light_shapes));
+             data.lighting_sets->write_buffer(i+count,16,
+                 vk::buffer::descriptor(data.frames[i].dynamic_vertices));
+             data.lighting_sets->write_buffer(i+count,17,
+                 vk::buffer::descriptor(data.frames[i].dynamic_nodes));
             vk::DescriptorImageInfo tone{};
             tone.sampler=data.sampler;
             tone.imageView=current.hdr.view;
@@ -631,6 +662,7 @@ namespace vs::pcloud
         if(lower[0]>=upper[0] || lower[1]>=upper[1] ||
            lower[2]>=upper[2])return;
         for(auto& frame:data.frames) {
+            frame.cloud_partial=false;
             if(!frame.dirty) {
                 frame.partial_grid=true;
                 frame.grid_first=lower;
@@ -1081,6 +1113,20 @@ namespace vs::pcloud
             }
         }
         upload_transmission(source.get());
+        data.sample_positions.clear();
+        data.sample_positions.reserve(points.size());
+        for(const auto& p:points)
+            data.sample_positions.push_back({
+                p.position[0],p.position[1],p.position[2]});
+        data.dynamic_topology.clear();
+        data.dynamic_order.clear();
+        for(auto& frame:data.frames) {
+            frame.has_dynamic_bounds=false;
+            frame.changed_count=0;
+            frame.cloud_partial=false;
+            const std::array<std::uint32_t,4> empty{};
+            vk::buffer::write(frame.dynamic_nodes,empty.data(),sizeof(empty));
+        }
         data.snapshot=source;
         data.live_lights=source?source->lights:std::vector<light>{};
         // The reflected view has its own conservative all-light lists.
@@ -1205,8 +1251,12 @@ namespace vs::pcloud
     void cloud(vk::CommandBuffer command,std::uint32_t image)
     {
         if(!get().frames.at(image).dirty || !get().point_count)return;
-        const cloud_push push{get().point_count,get().vertex_count,get().light_count,get().node_count};
-        get().cloud_program->dispatch(command,(get().point_count+63)/64,1,1,
+        const auto& frame=get().frames.at(image);
+        const auto count=frame.cloud_partial?frame.changed_count:get().point_count;
+        if(!count)return;
+        const cloud_push push{count,get().vertex_count,get().light_count,
+                              get().node_count,frame.cloud_partial?1u:0u};
+        get().cloud_program->dispatch(command,(count+63)/64,1,1,
                                       {get().frames.at(image).cloud},&push,sizeof(push));
     }
 

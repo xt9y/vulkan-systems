@@ -65,7 +65,10 @@ bool shadow_box(vec3 origin,vec3 inverse_direction,float distance,ShadowNode nod
     return t0<=t1;
 }
 
-bool any_hit(vec3 origin,vec3 ray,float distance)
+#define VS_DYNAMIC_VERTEX_BINDING 10
+#define VS_DYNAMIC_NODE_BINDING 11
+#include "dynamic_shadow.glsl"
+bool static_hit(vec3 origin,vec3 ray,float distance)
 {
     uint total=min(pc.node_count,uint(nodes.length()));
     uint vertex_count=min(pc.vertex_count,uint(vertices.length()));
@@ -98,6 +101,11 @@ bool any_hit(vec3 origin,vec3 ray,float distance)
         ++index;
     }
     return false;
+}
+bool any_hit(vec3 origin,vec3 ray,float distance)
+{
+    return static_hit(origin,ray,distance) ||
+           vs_dynamic_hit(origin,ray,distance);
 }
 void main()
 {

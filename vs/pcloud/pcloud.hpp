@@ -93,6 +93,10 @@ namespace vs::pcloud
                 const configuration& shaders={});
     void set_scene(std::shared_ptr<const ::vs::scene::data>);
     void synchronize_scene();
+    // Update animated world-space triangles for one acquired frame image.
+    // Static probe samples and the opaque BVH remain unchanged.
+    void update_dynamic_geometry(std::uint32_t image,
+                                 const std::vector<triangle>& triangles);
     // Update light color/intensity without rebuilding unchanged scene geometry.
     // Position, radius, active mask and light count must be unchanged.
     void update_lights(const std::vector<light>&);
