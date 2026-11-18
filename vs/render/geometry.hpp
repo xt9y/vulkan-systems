@@ -34,7 +34,7 @@ namespace vs::render
             ::vs::gpu::owned_buffer next_indices(transfers.add(
                 indices,index_bytes,vk::BufferUsageFlagBits::eIndexBuffer));
             vertices_=std::move(next_vertices);
-            borrowed_vertices_={};
+            borrowed_vertices_=nullptr;
             indices_=std::move(next_indices);
             index_count_=index_count;
             index_type_=index_type;
@@ -74,7 +74,7 @@ namespace vs::render
         {
             vertices_.reset();
             indices_.reset();
-            borrowed_vertices_={};
+            borrowed_vertices_=nullptr;
             index_count_=0;
         }
         vk::Buffer vertex_buffer() const noexcept {
