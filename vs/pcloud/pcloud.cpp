@@ -2126,14 +2126,27 @@ namespace vs::pcloud
         // enabled the accelerated shader for the 87k-triangle mermaid scene.
         const std::size_t dynamic_primitives=current.dynamic_count;
         const std::size_t static_primitives=data.vertex_count/3u;
-        const std::uint32_t pixel_rate=
+        const std::uint32_t adaptive_rate=
             static_primitives>=60000u || dynamic_primitives>=900u ? 4u :
             static_primitives>=12000u || dynamic_primitives>=256u ? 2u : 1u;
+        // An explicit A/B override isolates the edge-reconstruction and
+        // shadow-ray costs without changing normal adaptive behavior.
+        static const std::uint32_t forced_rate=[] {
+            const char* value=std::getenv("VS_LIGHTING_RATE");
+            if(!value)return 0u;
+            if(std::strcmp(value,"1")==0)return 1u;
+            if(std::strcmp(value,"2")==0)return 2u;
+            if(std::strcmp(value,"4")==0)return 4u;
+            return 0u;
+        }();
+        const std::uint32_t pixel_rate=
+            forced_rate?forced_rate:adaptive_rate;
         data.lighting_pixel_rate=pixel_rate;
         static std::uint32_t previous_rate=0u;
         if(pixel_rate!=previous_rate) {
             std::cout << "pc: lighting pixel rate " << pixel_rate
-                      << "x, static triangles=" << static_primitives
+                      << "x (" << (forced_rate?"forced":"adaptive")
+                      << "), static triangles=" << static_primitives
                       << ", dynamic primitives=" << dynamic_primitives << '\n';
             previous_rate=pixel_rate;
         }
