@@ -26,16 +26,20 @@ bool vs_dynamic_triangle_hit(vec3 origin,vec3 ray,float limit,
     return distance>.001 && distance<limit;
 }
 
-bool vs_dynamic_hit(vec3 origin,vec3 ray,float distance)
+vec3 vs_shadow_inverse_direction(vec3 ray)
 {
-    uint total=min(vs_dynamic_counts.x,uint(vs_dynamic_nodes.length()));
-    uint vertex_count=min(vs_dynamic_counts.y,uint(vs_dynamic_vertices.length()));
-    if(total==0u || vertex_count==0u || distance<=.001)return false;
     vec3 safe=vec3(
         abs(ray.x)<1e-7?(ray.x<0.0?-1e-7:1e-7):ray.x,
         abs(ray.y)<1e-7?(ray.y<0.0?-1e-7:1e-7):ray.y,
         abs(ray.z)<1e-7?(ray.z<0.0?-1e-7:1e-7):ray.z);
-    vec3 inverse_direction=1.0/safe;
+    return 1.0/safe;
+}
+bool vs_dynamic_hit(vec3 origin,vec3 ray,float distance,
+                    vec3 inverse_direction)
+{
+    uint total=min(vs_dynamic_counts.x,uint(vs_dynamic_nodes.length()));
+    uint vertex_count=min(vs_dynamic_counts.y,uint(vs_dynamic_vertices.length()));
+    if(total==0u || vertex_count==0u || distance<=.001)return false;
     uint index=0u;
     while(index<total) {
         ShadowNode node=vs_dynamic_nodes[index];
@@ -75,4 +79,12 @@ bool vs_dynamic_hit(vec3 origin,vec3 ray,float distance)
     }
     return false;
 }
+bool vs_dynamic_hit(vec3 origin,vec3 ray,float distance)
+{
+    if(vs_dynamic_counts.x==0u || vs_dynamic_counts.y==0u ||
+       distance<=.001)return false;
+    return vs_dynamic_hit(origin,ray,distance,
+                          vs_shadow_inverse_direction(ray));
+}
+
 #endif
