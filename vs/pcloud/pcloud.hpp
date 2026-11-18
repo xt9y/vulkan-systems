@@ -114,6 +114,10 @@ namespace vs::pcloud
     // Update light color/intensity without rebuilding unchanged scene geometry.
     // Position, radius, active mask and light count must be unchanged.
     void update_lights(const std::vector<light>&);
+    // Invalidate only GI cells affected by a lighting/material change.
+    // Geometry replacement must still use set_scene/synchronize_scene until
+    // the static GPU BVH supports independent region pages.
+    void invalidate_region(const ::vs::scene::collision_box& bounds);
     // Region-scoped radiance/probe invalidation without static BVH rebuild.
     // Caller waits for in-flight frames before updating CPU-visible buffers.
     // Use set_scene() when triangles or probe topology have changed.

@@ -897,6 +897,55 @@ namespace vs::pcloud
         }
     }
 
+    void invalidate_region(const ::vs::scene::collision_box& region)
+    {
+        auto& data=get();
+        if(!data.snapshot || !data.point_count)return;
+        const float lo[3]{region.minimum.x,region.minimum.y,region.minimum.z};
+        const float hi[3]{region.maximum.x,region.maximum.y,region.maximum.z};
+        const float origin[3]{data.grid_origin.x,
+                               data.grid_origin.y,data.grid_origin.z};
+        const std::uint32_t size[3]{data.grid_extent.width,
+                                     data.grid_extent.height,
+                                     data.grid_extent.depth};
+        std::array<std::uint32_t,3> lower{},upper{};
+        for(int axis=0;axis<3;++axis) {
+            if(!std::isfinite(lo[axis]) || !std::isfinite(hi[axis]) ||
+               lo[axis]>hi[axis])
+                throw std::invalid_argument("pc: invalid changed region bounds");
+            const double expanded=bounce_reach+data.grid_spacing;
+            const auto clamp_cell=[&](double cell) {
+                return static_cast<std::uint32_t>(std::clamp(
+                    cell,0.0,double(size[axis])));
+            };
+            lower[axis]=clamp_cell(std::floor(
+                (double(lo[axis])-expanded-origin[axis])/data.grid_spacing));
+            upper[axis]=clamp_cell(std::ceil(
+                (double(hi[axis])+expanded-origin[axis])/data.grid_spacing)+1.0);
+            if(lower[axis]>=upper[axis])return;
+        }
+        for(auto& frame:data.frames) {
+            // Refresh radiance because receiver/source materials may change;
+            // leave previously populated cells outside this region untouched.
+            frame.cloud_partial=false;
+            frame.cloud_submitted=false;
+            frame.gi_cursor=0;
+            frame.gi_complete=false;
+            frame.gi_interval=0;
+            if(!frame.dirty) {
+                frame.dirty=true;
+                frame.partial_grid=true;
+                frame.grid_first=lower;
+                frame.grid_end=upper;
+            } else if(frame.partial_grid) {
+                for(int axis=0;axis<3;++axis) {
+                    frame.grid_first[axis]=std::min(frame.grid_first[axis],lower[axis]);
+                    frame.grid_end[axis]=std::max(frame.grid_end[axis],upper[axis]);
+                }
+            }
+        }
+    }
+
     void update_transmission(const ::vs::scene::data& source)
     {
         auto& data=get();
