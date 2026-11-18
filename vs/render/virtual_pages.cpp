@@ -97,7 +97,10 @@ void virtual_page_pool::touch(page_id id,std::uint64_t submitted_serial) {
 }
 void virtual_page_pool::evict(std::uint64_t completed_serial,
                              std::size_t target_bytes) {
-    for(const auto id:accounting_.trim(completed_serial,target_bytes))
+    // A zero target requests full eviction of completed pages, not the
+    // default accounting::trim() behavior of retaining the whole budget.
+    for(const auto id:accounting_.trim_to(completed_serial,target_bytes?
+        target_bytes:std::size_t(0)))
         pages_.erase(id); // index allocation is no longer in flight
 }
 std::uint32_t virtual_page_pool::level_mask(const virtual_pages& catalog) const {

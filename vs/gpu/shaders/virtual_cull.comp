@@ -89,6 +89,18 @@ void main()
     for(uint level=1u;level<pc.info.y;++level)
         if(projected_radius*pc.error[level]<=1.25)
             lod=level;
+    // Whole-level fallback avoids holes when only some cluster pages have
+    // arrived. Never select an LOD unless its complete page set is resident.
+    uint selected=lod;
+    while(selected<pc.info.y && (pc.info.w&(1u<<selected))==0u)
+        ++selected;
+    if(selected>=pc.info.y) {
+        selected=lod;
+        while(selected>0u && (pc.info.w&(1u<<selected))==0u)
+            --selected;
+    }
+    if((pc.info.w&(1u<<selected))==0u)return;
+    lod=selected;
     uint out_index=atomicAdd(draws[lod].instance_count,1u);
     visible_ids[lod*pc.info.x+out_index]=id;
 }

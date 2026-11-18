@@ -28,7 +28,8 @@ public:
                   vk::util::math::vec3 eye,float pixel_scale,
                   std::uint32_t instances,
                   std::span<const std::uint32_t> indices,
-                  std::span<const float> errors) const;
+                  std::span<const float> errors,
+                  std::uint32_t resident_mask=15u) const;
     void end(vk::CommandBuffer) const;
 private:
     struct parameters {
