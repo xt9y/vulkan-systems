@@ -72,6 +72,18 @@ public:
         std::size_t budget,::vs::spatial::region_id focus) {
         return dirty_.consume(budget,focus);
     }
+    // A network resnapshot discards local revision history but must notify
+    // GPU consumers about regions absent from the replacement snapshot.
+    // Otherwise old shadow BVHs or resident geometry survive indefinitely.
+    void clear_and_invalidate() {
+        std::vector<::vs::spatial::region_id> resident;
+        regions_.each([&](auto id,auto, const auto&) {
+            resident.push_back(id);
+        });
+        clear();
+        for(const auto id:resident)
+            dirty_.mark({id,1u,::vs::render::region_change::all});
+    }
     void clear() {regions_.clear();collision_.clear();dirty_.clear();}
 private:
     region_catalog regions_;

@@ -24,6 +24,8 @@ static void shaders(void) {
 #endif
     const char* files[]={
         "vs/gpu/shaders/cull.comp",
+        "vs/gpu/shaders/virtual_cull.comp",
+        "vs/gpu/shaders/hiz.comp",
         "vs/pcloud/shaders/cloud.comp","vs/pcloud/shaders/gi.comp",
         "vs/pcloud/shaders/light.comp","vs/pcloud/shaders/tone.comp",
         "vs/pcloud/shaders/fullscreen.vert","vs/pcloud/shaders/present.frag",
@@ -39,6 +41,8 @@ static void shaders(void) {
     const char* includes[]={
         "vs/pcloud/shaders/lighting_shared.glsl",
         "vs/pcloud/shaders/dynamic_shadow.glsl",
+        "vs/lighting/shaders/shadow_cache.glsl",
+        "vs/bvh/shaders/region_shadow.glsl",
         "vs/lighting/shaders/transmission.glsl",
         "vs/lighting/shaders/segment.glsl",
         "vs/lighting/shaders/light_shape.glsl",
@@ -65,6 +69,7 @@ static void shaders(void) {
         snprintf(command,sizeof(command),
             "glslangValidator -V -Ivs/pcloud/shaders "
             "-Ivs/lighting/shaders "
+            "-Ivs/bvh/shaders "
             "-Ivs/optics/shaders \"%s\" -o \"%s\"",file,destination);
         if(system(command)) {fprintf(stderr,"Failed compiling %s\n",file);exit(1);}
     }
