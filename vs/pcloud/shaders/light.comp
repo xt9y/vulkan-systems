@@ -268,7 +268,10 @@ void main()
                 dot(normal,center_normal)<0.85 ||
                 abs(material.x-center_material.x)>0.25 ||
                 abs(material.y-center_material.y)>0.25;
-            if(edge) {
+            // Viewmodel occupies few pixels compared with the crowd. Keep
+            // full-rate hand/weapon normal and GI shading even when the
+            // world is reconstructed from coarse lighting samples.
+            if(edge || depth<0.1) {
                 imageStore(hdr,p,vs_crowd_shade(p,size));
                 continue;
             }
