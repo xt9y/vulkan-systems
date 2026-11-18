@@ -173,6 +173,9 @@ void application::open(const settings& options) {
         device_info.pQueueCreateInfos=&queue;
         device_info.enabledExtensionCount=std::uint32_t(device_extensions.size());
         device_info.ppEnabledExtensionNames=device_extensions.data();
+        vk::PhysicalDeviceFeatures enabled{};
+        enabled.samplerAnisotropy=vk::physical_device::get()->features.samplerAnisotropy;
+        device_info.pEnabledFeatures=&enabled;
         vk::device::init(device_info);
         vk::queue::init(family);
         vk::command::init(family);
