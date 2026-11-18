@@ -772,6 +772,9 @@ namespace vs::pcloud
             }
             data.frames[i].dirty=true;
             data.frames[i].partial_grid=false;
+            data.frames[i].gi_cursor=0;
+            data.frames[i].gi_complete=false;
+            data.frames[i].cloud_submitted=false;
         }
     }
 
