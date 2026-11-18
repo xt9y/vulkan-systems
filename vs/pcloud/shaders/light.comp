@@ -140,6 +140,9 @@ bool static_hit(vec3 origin,vec3 ray,float distance,uint light_index,
 // (64 threads), rather than tracing a BVH ray for every hand/gun pixel.
 shared uint has_viewmodel;
 shared uint viewmodel_occluded[64];
+// At 2x each 8x8 workgroup covers one 16x16 tile; at 4x it
+// covers four. Fetch their light masks once, not for every shade.
+shared uvec2 coarse_tile_lights[4];
 bool any_hit(vec3 origin,vec3 ray,float distance,uint light_index)
 {
     bool has_static=shadow_ranges[light_index].y!=0u;
@@ -165,9 +168,11 @@ vec4 vs_crowd_shade(ivec2 p,ivec2 size)
 {
     float depth=texelFetch(g_depth,p,0).r;
     bool viewmodel=depth<0.1;
-    uint tile_cols=(uint(size.x)+15u)/16u;
-    uint tile=(uint(p.y)/16u)*tile_cols+uint(p.x)/16u;
-    uvec2 light_mask=uvec2(tile_lights[tile*2u],tile_lights[tile*2u+1u]);
+    // Only called by the coarse-rate path, after shared masks are ready.
+    uint tiles_per_side=uint(pc.light_count.w+0.5)*1u/2u;
+    uvec2 local_tile=uvec2(p)/16u-gl_WorkGroupID.xy*tiles_per_side;
+    uvec2 light_mask=coarse_tile_lights[
+        local_tile.y*tiles_per_side+local_tile.x];
     uint count=uint(bitCount(light_mask.x)+bitCount(light_mask.y));
     // Sky pixels need no shading or world-position reconstruction.
     if(depth>=0.999999) {
@@ -257,6 +262,21 @@ void main()
         // All 64 lanes must participate before invoking vs_crowd_shade().
         // One workgroup spans 8*rate pixels, potentially multiple 16px
         // light tiles when rate=4. Union their masks conservatively.
+        uint tiles_per_side=uint(rate/2);
+        uint tile_count=tiles_per_side*tiles_per_side;
+        if(gl_LocalInvocationIndex<tile_count) {
+            uvec2 local=uvec2(gl_LocalInvocationIndex%tiles_per_side,
+                              gl_LocalInvocationIndex/tiles_per_side);
+            uvec2 tile=gl_WorkGroupID.xy*tiles_per_side+local;
+            uint columns=(uint(size.x)+15u)/16u;
+            uint rows=(uint(size.y)+15u)/16u;
+            uvec2 mask=uvec2(0u);
+            if(tile.x<columns && tile.y<rows) {
+                uint index=(tile.y*columns+tile.x)*2u;
+                mask=uvec2(tile_lights[index],tile_lights[index+1u]);
+            }
+            coarse_tile_lights[gl_LocalInvocationIndex]=mask;
+        }
         if(gl_LocalInvocationIndex==0u)has_viewmodel=0u;
         barrier();
         bool local_viewmodel=false;
@@ -270,18 +290,11 @@ void main()
         barrier();
         if(pc.light_count.y>=0.0 && has_viewmodel!=0u &&
            gl_LocalInvocationIndex<64u) {
-            ivec2 first_tile=ivec2(gl_WorkGroupID.xy)*8*rate/16;
-            ivec2 last_tile=min(
-                (ivec2(gl_WorkGroupID.xy+uvec2(1u))*8*rate-ivec2(1))/16,
-                (size-1)/16);
-            uint columns=uint((size.x+15)/16);
+            // Same conservative union as before, but from the four masks
+            // loaded once by this workgroup. All lanes use identical masks.
             uvec2 mask=uvec2(0u);
-            for(int y=first_tile.y;y<=last_tile.y;++y)
-            for(int x=first_tile.x;x<=last_tile.x;++x) {
-                uint tile=uint(y)*columns+uint(x);
-                mask|=uvec2(tile_lights[tile*2u],
-                            tile_lights[tile*2u+1u]);
-            }
+            for(uint tile=0u;tile<tile_count;++tile)
+                mask|=coarse_tile_lights[tile];
             uint light_index=gl_LocalInvocationIndex;
             bool selected=light_index<32u?
                 ((mask.x>>(light_index&31u))&1u)!=0u:
