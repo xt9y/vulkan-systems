@@ -99,6 +99,8 @@ namespace vs::pcloud
             std::vector<::vs::bvh::stackless_node> dynamic_topology,prepared_nodes;
             std::vector<std::uint32_t> dynamic_order;
             std::vector<std::array<float,4>> prepared_vertices;
+            float dynamic_reference_cost=0.f;
+            std::uint32_t dynamic_refit_age=0;
             collision_box prepared_bounds{};
             std::array<std::uint32_t,2> dynamic_shadow_mask{~0u,~0u};
             std::uint32_t prepared_primitives=0;
@@ -1461,6 +1463,8 @@ namespace vs::pcloud
         data.visibility.invalidate();
         data.dynamic_topology.clear();
         data.dynamic_order.clear();
+        data.dynamic_reference_cost=0.f;
+        data.dynamic_refit_age=0;
         data.prepared_nodes.clear();
         data.prepared_vertices.clear();
         data.prepared_primitives=0;
@@ -1540,7 +1544,17 @@ namespace vs::pcloud
                 initial.push_back({hi.x,hi.y,hi.z,0.f});
                 initial.push_back({p.x,p.y,p.z,0.f});
             }
-            data.dynamic_topology=::vs::bvh::build_stackless(initial);
+            // Animated shadow BVHs use smaller leaves: fewer expensive
+            // sphere/triangle tests per ray. VS_DYNAMIC_BVH_LEAF=8 restores
+            // the original size for an on-device performance comparison.
+            static const std::size_t dynamic_max_leaf=[] {
+                const char* value=std::getenv("VS_DYNAMIC_BVH_LEAF");
+                return value && std::strcmp(value,"8")==0 ? 8u : 4u;
+            }();
+            data.dynamic_topology=::vs::bvh::build_stackless(
+                initial,dynamic_max_leaf/2u,dynamic_max_leaf);
+            data.dynamic_reference_cost=0.f;
+            data.dynamic_refit_age=0;
             // A topology change invalidates every image's previous node links,
             // even if the new tree happens to contain the same node count.
             data.prepared_nodes.clear();
@@ -1594,6 +1608,7 @@ namespace vs::pcloud
         auto& nodes=data.prepared_nodes;
         if(nodes.size()!=data.dynamic_topology.size())
             nodes=data.dynamic_topology;
+        float refit_cost=0.f;
         for(std::size_t j=nodes.size();j-->0;) {
             auto& node=nodes[j];
             vec3 lo{inf,inf,inf},hi{-inf,-inf,-inf};
@@ -1632,7 +1647,28 @@ namespace vs::pcloud
             if(std::isfinite(lo.x)) {
                 node.minimum={lo.x-.0001f,lo.y-.0001f,lo.z-.0001f};
                 node.maximum={hi.x+.0001f,hi.y+.0001f,hi.z+.0001f};
+                if(!count) {
+                    const auto d=hi-lo;
+                    refit_cost+=2.f*(d.x*d.y+d.y*d.z+d.z*d.x);
+                }
             }
+        }
+        // An initially good tree becomes expensive when skinned objects move
+        // across its original spatial partitions. Refit is exact regardless,
+        // but periodically replace a badly overlapping tree. A cooldown of
+        // 120 frames keeps rebuilding outside the ordinary per-frame cost.
+        if(data.dynamic_reference_cost==0.f) {
+            data.dynamic_reference_cost=refit_cost;
+        } else if(++data.dynamic_refit_age>=120u &&
+                  refit_cost>2.f*data.dynamic_reference_cost &&
+                  primitive_count>8u) {
+            data.dynamic_topology.clear();
+            data.dynamic_order.clear();
+            data.prepared_nodes.clear();
+            data.dynamic_reference_cost=0.f;
+            data.dynamic_refit_age=0;
+            prepare_dynamic_geometry(faces,spheres);
+            return;
         }
 
         data.prepared_bounds=bounds;
