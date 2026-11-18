@@ -344,13 +344,20 @@ void main()
                 imageStore(hdr,p,vs_crowd_shade(p,size));
                 continue;
             }
-            vec3 normal=texelFetch(g_normal,p,0).xyz*2.0-1.0;
-            vec2 material=texelFetch(g_material,p,0).rg;
+            // Depth discontinuities are the cheapest edge test. Fetch
+            // normals and material properties only when earlier tests pass.
+            // The full-rate fallback condition itself is unchanged.
             bool edge=(center_depth<0.1) ||
-                abs(depth-center_depth)>0.002 ||
-                dot(normal,center_normal)<0.85 ||
-                abs(material.x-center_material.x)>0.25 ||
-                abs(material.y-center_material.y)>0.25;
+                abs(depth-center_depth)>0.002;
+            if(!edge) {
+                vec3 normal=texelFetch(g_normal,p,0).xyz*2.0-1.0;
+                edge=dot(normal,center_normal)<0.85;
+            }
+            if(!edge) {
+                vec2 material=texelFetch(g_material,p,0).rg;
+                edge=abs(material.x-center_material.x)>0.25 ||
+                    abs(material.y-center_material.y)>0.25;
+            }
             // Viewmodel occupies few pixels compared with the crowd. Keep
             // full-rate hand/weapon normal and GI shading even when the
             // world is reconstructed from coarse lighting samples.
