@@ -1,0 +1,63 @@
+#ifndef VS_DYNAMIC_SHADOW_GLSL
+#define VS_DYNAMIC_SHADOW_GLSL
+
+layout(std430,set=0,binding=VS_DYNAMIC_VERTEX_BINDING) readonly buffer VsDynamicVertices {
+    vec4 vs_dynamic_vertices[];
+};
+layout(std430,set=0,binding=VS_DYNAMIC_NODE_BINDING) readonly buffer VsDynamicNodes {
+    uvec4 vs_dynamic_counts;
+    ShadowNode vs_dynamic_nodes[];
+};
+
+bool vs_dynamic_triangle_hit(vec3 origin,vec3 ray,float limit,
+                             vec3 a,vec3 e1,vec3 e2)
+{
+    vec3 p=cross(ray,e2);
+    float det=dot(e1,p);
+    if(abs(det)<.00001)return false;
+    float inv=1.0/det;
+    vec3 t=origin-a;
+    float u=dot(t,p)*inv;
+    if(u<0.0 || u>1.0)return false;
+    vec3 q=cross(t,e1);
+    float v=dot(ray,q)*inv;
+    if(v<0.0 || u+v>1.0)return false;
+    float distance=dot(e2,q)*inv;
+    return distance>.001 && distance<limit;
+}
+
+bool vs_dynamic_hit(vec3 origin,vec3 ray,float distance)
+{
+    uint total=min(vs_dynamic_counts.x,uint(vs_dynamic_nodes.length()));
+    uint vertex_count=min(vs_dynamic_counts.y,uint(vs_dynamic_vertices.length()));
+    if(total==0u || vertex_count==0u || distance<=.001)return false;
+    vec3 safe=vec3(
+        abs(ray.x)<1e-7?(ray.x<0.0?-1e-7:1e-7):ray.x,
+        abs(ray.y)<1e-7?(ray.y<0.0?-1e-7:1e-7):ray.y,
+        abs(ray.z)<1e-7?(ray.z<0.0?-1e-7:1e-7):ray.z);
+    vec3 inverse_direction=1.0/safe;
+    uint index=0u;
+    while(index<total) {
+        ShadowNode node=vs_dynamic_nodes[index];
+        if(!shadow_box(origin,inverse_direction,distance,node)) {
+            index=max(node.next,index+1u);
+            continue;
+        }
+        uint count=node.first_and_count&15u;
+        if(count!=0u) {
+            uint first=node.first_and_count>>4u;
+            uint end=min(first+count,vertex_count/3u);
+            for(uint i=first;i<end;++i) {
+                uint v=i*3u;
+                if(vs_dynamic_triangle_hit(origin,ray,distance,
+                    vs_dynamic_vertices[v].xyz,
+                    vs_dynamic_vertices[v+1u].xyz,
+                    vs_dynamic_vertices[v+2u].xyz))
+                    return true;
+            }
+        }
+        ++index;
+    }
+    return false;
+}
+#endif

@@ -96,7 +96,10 @@ bool shadow_box(vec3 origin,vec3 inverse_direction,float distance,ShadowNode nod
     return t0<=t1;
 }
 
-bool any_hit(vec3 origin,vec3 ray,float distance,uint light_index)
+#define VS_DYNAMIC_VERTEX_BINDING 16
+#define VS_DYNAMIC_NODE_BINDING 17
+#include "dynamic_shadow.glsl"
+bool static_hit(vec3 origin,vec3 ray,float distance,uint light_index)
 {
     uvec2 span=shadow_ranges[light_index];
     uint first_node=min(span.x,uint(nodes.length()));
@@ -139,6 +142,11 @@ bool any_hit(vec3 origin,vec3 ray,float distance,uint light_index)
 // (64 threads), rather than tracing a BVH ray for every hand/gun pixel.
 shared uint has_viewmodel;
 shared uint viewmodel_occluded[64];
+bool any_hit(vec3 origin,vec3 ray,float distance,uint light_index)
+{
+    return static_hit(origin,ray,distance,light_index) ||
+           vs_dynamic_hit(origin,ray,distance);
+}
 void main()
 {
     ivec2 p=ivec2(gl_GlobalInvocationID.xy),size=imageSize(hdr);

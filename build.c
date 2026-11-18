@@ -38,6 +38,7 @@ static void shaders(void) {
     };
     const char* includes[]={
         "vs/pcloud/shaders/lighting_shared.glsl",
+        "vs/pcloud/shaders/dynamic_shadow.glsl",
         "vs/lighting/shaders/transmission.glsl",
         "vs/lighting/shaders/segment.glsl",
         "vs/lighting/shaders/light_shape.glsl",
