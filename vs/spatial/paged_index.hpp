@@ -120,7 +120,13 @@ public:
             // Extremely large queries fall back to visiting every page.
             for(const auto& [id,item]:pages_)candidates.insert(id);
         }
-        for(auto id:candidates) {
+        std::vector<region_id> ordered(candidates.begin(),candidates.end());
+        std::sort(ordered.begin(),ordered.end(),[](region_id a,region_id b) {
+            if(a.y!=b.y)return a.y<b.y;
+            if(a.z!=b.z)return a.z<b.z;
+            return a.x<b.x;
+        });
+        for(auto id:ordered) {
             const auto it=pages_.find(id);
             if(it==pages_.end())continue;
             float dx=0.f,dy=0.f,dz=0.f;
