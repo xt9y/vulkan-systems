@@ -24,6 +24,9 @@ public:
     void open(const settings&);
     bool poll(); // returns false after the window is closed
     frame begin_frame(); // empty command while minimized/recreating swapchain
+    ::vs::render::frame_scheduler::wait_timings frame_waits() const noexcept {
+        return frames_.last_wait_timings();
+    }
     // True only when the submitted frame remains valid after presentation.
     // A resize/out-of-date swapchain rebuild returns false.
     bool present(frame);
