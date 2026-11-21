@@ -52,6 +52,7 @@ struct frame
     std::uint32_t dynamic_count = 0;
 
     bool dynamic_has_spheres = false;
+    bool lighting_tonemap_fused = false;
 
     std::vector<std::uint8_t> dynamic_packet;
     std::vector<std::uint32_t> affected_cpu;
@@ -155,7 +156,7 @@ struct state
     std::unique_ptr<::vs::gpu::compute> cloud_program;
     std::unique_ptr<::vs::gpu::compute> gi_program;
     std::unique_ptr<::vs::gpu::compute> lighting_program, opaque_lighting_program,
-        reflection_lighting_program;
+        reflection_lighting_program, opaque_reflection_lighting_program;
     std::unique_ptr<::vs::gpu::compute> tone_program;
     std::unique_ptr<::vs::render::pipeline> present_program;
 };
@@ -272,9 +273,15 @@ bool indirect_lighting_enabled()
     return enabled;
 }
 
-bool reflection_tonemap_fused()
+bool fused_reflection_tonemap_enabled()
 {
     static const char *value = std::getenv("VS_FUSED_REFLECTION_TONEMAP");
+    return !value || std::strcmp(value, "0") != 0;
+}
+
+bool fused_main_tonemap_enabled()
+{
+    static const char *value = std::getenv("VS_FUSED_MAIN_TONEMAP");
     return !value || std::strcmp(value, "0") != 0;
 }
 
@@ -562,7 +569,8 @@ void create(const configuration &shaders,
         data.lighting_sets = std::make_unique<::vs::gpu::descriptors>();
         auto lighting_bindings = bindings(
             5, 1, vk::ShaderStageFlagBits::eCompute, 15);
-        if (!data.shader_paths.reflection_lighting_shader.empty()) {
+        if (!data.shader_paths.reflection_lighting_shader.empty() ||
+            !data.shader_paths.opaque_reflection_lighting_shader.empty()) {
             vk::DescriptorSetLayoutBinding reflection_ldr{};
             reflection_ldr.binding = 21;
             reflection_ldr.descriptorCount = 1;
@@ -591,6 +599,13 @@ void create(const configuration &shaders,
                 std::make_unique<::vs::gpu::compute>();
             data.reflection_lighting_program->create(
                 data.shader_paths.reflection_lighting_shader,
+                {data.lighting_sets->layout()}, sizeof(push));
+        }
+        if (!data.shader_paths.opaque_reflection_lighting_shader.empty()) {
+            data.opaque_reflection_lighting_program =
+                std::make_unique<::vs::gpu::compute>();
+            data.opaque_reflection_lighting_program->create(
+                data.shader_paths.opaque_reflection_lighting_shader,
                 {data.lighting_sets->layout()}, sizeof(push));
         }
         if (!data.shader_paths.opaque_lighting_shader.empty()) {
@@ -731,7 +746,8 @@ void create(const configuration &shaders,
             lighting[5].imageView = current.hdr.view;
             lighting[5].imageLayout = vk::ImageLayout::eGeneral;
 
-            if (data.reflection_lighting_program) {
+            if (data.reflection_lighting_program ||
+                data.opaque_reflection_lighting_program) {
                 vk::DescriptorImageInfo reflected_ldr{};
                 reflected_ldr.imageView = current.ldr.view;
                 reflected_ldr.imageLayout = vk::ImageLayout::eGeneral;
@@ -834,7 +850,8 @@ void create_reflection(const std::vector<gbuffer> &gbuffers)
         hdr.imageView = current.hdr.view;
         hdr.imageLayout = vk::ImageLayout::eGeneral;
         data.lighting_sets->write_image(i + count, 5, hdr);
-        if (data.reflection_lighting_program) {
+        if (data.reflection_lighting_program ||
+            data.opaque_reflection_lighting_program) {
             vk::DescriptorImageInfo reflected_ldr{};
             reflected_ldr.imageView = current.ldr.view;
             reflected_ldr.imageLayout = vk::ImageLayout::eGeneral;
@@ -911,7 +928,7 @@ void reflection_lighting(vk::CommandBuffer command, std::uint32_t image,
         area.origin
     };
 
-    const auto &program = reflection_tonemap_fused() &&
+    const auto &program = fused_reflection_tonemap_enabled() &&
                                   data.reflection_lighting_program
                               ? *data.reflection_lighting_program
                               : *data.lighting_program;
@@ -923,7 +940,7 @@ void reflection_tonemap(vk::CommandBuffer command, std::uint32_t image,
                         vk::Rect2D pixels)
 {
     const auto &data = get();
-    if (reflection_tonemap_fused() && data.reflection_lighting_program)
+    if (fused_reflection_tonemap_enabled() && data.reflection_lighting_program)
         return;
 
     const auto area = reflection_area(data.output.extent, pixels,
@@ -2586,6 +2603,7 @@ void release()
     data.lighting_program.reset();
     data.opaque_lighting_program.reset();
     data.reflection_lighting_program.reset();
+    data.opaque_reflection_lighting_program.reset();
     data.tone_program.reset();
     data.present_program.reset();
     data.presentation.reset();
@@ -2870,7 +2888,15 @@ void lighting(vk::CommandBuffer command, std::uint32_t image,
     const bool opaque = data.opaque_lighting_program && pixel_rate == 4u &&
                         data.glass_node_count == 0u && data.region_shadows.size() == 0u &&
                         !current.dynamic_has_spheres;
-    const auto &program = opaque ? *data.opaque_lighting_program : *data.lighting_program;
+    const auto *fused_program =
+        opaque ? data.opaque_reflection_lighting_program.get()
+               : data.reflection_lighting_program.get();
+    current.lighting_tonemap_fused =
+        fused_main_tonemap_enabled() && fused_program;
+    const auto &program = current.lighting_tonemap_fused
+                              ? *fused_program
+                              : opaque ? *data.opaque_lighting_program
+                                       : *data.lighting_program;
 
     if (data.opaque_lighting_program) {
         static std::optional<bool> previous;
@@ -2888,8 +2914,10 @@ void lighting(vk::CommandBuffer command, std::uint32_t image,
 void tonemap(vk::CommandBuffer command, std::uint32_t image,
              const camera_frame &frame)
 {
-    const auto &current = get().frames.at(image);
-    compute(command, *get().tone_program, current.tone, frame, 1u,
+    const auto &data = get();
+    const auto &current = data.frames.at(image);
+    if (current.lighting_tonemap_fused) return;
+    compute(command, *data.tone_program, current.tone, frame, 1u,
             tone_workgroup_size);
 }
 

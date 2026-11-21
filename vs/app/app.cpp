@@ -51,6 +51,15 @@ PFN_vkGetInstanceProcAddr init()
                 paths.emplace_back(std::string(base) + suffix);
     };
 
+    if (const char *loader = std::getenv("VS_VULKAN_LOADER");
+        loader && *loader == '1') {
+        append("VULKAN_SDK", {"/lib/libvulkan.1.dylib"});
+        append("HOMEBREW_PREFIX", {"/lib/libvulkan.1.dylib"});
+        paths.emplace_back("/opt/homebrew/lib/libvulkan.1.dylib");
+        paths.emplace_back("/usr/local/lib/libvulkan.1.dylib");
+        paths.emplace_back("libvulkan.1.dylib");
+    }
+
     append("VULKAN_SDK", {"/lib/libMoltenVK.dylib", "/lib/libvulkan.1.dylib"});
     append("HOMEBREW_PREFIX", {"/opt/molten-vk/lib/libMoltenVK.dylib",
                                "/lib/libMoltenVK.dylib", "/lib/libvulkan.1.dylib"});

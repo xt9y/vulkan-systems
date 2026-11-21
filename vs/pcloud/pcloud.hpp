@@ -77,8 +77,10 @@ struct configuration
     std::string presentation_shader = "build/shaders/pcloud_present.frag.spv";
     // Optional 4x path used only when the frame has no optical or sphere shadows.
     std::string opaque_lighting_shader;
-    // Optional reflection variant that also writes tone-mapped output.
+    // Optional lighting variant that also writes tone-mapped output.
     std::string reflection_lighting_shader;
+    // Optional opaque specialization of the fused tone-map variant.
+    std::string opaque_reflection_lighting_shader;
 
     static configuration from_directory(const std::string &dir)
     {
