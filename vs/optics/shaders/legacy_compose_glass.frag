@@ -11,15 +11,16 @@ layout(set=0,binding=4) uniform sampler2D optic_material;
 layout(set=0,binding=5) uniform sampler2D optic_depth;
 layout(set=0,binding=16) uniform sampler2D scene_hdr;
 layout(set=0,binding=17) uniform sampler2D planar_reflection;
-layout(set=0,binding=18) uniform sampler2D second_normal;
-layout(set=0,binding=19) uniform sampler2D second_tint;
-layout(set=0,binding=20) uniform sampler2D second_material;
-layout(set=0,binding=21) uniform sampler2D second_depth;
-layout(set=0,binding=22) uniform sampler2D reflected_normal;
-layout(set=0,binding=23) uniform sampler2D reflected_tint;
-layout(set=0,binding=24) uniform sampler2D reflected_material;
-layout(set=0,binding=25) uniform sampler2D reflected_depth;
-layout(set=0,binding=26) uniform sampler2D reflected_opaque_depth;
+layout(set=0,binding=18) uniform texture2D second_normal;
+layout(set=0,binding=19) uniform texture2D second_tint;
+layout(set=0,binding=20) uniform texture2D second_material;
+layout(set=0,binding=21) uniform texture2D second_depth;
+layout(set=0,binding=22) uniform texture2D reflected_normal;
+layout(set=0,binding=23) uniform texture2D reflected_tint;
+layout(set=0,binding=24) uniform texture2D reflected_material;
+layout(set=0,binding=25) uniform texture2D reflected_depth;
+layout(set=0,binding=26) uniform texture2D reflected_opaque_depth;
+layout(set=0,binding=35) uniform sampler layer_sampler;
 layout(push_constant) uniform View {
     mat4 vp;
     vec4 eye,right,up,forward;
@@ -157,17 +158,17 @@ void main()
                         // The mirror's reflected-camera G-buffer captures
                         // glass that is invisible to the original view.
                         vec4 back_mask=texture(
-                            reflected_normal,reflected_uv);
+                            sampler2D(reflected_normal,layer_sampler),reflected_uv);
                         float back_depth=texture(
-                            reflected_depth,reflected_uv).r;
+                            sampler2D(reflected_depth,layer_sampler),reflected_uv).r;
                         float back_opaque=texture(
-                            reflected_opaque_depth,reflected_uv).r;
+                            sampler2D(reflected_opaque_depth,layer_sampler),reflected_uv).r;
                         if(back_mask.a>.25 && back_mask.a<.75 &&
                            back_depth<back_opaque+.0003) {
                             vec4 back_tint=texture(
-                                reflected_tint,reflected_uv);
+                                sampler2D(reflected_tint,layer_sampler),reflected_uv);
                             vec4 back_material=texture(
-                                reflected_material,reflected_uv);
+                                sampler2D(reflected_material,layer_sampler),reflected_uv);
                             vec3 mirror_n=normalize(camera.vp[0].xyz);
                             vec3 virtual_forward=reflect(camera.forward.xyz,mirror_n);
                             vec3 virtual_up=reflect(camera.up.xyz,mirror_n);
@@ -213,19 +214,19 @@ void main()
     // When projected glass panes do not overlap, their second layer is
     // empty and needs no texture/depth reads.
     if(camera.eye.w<2.5) {
-    vec4 second_mask=texture(second_normal,transmitted_uv);
+    vec4 second_mask=texture(sampler2D(second_normal,layer_sampler),transmitted_uv);
     // Most primary glass fragments have no second layer. Only fetch
     // secondary and opaque depth for pixels that actually contain glass.
     if(second_mask.a>.25 && second_mask.a<.75) {
-    float second_z=texture(second_depth,transmitted_uv).r;
+    float second_z=texture(sampler2D(second_depth,layer_sampler),transmitted_uv).r;
     float opaque_z=texture(opaque_depth,transmitted_uv).r;
     if(second_z>depth+.0001 && second_z<opaque_z+.0003) {
     float second_ndc=clamp((second_z-.1)/.9,0.0,1.0);
     float second_linear=100.0/
         max(1000.0-999.9*second_ndc,1e-5);
     if(second_linear+.02<mirror_surface_z) {
-        vec4 behind_tint=texture(second_tint,transmitted_uv);
-        vec4 behind_material=texture(second_material,transmitted_uv);
+        vec4 behind_tint=texture(sampler2D(second_tint,layer_sampler),transmitted_uv);
+        vec4 behind_material=texture(sampler2D(second_material,layer_sampler),transmitted_uv);
         vec2 second_screen=transmitted_uv*2.0-1.0;
         vec3 second_ray=normalize(camera.forward.xyz+
             camera.right.xyz*second_screen.x*camera.right.w-

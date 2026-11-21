@@ -1,172 +1,244 @@
-#include <vs/render/virtual_pages.hpp>
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <vs/render/virtual_pages.hpp>
 
-namespace vs::render {
-virtual_pages paginate(const virtual_mesh& source,std::uint64_t asset,
-                       std::size_t target_bytes) {
-    if(target_bytes<sizeof(std::uint32_t)*3u)
+namespace vs::render
+{
+virtual_pages paginate(const virtual_mesh &source, std::uint64_t asset,
+                       std::size_t target_bytes)
+{
+    if (target_bytes < sizeof(std::uint32_t) * 3u)
         throw std::invalid_argument("Virtual page size must hold a triangle");
+
     virtual_pages out;
     out.levels.resize(source.levels.size());
-    const auto max_indices=target_bytes/sizeof(std::uint32_t);
-    std::uint64_t ordinal=1u;
-    for(std::size_t level=0;level<source.levels.size();++level) {
-        const auto& lod=source.levels[level];
-        if(lod.indices.empty())continue;
-        std::uint32_t start=0,count=0;
-        std::array<float,3> lo{},hi{};
-        bool has_bounds=false;
-        const auto flush=[&]() {
-            if(!count)return;
+
+    const auto max_indices = target_bytes / sizeof(std::uint32_t);
+
+    std::uint64_t ordinal = 1u;
+
+    for (std::size_t level = 0; level < source.levels.size(); ++level)
+    {
+        const auto &lod = source.levels[level];
+
+        if (lod.indices.empty()) continue;
+        std::uint32_t start = 0, count = 0;
+        std::array<float, 3> lo{}, hi{};
+
+        bool has_bounds = false;
+        const auto flush = [&]()
+        {
+            if (!count) return;
             virtual_page page{};
-            page.id=(asset<<32u)^ordinal++;
-            page.level=std::uint32_t(level);
-            page.first=start;
-            page.count=count;
-            for(int axis=0;axis<3;++axis)
-                page.sphere[axis]=(lo[axis]+hi[axis])*0.5f;
-            const float x=(hi[0]-lo[0])*0.5f;
-            const float y=(hi[1]-lo[1])*0.5f;
-            const float z=(hi[2]-lo[2])*0.5f;
-            page.sphere[3]=std::sqrt(x*x+y*y+z*z);
-            page.indices.assign(lod.indices.begin()+start,
-                                lod.indices.begin()+start+count);
+            page.id = (asset << 32u) ^ ordinal++;
+            page.level = std::uint32_t(level);
+            page.first = start;
+            page.count = count;
+
+            for (int axis = 0; axis < 3; ++axis)
+                page.sphere[axis] = (lo[axis] + hi[axis]) * 0.5f;
+
+            const float x = (hi[0] - lo[0]) * 0.5f;
+            const float y = (hi[1] - lo[1]) * 0.5f;
+            const float z = (hi[2] - lo[2]) * 0.5f;
+            page.sphere[3] = std::sqrt(x * x + y * y + z * z);
+            page.indices.assign(lod.indices.begin() + start,
+                                lod.indices.begin() + start + count);
             out.levels[level].push_back(page.id);
             out.pages.push_back(std::move(page));
-            start+=count;
-            count=0;
-            has_bounds=false;
+            start += count;
+            count = 0;
+            has_bounds = false;
         };
-        for(const auto& cluster:lod.clusters) {
-            if(cluster.first!=start+count ||
-               cluster.count>max_indices)
+
+        for (const auto &cluster : lod.clusters)
+        {
+            if (cluster.first != start + count ||
+                cluster.count > max_indices)
                 throw std::invalid_argument("Invalid cluster page sequence");
-            if(count && std::size_t(count)+cluster.count>max_indices)
+
+            if (count && std::size_t(count) + cluster.count > max_indices)
                 flush();
-            for(int axis=0;axis<3;++axis) {
-                const auto a=cluster.center[axis]-cluster.radius;
-                const auto b=cluster.center[axis]+cluster.radius;
-                if(!has_bounds){lo[axis]=a;hi[axis]=b;}
-                else {lo[axis]=std::min(lo[axis],a);
-                      hi[axis]=std::max(hi[axis],b);}
+
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                const auto a = cluster.center[axis] - cluster.radius;
+                const auto b = cluster.center[axis] + cluster.radius;
+
+                if (!has_bounds) {
+                    lo[axis] = a;
+                    hi[axis] = b;
+                }
+                else {
+                    lo[axis] = std::min(lo[axis], a);
+                    hi[axis] = std::max(hi[axis], b);
+                }
             }
-            has_bounds=true;
-            count+=cluster.count;
+
+            has_bounds = true;
+            count += cluster.count;
         }
+
         flush();
-        if(start!=lod.indices.size())
+
+        if (start != lod.indices.size())
             throw std::invalid_argument("Incomplete virtual index hierarchy");
     }
+
     return out;
 }
-bool virtual_page_pool::stage(const virtual_page& source,const geometry& owner,
-                              ::vs::gpu::upload::batch& transfer,
-                              std::uint64_t serial) {
-    if(!source.id || !owner.vertex_buffer() || source.indices.empty() ||
-       source.indices.size()!=source.count ||
-       source.indices.size()>std::numeric_limits<std::uint32_t>::max())
+
+bool virtual_page_pool::stage(const virtual_page &source, const geometry &owner,
+                              ::vs::gpu::upload::batch &transfer,
+                              std::uint64_t serial)
+{
+    if (!source.id || !owner.vertex_buffer() || source.indices.empty() ||
+        source.indices.size() != source.count ||
+        source.indices.size() > std::numeric_limits<std::uint32_t>::max())
         throw std::invalid_argument("Invalid virtual page");
     // A page ID refers to one immutable index payload and vertex allocation.
     // Reusing it for a replacement mesh would silently draw the old geometry.
-    std::uint64_t fingerprint=14695981039346656037ull;
-    for(const auto index:source.indices)
-        fingerprint=(fingerprint^index)*1099511628211ull;
-    if(const auto previous=pages_.find(source.id);previous!=pages_.end()) {
-        if(previous->second->vertices!=owner.vertex_buffer() ||
-           previous->second->index_count!=source.count ||
-           previous->second->fingerprint!=fingerprint)
+    std::uint64_t fingerprint = 14695981039346656037ull;
+
+    for (const auto index : source.indices)
+        fingerprint = (fingerprint ^ index) * 1099511628211ull;
+
+    if (const auto previous = pages_.find(source.id); previous != pages_.end()) {
+        if (previous->second->vertices != owner.vertex_buffer() ||
+            previous->second->index_count != source.count ||
+            previous->second->fingerprint != fingerprint)
             return false;
-        touch(source.id,serial);
+        touch(source.id, serial);
+
         return true;
     }
-    const auto bytes=source.indices.size()*sizeof(std::uint32_t);
-    if(!accounting_.insert(source.id,bytes,serial,
-                           references_.contains(source.id)))return false;
-    try {
-        auto page=std::make_shared<item>();
-        page->vertices=owner.vertex_buffer();
-        page->index_count=source.count;
-        page->fingerprint=fingerprint;
-        page->last_used=serial;
-        page->indices=::vs::gpu::owned_buffer(transfer.add(
-            source.indices.data(),bytes,vk::BufferUsageFlagBits::eIndexBuffer));
-        pages_.emplace(source.id,std::move(page));
+
+    const auto bytes = source.indices.size() * sizeof(std::uint32_t);
+
+    if (!accounting_.insert(source.id, bytes, serial,
+                            references_.contains(source.id))) return false;
+    try
+    {
+        auto page = std::make_shared<item>();
+        page->vertices = owner.vertex_buffer();
+        page->index_count = source.count;
+        page->fingerprint = fingerprint;
+        page->last_used = serial;
+        page->indices = ::vs::gpu::owned_buffer(transfer.add(
+            source.indices.data(), bytes, vk::BufferUsageFlagBits::eIndexBuffer));
+        pages_.emplace(source.id, std::move(page));
+
         return true;
-    }catch(...) {
-        accounting_.remove(source.id,serial);
+    }
+
+    catch (...)
+    {
+        accounting_.remove(source.id, serial);
         throw;
     }
 }
-void virtual_page_pool::confirm_uploads() {
+
+void virtual_page_pool::confirm_uploads()
+{
     // The caller verified completion of the upload queue fence.
-    for(auto& [_,item]:pages_)item->confirmed=true;
+    for (auto &[_, item] : pages_)
+        item->confirmed = true;
 }
-bool virtual_page_pool::ready(page_id id) const {
-    const auto it=pages_.find(id);
-    return it!=pages_.end() && it->second->confirmed;
+
+bool virtual_page_pool::ready(page_id id) const
+{
+    const auto it = pages_.find(id);
+
+    return it != pages_.end() && it->second->confirmed;
 }
-bool virtual_page_pool::view(page_id id,mesh& out) const {
-    const auto it=pages_.find(id);
-    if(it==pages_.end() || !it->second->confirmed)return false;
-    out={};
-    out.streams.push_back({0,it->second->vertices,0});
-    out.index_buffer=it->second->indices.handle;
-    out.index_type=vk::IndexType::eUint32;
-    out.index_count=it->second->index_count;
+
+bool virtual_page_pool::view(page_id id, mesh &out) const
+{
+    const auto it = pages_.find(id);
+    if (it == pages_.end() || !it->second->confirmed) return false;
+    out = {};
+    out.streams.push_back({0, it->second->vertices, 0});
+    out.index_buffer = it->second->indices.handle;
+    out.index_type = vk::IndexType::eUint32;
+    out.index_count = it->second->index_count;
+
     return true;
 }
-void virtual_page_pool::touch(page_id id,std::uint64_t submitted_serial) {
-    const auto it=pages_.find(id);
-    if(it==pages_.end())return;
-    it->second->last_used=std::max(it->second->last_used,submitted_serial);
-    accounting_.touch(id,submitted_serial);
+
+void virtual_page_pool::touch(page_id id, std::uint64_t submitted_serial)
+{
+    const auto it = pages_.find(id);
+
+    if (it == pages_.end()) return;
+    it->second->last_used = std::max(it->second->last_used, submitted_serial);
+    accounting_.touch(id, submitted_serial);
 }
+
 void virtual_page_pool::attach_region(
-    ::vs::spatial::region_id region,std::span<const page_id> ids) {
-    auto& owned=regions_[region];
-    for(const auto id:ids) {
-        if(!id || !owned.insert(id).second)continue;
+    ::vs::spatial::region_id region, std::span<const page_id> ids)
+{
+    auto &owned = regions_[region];
+
+    for (const auto id : ids)
+    {
+        if (!id || !owned.insert(id).second) continue;
         ++references_[id];
-        accounting_.pin(id,true);
+        accounting_.pin(id, true);
     }
 }
+
 void virtual_page_pool::detach_region(
-    ::vs::spatial::region_id region,std::uint64_t last_use_serial) {
-    const auto found=regions_.find(region);
-    if(found==regions_.end())return;
-    for(const auto id:found->second) {
-        const auto it=references_.find(id);
-        if(it==references_.end())continue;
-        if(!--it->second) {
+    ::vs::spatial::region_id region, std::uint64_t last_use_serial)
+{
+    const auto found = regions_.find(region);
+
+    if (found == regions_.end()) return;
+
+    for (const auto id : found->second)
+    {
+        const auto it = references_.find(id);
+
+        if (it == references_.end()) continue;
+        if (!--it->second) {
             references_.erase(it);
-            accounting_.pin(id,false);
-            accounting_.touch(id,last_use_serial);
+            accounting_.pin(id, false);
+            accounting_.touch(id, last_use_serial);
         }
     }
+
     regions_.erase(found);
 }
+
 void virtual_page_pool::evict(std::uint64_t completed_serial,
-                             std::size_t target_bytes) {
+                              std::size_t target_bytes)
+{
     // A zero target requests full eviction of completed pages, not the
     // default accounting::trim() behavior of retaining the whole budget.
-    for(const auto id:accounting_.trim_to(completed_serial,target_bytes?
-        target_bytes:std::size_t(0)))
+    for (const auto id : accounting_.trim_to(completed_serial, target_bytes ? target_bytes : std::size_t(0)))
         pages_.erase(id); // index allocation is no longer in flight
 }
-std::uint32_t virtual_page_pool::level_mask(const virtual_pages& catalog) const {
-    std::uint32_t result=0u;
-    for(std::size_t level=0;level<catalog.levels.size() && level<4u;++level) {
-        const auto& pages=catalog.levels[level];
-        if(!pages.empty() && std::all_of(pages.begin(),pages.end(),
-            [&](page_id id){return ready(id);}))
-            result|=1u<<level;
+
+std::uint32_t virtual_page_pool::level_mask(const virtual_pages &catalog) const
+{
+    std::uint32_t result = 0u;
+
+    for (std::size_t level = 0; level < catalog.levels.size() && level < 4u; ++level)
+    {
+        const auto &pages = catalog.levels[level];
+
+        if (!pages.empty() && std::all_of(pages.begin(), pages.end(),
+                                          [&](page_id id)
+                                          { return ready(id); }))
+            result |= 1u << level;
     }
+
     return result;
 }
-void virtual_page_pool::clear_idle() {
+
+void virtual_page_pool::clear_idle()
+{
     pages_.clear();
     regions_.clear();
     references_.clear();

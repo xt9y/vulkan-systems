@@ -1,24 +1,28 @@
 #pragma once
-#include <vk/vk.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include <vk/vk.hpp>
 
-namespace vs::render {
+namespace vs::render
+{
 // Presentation synchronization for one graphics/present queue pair.
 // The caller owns the swapchain and rebuilds it after the device becomes idle.
-class frame_scheduler {
+class frame_scheduler
+{
 public:
-    struct ticket {
+    struct ticket
+    {
         vk::CommandBuffer command{};
-        std::uint32_t image=0;
+        std::uint32_t image = 0;
     };
-    frame_scheduler()=default;
-    ~frame_scheduler(){reset();}
-    frame_scheduler(const frame_scheduler&)=delete;
-    frame_scheduler& operator=(const frame_scheduler&)=delete;
 
-    void create(std::uint32_t frames_in_flight=2);
+    frame_scheduler() = default;
+    ~frame_scheduler() { reset(); }
+    frame_scheduler(const frame_scheduler &) = delete;
+    frame_scheduler &operator=(const frame_scheduler &) = delete;
+
+    void create(std::uint32_t frames_in_flight = 2);
     // Call only after waiting for GPU idle and recreating the swapchain.
     void resize(std::uint32_t image_count);
     // Wait for the current frame fence before modifying resources it may use.
@@ -29,32 +33,36 @@ public:
     // True when every submitted frame has finished.
     bool idle() const;
     // Monotonic queue submission/completion serials for safe page retirement.
-    std::uint64_t submitted_serial() const noexcept {return submitted_;}
+    std::uint64_t submitted_serial() const noexcept { return submitted_; }
     std::uint64_t completed_serial() const;
-    struct wait_timings {
-        double frame_fence_ms=0.0,acquire_ms=0.0,image_fence_ms=0.0;
+    struct wait_timings
+    {
+        double frame_fence_ms = 0.0, acquire_ms = 0.0, image_fence_ms = 0.0;
     };
     // The previous begin()'s individual waits, measured on the CPU.
     // FIFO pacing can spend time in acquire with no GPU bottleneck.
-    wait_timings last_wait_timings() const noexcept {return wait_times_;}
+    wait_timings last_wait_timings() const noexcept { return wait_times_; }
     // Returns an open command buffer. May throw vk::OutOfDateKHRError.
     ticket begin();
     // Ends, submits, signals image completion and presents.
     // The caller handles eSuboptimalKHR / eErrorOutOfDateKHR and resize.
     vk::Result submit(ticket active);
     void reset() noexcept;
+
 private:
-    struct frame {
+    struct frame
+    {
         vk::CommandBuffer command{};
         vk::Semaphore image_ready{};
         vk::Fence fence{};
-        std::uint64_t serial=0;
+        std::uint64_t serial = 0;
     };
+
     std::vector<frame> frames_;
     std::vector<vk::Fence> image_fences_;
     std::vector<vk::Semaphore> render_ready_;
-    std::size_t next_=0;
-    std::uint64_t submitted_=0,completed_=0;
+    std::size_t next_ = 0;
+    std::uint64_t submitted_ = 0, completed_ = 0;
     wait_timings wait_times_{};
 };
-}
+} // namespace vs::render

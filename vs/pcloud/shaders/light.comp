@@ -31,6 +31,7 @@ layout(std430,set=0,binding=9) readonly buffer TileLights { uint tile_lights[]; 
 // occlude that light. A zero count means no possible shadow casters.
 layout(std430,set=0,binding=10) readonly buffer ShadowRanges { uvec2 shadow_ranges[]; };
 
+#ifndef VS_OPAQUE_LIGHTING
 #define VS_TRANSMISSION_BINDING 11
 #include "transmission.glsl"
 #define VS_GLASS_VERTEX_BINDING 12
@@ -38,11 +39,12 @@ layout(std430,set=0,binding=10) readonly buffer ShadowRanges { uvec2 shadow_rang
 #define VS_GLASS_FILTER_BINDING 14
 #define VS_EXACT_DIRECT_TRANSMISSION
 #include "segment.glsl"
+#endif
 #define VS_LIGHT_SHAPE_BINDING 15
 #include "light_shape.glsl"
 layout(push_constant) uniform Controls {
     float exposure;
-    float padding0;
+    uint indirect_enabled;
     uvec2 dynamic_shadow_mask;
     vec4 eye_near;
     vec4 forward_far;
@@ -50,6 +52,10 @@ layout(push_constant) uniform Controls {
     vec4 up_tan;
     vec4 light_count;  // x: lights, y: -1 for reflected camera
     vec4 sky;          // xyz: grid origin, w: spacing
+    uint brdf_enabled;
+    uint reconstruction_enabled;
+    uint direct_enabled;
+    uint dispatch_origin;
 } pc;
 
 float linear_depth(float depth)
@@ -95,18 +101,18 @@ bool shadow_box(vec3 origin,vec3 inverse_direction,float distance,ShadowNode nod
     float t1=min(min(hi.x,hi.y),min(hi.z,distance));
     return t0<=t1;
 }
-
 #define VS_DYNAMIC_VERTEX_BINDING 16
 #define VS_DYNAMIC_NODE_BINDING 17
+#ifdef VS_OPAQUE_LIGHTING
+#define VS_DYNAMIC_TRIANGLES_ONLY
+#endif
 #include "dynamic_shadow.glsl"
-bool static_hit(vec3 origin,vec3 ray,float distance,uint light_index,
+bool static_hit(vec3 origin,vec3 ray,float distance,uvec2 span,
                 vec3 inverse_direction)
 {
-    uvec2 span=shadow_ranges[light_index];
-    uint first_node=min(span.x,uint(nodes.length()));
-    uint end_node=min(first_node+span.y,uint(nodes.length()));
-    uint vertex_count=uint(vertices.length());
-    if(first_node>=end_node || vertex_count==0u || distance<=0.001)
+    uint first_node=span.x;
+    uint end_node=first_node+span.y;
+    if(first_node>=end_node || distance<=0.001)
         return false;
     uint index=first_node;
     while(index<end_node)
@@ -114,12 +120,13 @@ bool static_hit(vec3 origin,vec3 ray,float distance,uint light_index,
         ShadowNode node=nodes[index];
         if(!shadow_box(origin,inverse_direction,distance,node))
         {
-            index=max(node.next,index+1u);
+            index=node.next;
             continue;
         }
         if((node.first_and_count & 15u)>0u)
         {
-            uint first=(node.first_and_count >> 4u), end=min(first+(node.first_and_count & 15u),vertex_count/3u);
+            uint first=node.first_and_count>>4u;
+            uint end=first+(node.first_and_count&15u);
             for(uint i=first;i<end;++i)
             {
                 uint v=i*3u;
@@ -132,43 +139,76 @@ bool static_hit(vec3 origin,vec3 ray,float distance,uint light_index,
     }
     return false;
 }
-#include "shadow_cache.glsl"
+#ifndef VS_OPAQUE_LIGHTING
 #include "region_shadow.glsl"
+#endif
 // The viewmodel uses a reserved depth interval. It is still a physical
 // receiver of world light: walls and mirrors must occlude point lights.
 // Cache each light's visibility from the camera eye once per 8x8 workgroup
 // (64 threads), rather than tracing a BVH ray for every hand/gun pixel.
 shared uint has_viewmodel;
 shared uint viewmodel_occluded[64];
+// At 2x each 8x8 workgroup covers one 16x16 tile; at 4x it
+// covers four. Fetch their light masks once, not for every shade.
+shared uvec2 coarse_tile_lights[4];
+shared uint edge_count;
+// A workgroup covers at most 32 x 32 pixels at a shading rate of four.
+shared uint edge_pixels[1024];
 bool any_hit(vec3 origin,vec3 ray,float distance,uint light_index)
 {
-    bool has_static=shadow_ranges[light_index].y!=0u;
+    uvec2 static_span=shadow_ranges[light_index];
+    bool has_static=static_span.y!=0u;
+#ifndef VS_OPAQUE_LIGHTING
     bool has_region=vs_region_records.length()>1 &&
                     vs_region_records[0].span.x!=0u;
+#endif
     bool has_dynamic=(pc.dynamic_shadow_mask[light_index>>5u] &
                       (1u<<(light_index&31u)))!=0u;
+#ifdef VS_OPAQUE_LIGHTING
+    if(!has_static && !has_dynamic)return false;
+#else
     if(!has_static && !has_region && !has_dynamic)return false;
+#endif
     // All three accelerators traverse the same physical ray. Calculate
     // the three reciprocal components once, rather than once per BVH.
     vec3 inverse_direction=vs_shadow_inverse_direction(ray);
-    return (has_static && vs_static_visible_hit(
-                origin,ray,distance,light_index,inverse_direction)) ||
+#ifdef VS_OPAQUE_LIGHTING
+    return (has_static && static_hit(
+                origin,ray,distance,static_span,inverse_direction)) ||
+           (has_dynamic && vs_dynamic_hit(
+                origin,ray,distance,inverse_direction));
+#else
+    return (has_static && static_hit(
+                origin,ray,distance,static_span,inverse_direction)) ||
            (has_region && vs_region_static_hit(
                 origin,ray,distance,inverse_direction)) ||
            (has_dynamic && vs_dynamic_hit(
                 origin,ray,distance,inverse_direction));
+#endif
 }
 
 // Dense crowds use a lower-rate direct-light ray and edge-aware reconstruction.
 // The original per-pixel path below remains unchanged for ordinary scenes.
+#ifdef VS_OPAQUE_LIGHTING
 vec4 vs_crowd_shade(ivec2 p,ivec2 size)
+#else
+vec4 vs_crowd_shade(ivec2 p,ivec2 size,uvec2 group)
+#endif
 {
     float depth=texelFetch(g_depth,p,0).r;
     bool viewmodel=depth<0.1;
-    uint tile_cols=(uint(size.x)+15u)/16u;
-    uint tile=(uint(p.y)/16u)*tile_cols+uint(p.x)/16u;
-    uvec2 light_mask=uvec2(tile_lights[tile*2u],tile_lights[tile*2u+1u]);
-    uint count=uint(bitCount(light_mask.x)+bitCount(light_mask.y));
+    // Only called by the coarse-rate path, after shared masks are ready.
+#ifdef VS_OPAQUE_LIGHTING
+    const uint tiles_per_side=2u;
+    uvec2 local_tile=uvec2(p)/16u-gl_WorkGroupID.xy*tiles_per_side;
+#else
+    uint tiles_per_side=uint(pc.light_count.w+0.5)/2u;
+    uvec2 local_tile=uvec2(p)/16u-group*tiles_per_side;
+#endif
+    uvec2 light_mask=coarse_tile_lights[
+        local_tile.y*tiles_per_side+local_tile.x];
+    uint count=pc.direct_enabled!=0u ?
+        uint(bitCount(light_mask.x)+bitCount(light_mask.y)) : 0u;
     // Sky pixels need no shading or world-position reconstruction.
     if(depth>=0.999999) {
         return vec4(0.0,0.0,0.0,1.0);
@@ -186,7 +226,7 @@ vec4 vs_crowd_shade(ivec2 p,ivec2 size)
     float ao=clamp(material.b,0.0,1.0);
     vec3 color=vec3(0.0);
     shared_brdf_state brdf;
-    if(count!=0u)brdf=shared_brdf_prepare(
+    if(count!=0u && pc.brdf_enabled!=0u)brdf=shared_brdf_prepare(
         albedo.rgb,metallic,roughness,N,V);
     uint remaining_low=light_mask.x,remaining_high=light_mask.y;
     for(uint candidate=0u;candidate<count;++candidate)
@@ -209,8 +249,6 @@ vec4 vs_crowd_shade(ivec2 p,ivec2 size)
         float distance_squared=dot(to_light,to_light);
         if(distance_squared<0.000004 || distance_squared>=radius*radius)
             continue;
-        // BRDF is identically zero for back-facing lights. Avoid the
-        // expensive triangle shadow query (and square root) in that case.
         if(dot(N,to_light)<=0.0)continue;
         float dist=sqrt(distance_squared);
         vec3 direction=to_light/dist;
@@ -229,18 +267,28 @@ vec4 vs_crowd_shade(ivec2 p,ivec2 size)
             if(viewmodel_occluded[i]!=0u)continue;
         } else if(any_hit(P+N*0.004,direction,dist-0.008,i))
             continue;
+#ifndef VS_OPAQUE_LIGHTING
         vec3 transmission=vs_exact_light_transmission_ray(
             i,light.position_range.xyz,-direction,dist,0.004);
-        color+=shared_brdf_evaluate(brdf,N,V,direction)*
-            light.color_intensity.rgb*transmission*
-            cone*(light.color_intensity.w*attenuation);
+#endif
+        if(pc.brdf_enabled!=0u)
+#ifndef VS_OPAQUE_LIGHTING
+            color+=shared_brdf_evaluate(brdf,N,V,direction)*
+                light.color_intensity.rgb*transmission*
+                cone*(light.color_intensity.w*attenuation);
+#else
+            color+=shared_brdf_evaluate(brdf,N,V,direction)*
+                light.color_intensity.rgb*
+                cone*(light.color_intensity.w*attenuation);
+#endif
     }
     // First-person hands/weapons are physical diffuse GI receivers too.
     // P is camera-local for the reserved-depth viewmodel, so sample the same
     // world-space probe field and energy scale as the rest of the scene.
     // The same diffuse GI term is exactly zero on purely metallic,
     // fully occluded or black-albedo pixels. Avoid the 8-probe gather there.
-    if(ao>0.0 && metallic<1.0 && any(greaterThan(albedo.rgb,vec3(0.0))))
+    if(pc.indirect_enabled!=0u && ao>0.0 && metallic<1.0 &&
+       any(greaterThan(albedo.rgb,vec3(0.0))))
         color+=albedo.rgb*(1.0-metallic)*ao*
             shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*
             (0.01*min(1.0,roughness*1.5));
@@ -248,17 +296,130 @@ vec4 vs_crowd_shade(ivec2 p,ivec2 size)
     color+=emission/max(vec3(1.0)-emission,vec3(1.0/255.0));
     return vec4(max(color,vec3(0.0)),1.0);
 }
+// Write the center, sky and reconstructed colors immediately. Return a bit
+// mask of pixels that still require the same full-rate lighting evaluation.
+#ifdef VS_OPAQUE_LIGHTING
+uint reconstruct_block(ivec2 base,ivec2 size)
+{
+    const int rate=4;
+#else
+uint reconstruct_block(ivec2 base,ivec2 size,int rate,uvec2 group)
+{
+#endif
+    if(any(greaterThanEqual(base,size)))return 0u;
+    ivec2 center=min(base+ivec2(rate/2),size-1);
+    float center_depth=texelFetch(g_depth,center,0).r;
+    bool center_is_sky=center_depth>=0.999999;
+    bool reconstruct=pc.reconstruction_enabled!=0u && !center_is_sky;
+#ifdef VS_OPAQUE_LIGHTING
+    const float depth_tolerance=0.002;
+    const float normal_tolerance=0.85;
+    const float material_tolerance=0.25;
+#else
+    bool reflected=pc.light_count.y<0.0;
+    float depth_tolerance=reflected ? 0.00018 : 0.002;
+    float normal_tolerance=reflected ? 0.97 : 0.85;
+    float material_tolerance=reflected ? 0.06 : 0.25;
+#endif
+    vec4 center_color=vec4(0.0,0.0,0.0,1.0);
+    vec3 center_normal,center_albedo;
+    vec2 center_material;
+#ifdef VS_OPAQUE_LIGHTING
+    if(!center_is_sky)center_color=vs_crowd_shade(center,size);
+#else
+    if(!center_is_sky)center_color=vs_crowd_shade(center,size,group);
+#endif
+    if(reconstruct) {
+        center_normal=texelFetch(g_normal,center,0).xyz*2.0-1.0;
+        center_albedo=texelFetch(g_albedo,center,0).rgb;
+        center_material=texelFetch(g_material,center,0).rg;
+    }
+
+    uint edges=0u;
+    for(int y=0;y<rate;++y)
+    for(int x=0;x<rate;++x) {
+        ivec2 pixel=base+ivec2(x,y);
+        if(any(greaterThanEqual(pixel,size)))continue;
+        if(all(equal(pixel,center))) {
+            imageStore(hdr,pixel,center_color);
+            continue;
+        }
+        float depth=texelFetch(g_depth,pixel,0).r;
+        if(depth>=0.999999) {
+            imageStore(hdr,pixel,vec4(0.0,0.0,0.0,1.0));
+            continue;
+        }
+        bool edge=center_is_sky || depth<0.1;
+        if(!edge && reconstruct) {
+            edge=center_depth<0.1 || abs(depth-center_depth)>depth_tolerance;
+            if(!edge) {
+                vec3 normal=texelFetch(g_normal,pixel,0).xyz*2.0-1.0;
+                edge=dot(normal,center_normal)<normal_tolerance;
+            }
+            if(!edge) {
+                vec2 material=texelFetch(g_material,pixel,0).rg;
+                edge=abs(material.x-center_material.x)>material_tolerance ||
+                     abs(material.y-center_material.y)>material_tolerance;
+            }
+        }
+        if(edge) {
+            edges|=1u<<uint(y*4+x);
+        } else if(reconstruct) {
+            vec3 albedo=texelFetch(g_albedo,pixel,0).rgb;
+            vec3 texture_scale=clamp(albedo/max(center_albedo,vec3(0.05)),
+                vec3(0.1),vec3(4.0));
+            imageStore(hdr,pixel,vec4(center_color.rgb*texture_scale,1.0));
+        } else {
+            imageStore(hdr,pixel,center_color);
+        }
+    }
+    return edges;
+}
+
 void main()
 {
+#ifdef VS_OPAQUE_LIGHTING
+    const int rate=4;
+    ivec2 size=imageSize(hdr);
+    ivec2 base=ivec2(gl_GlobalInvocationID.xy)*rate;
+    uvec2 group=gl_WorkGroupID.xy;
+    {
+#else
+    uvec2 group_origin=uvec2(pc.dispatch_origin&65535u,pc.dispatch_origin>>16u);
+    uvec2 group=gl_WorkGroupID.xy+group_origin;
     int rate=clamp(int(pc.light_count.w+0.5),1,4);
     if(rate>1) {
         ivec2 size=imageSize(hdr);
-        ivec2 base=ivec2(gl_GlobalInvocationID.xy)*rate;
+        ivec2 base=ivec2(group*8u+gl_LocalInvocationID.xy)*rate;
+#endif
         // All 64 lanes must participate before invoking vs_crowd_shade().
         // One workgroup spans 8*rate pixels, potentially multiple 16px
         // light tiles when rate=4. Union their masks conservatively.
-        if(gl_LocalInvocationIndex==0u)has_viewmodel=0u;
+#ifdef VS_OPAQUE_LIGHTING
+        const uint tiles_per_side=2u;
+#else
+        uint tiles_per_side=uint(rate/2);
+#endif
+        uint tile_count=tiles_per_side*tiles_per_side;
+        if(gl_LocalInvocationIndex<tile_count) {
+            uvec2 local=uvec2(gl_LocalInvocationIndex%tiles_per_side,
+                              gl_LocalInvocationIndex/tiles_per_side);
+            uvec2 tile=group*tiles_per_side+local;
+            uint columns=(uint(size.x)+15u)/16u;
+            uint rows=(uint(size.y)+15u)/16u;
+            uvec2 mask=uvec2(0u);
+            if(tile.x<columns && tile.y<rows) {
+                uint index=(tile.y*columns+tile.x)*2u;
+                mask=uvec2(tile_lights[index],tile_lights[index+1u]);
+            }
+            coarse_tile_lights[gl_LocalInvocationIndex]=mask;
+        }
+        if(gl_LocalInvocationIndex==0u) {
+            has_viewmodel=0u;
+            edge_count=0u;
+        }
         barrier();
+#ifdef VS_OPAQUE_LIGHTING
         bool local_viewmodel=false;
         for(int y=0;y<rate;++y)
         for(int x=0;x<rate;++x) {
@@ -266,22 +427,29 @@ void main()
             if(all(lessThan(p,size)) && texelFetch(g_depth,p,0).r<0.1)
                 local_viewmodel=true;
         }
+#else
+        bool local_viewmodel=false;
+        if(pc.light_count.y>=0.0)for(int y=0;y<rate;++y)
+        for(int x=0;x<rate;++x) {
+            ivec2 p=base+ivec2(x,y);
+            if(all(lessThan(p,size)) && texelFetch(g_depth,p,0).r<0.1)
+                local_viewmodel=true;
+        }
+#endif
         if(local_viewmodel)atomicOr(has_viewmodel,1u);
         barrier();
-        if(pc.light_count.y>=0.0 && has_viewmodel!=0u &&
+#ifdef VS_OPAQUE_LIGHTING
+        if(pc.direct_enabled!=0u && has_viewmodel!=0u &&
            gl_LocalInvocationIndex<64u) {
-            ivec2 first_tile=ivec2(gl_WorkGroupID.xy)*8*rate/16;
-            ivec2 last_tile=min(
-                (ivec2(gl_WorkGroupID.xy+uvec2(1u))*8*rate-ivec2(1))/16,
-                (size-1)/16);
-            uint columns=uint((size.x+15)/16);
+#else
+        if(pc.direct_enabled!=0u && pc.light_count.y>=0.0 && has_viewmodel!=0u &&
+           gl_LocalInvocationIndex<64u) {
+#endif
+            // Same conservative union as before, but from the four masks
+            // loaded once by this workgroup. All lanes use identical masks.
             uvec2 mask=uvec2(0u);
-            for(int y=first_tile.y;y<=last_tile.y;++y)
-            for(int x=first_tile.x;x<=last_tile.x;++x) {
-                uint tile=uint(y)*columns+uint(x);
-                mask|=uvec2(tile_lights[tile*2u],
-                            tile_lights[tile*2u+1u]);
-            }
+            for(uint tile=0u;tile<tile_count;++tile)
+                mask|=coarse_tile_lights[tile];
             uint light_index=gl_LocalInvocationIndex;
             bool selected=light_index<32u?
                 ((mask.x>>(light_index&31u))&1u)!=0u:
@@ -301,74 +469,53 @@ void main()
             }
         }
         barrier();
-        if(any(greaterThanEqual(base,size)))return;
-        ivec2 center=min(base+ivec2(rate/2),size-1);
-        float center_depth=texelFetch(g_depth,center,0).r;
-        // A mostly empty sky should not fetch normals, albedo or materials
-        // for every pixel just to discover that their final lighting is zero.
-        // Geometry silhouettes still receive the original full-rate shading.
-        if(center_depth>=0.999999) {
-            for(int y=0;y<rate;++y)
-            for(int x=0;x<rate;++x) {
-                ivec2 p=base+ivec2(x,y);
-                if(any(greaterThanEqual(p,size)))continue;
-                float depth=texelFetch(g_depth,p,0).r;
-                imageStore(hdr,p,depth>=0.999999 ?
-                    vec4(0.0,0.0,0.0,1.0) : vs_crowd_shade(p,size));
+        // Lighting an edge immediately leaves many lanes idle while a few
+        // lanes trace shadow rays. Pack the exact same receivers into dense
+        // batches and keep their original tile/light lookup in the shader.
+#ifdef VS_OPAQUE_LIGHTING
+        uint edges=reconstruct_block(base,size);
+#else
+        uint edges=reconstruct_block(base,size,rate,group);
+#endif
+        ivec2 group_base=ivec2(group)*8*rate;
+        if(edges!=0u) {
+            uint slot=atomicAdd(edge_count,uint(bitCount(edges)));
+            while(edges!=0u) {
+                int bit=findLSB(edges);
+                edges&=edges-1u;
+                ivec2 local=base-group_base+ivec2(bit%4,bit/4);
+                edge_pixels[slot++]=uint(local.y*32+local.x);
             }
-            return;
         }
-        vec4 center_color=vs_crowd_shade(center,size);
-        vec3 center_normal=texelFetch(g_normal,center,0).xyz*2.0-1.0;
-        vec4 center_albedo=texelFetch(g_albedo,center,0);
-        vec2 center_material=texelFetch(g_material,center,0).rg;
-        for(int y=0;y<rate;++y)
-        for(int x=0;x<rate;++x) {
-            ivec2 p=base+ivec2(x,y);
-            if(any(greaterThanEqual(p,size)))continue;
-            if(all(equal(p,center))) {
-                imageStore(hdr,p,center_color);
-                continue;
-            }
-            float depth=texelFetch(g_depth,p,0).r;
-            vec3 normal=texelFetch(g_normal,p,0).xyz*2.0-1.0;
-            vec2 material=texelFetch(g_material,p,0).rg;
-            bool edge=(depth<0.1)!=(center_depth<0.1) ||
-                (depth>=0.999999)!=(center_depth>=0.999999) ||
-                abs(depth-center_depth)>0.002 ||
-                dot(normal,center_normal)<0.85 ||
-                abs(material.x-center_material.x)>0.25 ||
-                abs(material.y-center_material.y)>0.25;
-            // Viewmodel occupies few pixels compared with the crowd. Keep
-            // full-rate hand/weapon normal and GI shading even when the
-            // world is reconstructed from coarse lighting samples.
-            if(edge || depth<0.1) {
-                imageStore(hdr,p,vs_crowd_shade(p,size));
-                continue;
-            }
-            vec4 albedo=texelFetch(g_albedo,p,0);
-            vec3 texture_scale=clamp(albedo.rgb/max(center_albedo.rgb,vec3(0.05)),
-                vec3(0.1),vec3(4.0));
-            imageStore(hdr,p,vec4(center_color.rgb*texture_scale,1.0));
+        barrier();
+        for(uint slot=gl_LocalInvocationIndex;slot<edge_count;slot+=64u) {
+            uint local=edge_pixels[slot];
+            ivec2 pixel=group_base+ivec2(int(local%32u),int(local/32u));
+#ifdef VS_OPAQUE_LIGHTING
+            imageStore(hdr,pixel,vs_crowd_shade(pixel,size));
+#else
+            imageStore(hdr,pixel,vs_crowd_shade(pixel,size,group));
+#endif
         }
         return;
     }
-    ivec2 p=ivec2(gl_GlobalInvocationID.xy),size=imageSize(hdr);
+#ifndef VS_OPAQUE_LIGHTING
+    ivec2 p=ivec2(group*8u+gl_LocalInvocationID.xy),size=imageSize(hdr);
     bool inside=all(lessThan(p,size));
     float depth=inside?texelFetch(g_depth,p,0).r:1.0;
     bool viewmodel=inside && depth<0.1;
     uint lane=gl_LocalInvocationIndex;
     // 8x8 workgroups fall entirely within one 16x16 light-list tile.
     uint tile_cols=(uint(size.x)+15u)/16u;
-    uint tile=(gl_WorkGroupID.y/2u)*tile_cols+
-              (gl_WorkGroupID.x/2u);
+    uint tile=(group.y/2u)*tile_cols+group.x/2u;
     uvec2 light_mask=uvec2(tile_lights[tile*2u],
                             tile_lights[tile*2u+1u]);
-    uint count=uint(bitCount(light_mask.x)+bitCount(light_mask.y));
+    uint count=pc.direct_enabled!=0u ?
+        uint(bitCount(light_mask.x)+bitCount(light_mask.y)) : 0u;
 
     // Reflection G-buffers contain no viewmodel; skip the shared-memory
     // visibility cache in reflected-camera passes.
-    if(pc.light_count.y>=0.0 && count!=0u) {
+    if(pc.direct_enabled!=0u && pc.light_count.y>=0.0 && count!=0u) {
         if(lane==0u)has_viewmodel=0u;
         barrier();
         if(viewmodel)atomicOr(has_viewmodel,1u);
@@ -412,7 +559,7 @@ void main()
     float ao=clamp(material.b,0.0,1.0);
     vec3 color=vec3(0.0);
     shared_brdf_state brdf;
-    if(count!=0u)brdf=shared_brdf_prepare(
+    if(count!=0u && pc.brdf_enabled!=0u)brdf=shared_brdf_prepare(
         albedo.rgb,metallic,roughness,N,V);
     uint remaining_low=light_mask.x,remaining_high=light_mask.y;
     for(uint candidate=0u;candidate<count;++candidate)
@@ -455,20 +602,23 @@ void main()
             continue;
         vec3 transmission=vs_exact_light_transmission_ray(
             i,light.position_range.xyz,-direction,dist,0.004);
-        color+=shared_brdf_evaluate(brdf,N,V,direction)*
-            light.color_intensity.rgb*transmission*
-            cone*(light.color_intensity.w*attenuation);
+        if(pc.brdf_enabled!=0u)
+            color+=shared_brdf_evaluate(brdf,N,V,direction)*
+                light.color_intensity.rgb*transmission*
+                cone*(light.color_intensity.w*attenuation);
     }
     // First-person hands/weapons are physical diffuse GI receivers too.
     // P is camera-local for the reserved-depth viewmodel, so sample the same
     // world-space probe field and energy scale as the rest of the scene.
     // The same diffuse GI term is exactly zero on purely metallic,
     // fully occluded or black-albedo pixels. Avoid the 8-probe gather there.
-    if(ao>0.0 && metallic<1.0 && any(greaterThan(albedo.rgb,vec3(0.0))))
+    if(pc.indirect_enabled!=0u && ao>0.0 && metallic<1.0 &&
+       any(greaterThan(albedo.rgb,vec3(0.0))))
         color+=albedo.rgb*(1.0-metallic)*ao*
             shared_indirect_lighting(probes,pc.sky.xyz,pc.sky.w,P,N)*
             (0.01*min(1.0,roughness*1.5));
     vec3 emission=vec3(albedo.a,n.a,material.a);
     color+=emission/max(vec3(1.0)-emission,vec3(1.0/255.0));
     imageStore(hdr,p,vec4(max(color,vec3(0.0)),1.0));
+#endif
 }

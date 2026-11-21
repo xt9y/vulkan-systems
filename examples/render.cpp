@@ -1,20 +1,26 @@
-#include <vs/app/app.hpp>
-#include <vs/render/renderer.hpp>
-#include <vs/render/pipeline.hpp>
 #include <chrono>
+#include <vs/app/app.hpp>
+#include <vs/render/pipeline.hpp>
+#include <vs/render/renderer.hpp>
 
 // A genuine raster pipeline drawing a rotating triangle into the VS swapchain.
 // The project (not VS) owns its pipeline layout, shaders, and rendering policy.
-int main() {
-    vs::application app({.title="vs / render - rotating triangle"});
+int main()
+{
+    vs::application app({.title = "vs / render - rotating triangle"});
     vs::render::pipeline triangle;
     vk::PipelineLayout layout{};
-    const auto release=[&] {
+
+    const auto release = [&]
+    {
         triangle.reset();
-        if(layout)vk::device::get()->handle.destroyPipelineLayout(layout);
-        layout={};
+
+        if (layout) vk::device::get()->handle.destroyPipelineLayout(layout);
+        layout = nullptr;
     };
-    app.on_swapchain(release,[&] {
+
+    app.on_swapchain(release, [&]
+                     {
         vk::PushConstantRange push{};
         push.stageFlags=vk::ShaderStageFlagBits::eVertex;
         push.offset=0;push.size=sizeof(float);
@@ -31,10 +37,11 @@ int main() {
                 "build/shaders/example_triangle.vert.spv"},
             {vk::ShaderStageFlagBits::eFragment,
                 "build/shaders/example_triangle.frag.spv"}
-        });
-    });
-    const auto start=std::chrono::steady_clock::now();
-    app.run([&](vk::CommandBuffer cmd,std::uint32_t image) {
+        }); });
+    const auto start = std::chrono::steady_clock::now();
+
+    app.run([&](vk::CommandBuffer cmd, std::uint32_t image)
+            {
         const float t=std::chrono::duration<float>(
             std::chrono::steady_clock::now()-start).count();
         app.begin_color(cmd,image,{.025f,.035f,.055f,1.f});
@@ -49,8 +56,7 @@ int main() {
         material.push_data=&t;material.push_size=sizeof(t);
         material.push_stages=vk::ShaderStageFlagBits::eVertex;
         draw.draw(shape,material);
-        app.end_color(cmd);
-    });
+        app.end_color(cmd); });
     vk::device::idle();
     release();
     app.close();

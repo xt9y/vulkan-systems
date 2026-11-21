@@ -1,9 +1,6 @@
-#include <vs/assets/animation.hpp>
-#include <vs/scene/scene.hpp>
 #include <algorithm>
-#include <cmath>
-#include <stdexcept>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <ozz/animation/runtime/animation.h>
@@ -15,9 +12,12 @@
 #include <ozz/base/io/stream.h>
 #include <ozz/base/maths/simd_math.h>
 #include <ozz/base/maths/soa_transform.h>
+#include <stdexcept>
 #include <string_view>
 #include <vector>
 #include <vk/vk.hpp>
+#include <vs/assets/animation.hpp>
+#include <vs/scene/scene.hpp>
 
 namespace vs::animation
 {

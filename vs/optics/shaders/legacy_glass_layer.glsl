@@ -1,3 +1,5 @@
+#include "glass_sampling_limits.h"
+
 // Shared DISPLAY-SPACE glass tint, used for opaque-world, nested-glass,
 // and reflected-camera glass. Not a physically complete volume integral.
 vec3 optics_glass_layer(vec3 background,vec3 tint,float pass,float solid)
@@ -38,7 +40,7 @@ optics_glass_profile optics_glass_shape(vec4 encoded_normal,vec3 incoming,
             out_shape.shift=clamp(vec2(
                 dot(bend,right)/max(half_fov.x,.001),
                -dot(bend,up)/max(half_fov.y,.001))*.08,
-                vec2(-.02),vec2(.02));
+                vec2(-VS_GLASS_MAX_UV_SHIFT),vec2(VS_GLASS_MAX_UV_SHIFT));
         }
     }
     return out_shape;

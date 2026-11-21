@@ -85,7 +85,7 @@ bool static_hit(vec3 origin,vec3 ray,float distance)
         ShadowNode node=nodes[index];
         if(!shadow_box(origin,inverse_direction,distance,node))
         {
-            index=max(node.next,index+1u);
+            index=node.next;
             continue;
         }
         if((node.first_and_count & 15u)>0u)

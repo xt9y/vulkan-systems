@@ -74,7 +74,7 @@ vec3 vs_glass_segment(vec3 eye,vec3 ray,float distance,uint count)
     while(index<total) {
         VsGlassNode node=vs_glass_nodes[index];
         if(!vs_glass_box(eye,inverse,distance,node)) {
-            index=max(node.next,index+1u);
+            index=node.next;
             continue;
         }
         uint num=node.first_and_count&15u;

@@ -1,27 +1,30 @@
 #pragma once
-#include <vk/vk.hpp>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <iterator>
+#include <memory>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 #include <vk/util/math/quaternion.hpp>
 #include <vk/util/math/vector.hpp>
-#include <array>
-#include <cstdint>
-#include <string>
-#include <vector>
-#include <span>
-#include <unordered_map>
-#include <memory>
-#include <utility>
-#include <iterator>
-#include <stdexcept>
-#include <cmath>
+#include <vk/vk.hpp>
 
-namespace vs::scene {
+namespace vs::scene
+{
 struct texture
 {
     std::uint32_t id = 0;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
-    std::vector<std::uint8_t> pixels;
-    std::vector<std::uint8_t> encoded; // Original PNG/JPEG bytes for compact network transfer.
+    std::shared_ptr<const std::vector<std::uint8_t>> pixels;
+    // Original PNG/JPEG bytes for compact network transfer. Scene snapshots
+    // share these immutable payloads instead of copying every image.
+    std::shared_ptr<const std::vector<std::uint8_t>> encoded;
 };
 
 struct material
@@ -80,11 +83,10 @@ struct transform
 };
 
 // Shared model transform for physics, rays, GI and optical bounds.
-inline vk::util::math::vec3 transform_position(const transform& pose,
+inline vk::util::math::vec3 transform_position(const transform &pose,
                                                vk::util::math::vec3 point)
 {
-    return pose.position+vk::util::math::rotate(pose.rotation,{
-        point.x*pose.scale.x,point.y*pose.scale.y,point.z*pose.scale.z});
+    return pose.position + vk::util::math::rotate(pose.rotation, {point.x * pose.scale.x, point.y * pose.scale.y, point.z * pose.scale.z});
 }
 
 struct clip
@@ -112,11 +114,12 @@ struct instance
 
     float overlay_weight = 0.0f;
     transform pose;
+
     vk::util::math::vec3 tint{1, 1, 1};
     std::uint32_t pattern = UINT32_MAX; // 0 solid, 1 checker, 2 glass, 3 reflective; UINT32_MAX inherits.
-    std::uint32_t editor_group = 0; // Shared root instance ID for multi-mesh Mermaid models.
-    float optical_strength = .9f; // transmission or reflectivity
-    float optical_mattness = .05f; // [0,1]
+    std::uint32_t editor_group = 0;     // Shared root instance ID for multi-mesh Mermaid models.
+    float optical_strength = .9f;       // transmission or reflectivity
+    float optical_mattness = .05f;      // [0,1]
     // Editor reference selects continuous Euler controls at/through the poles.
     // Rendering and simulation always consume pose.rotation.
     vk::util::math::vec3 rotation_reference{};
@@ -128,93 +131,130 @@ struct collision_box
     vk::util::math::vec3 maximum{};
 };
 
-enum class light_kind : std::uint32_t { plight=0, slight=1, lamp=2 };
+enum class light_kind : std::uint32_t
+{
+    plight = 0,
+    slight = 1,
+    lamp = 2
+};
+
 struct point_light
 {
     vk::util::math::vec3 position{};
+
     float radius = 1.0f;
+
     vk::util::math::vec3 color{1.0f, 1.0f, 1.0f};
+
     float strength = 1.0f;
     bool enabled = true;
     light_kind kind = light_kind::plight;
-    vk::util::math::vec3 direction{0.0f,-1.0f,0.0f};
+
+    vk::util::math::vec3 direction{0.0f, -1.0f, 0.0f};
+
     float cone_degrees = 45.0f; // Full spotlight opening angle.
 };
 
 // VS defines only component/asset types, never a world or scene owner.
 // Keep geometry ownership, persistence, IDs, and lifetime inside your project.
 // Mesh IDs are shared across every instance; resolve them in one scan.
-template<class Visit>
-void each_mesh_instance(const std::vector<mesh>& meshes,
-                        std::span<const instance> instances,Visit&& visit)
+template <class Visit>
+void each_mesh_instance(const std::vector<mesh> &meshes,
+                        std::span<const instance> instances, Visit &&visit)
 {
-    std::unordered_map<std::uint32_t,const mesh*> by_id;
+    std::unordered_map<std::uint32_t, const mesh *> by_id;
     by_id.reserve(meshes.size());
-    for(const auto& m:meshes)by_id.emplace(m.id,&m);
-    for(const auto& instance:instances)
-        if(const auto found=by_id.find(instance.mesh_id);found!=by_id.end())
-            visit(*found->second,instance);
+
+    for (const auto &m : meshes)
+        by_id.emplace(m.id, &m);
+
+    for (const auto &instance : instances)
+        if (const auto found = by_id.find(instance.mesh_id); found != by_id.end())
+            visit(*found->second, instance);
 }
 
 // One camera convention: -Z forward, yaw/pitch/FOV in radians.
-struct camera {
+struct camera
+{
     vk::util::math::vec3 position{};
-    float yaw=0.f,pitch=0.f,vertical_fov=1.04719755f;
+
+    float yaw = 0.f, pitch = 0.f, vertical_fov = 1.04719755f;
 };
-struct camera_basis {vk::util::math::vec3 forward{},right{},up{};};
-inline camera_basis axes(float yaw,float pitch) {
-    const float sy=std::sin(yaw),cy=std::cos(yaw);
-    const float sp=std::sin(pitch),cp=std::cos(pitch);
-    return {{sy*cp,sp,-cy*cp},{cy,0.f,sy},{-sy*sp,cp,cy*sp}};
+
+struct camera_basis
+{ vk::util::math::vec3 forward{}, right{}, up{}; };
+inline camera_basis axes(float yaw, float pitch)
+{
+    const float sy = std::sin(yaw), cy = std::cos(yaw);
+    const float sp = std::sin(pitch), cp = std::cos(pitch);
+
+    return {{sy * cp, sp, -cy * cp}, {cy, 0.f, sy}, {-sy * sp, cp, cy * sp}};
 }
-inline camera_basis axes(const camera& c) {return axes(c.yaw,c.pitch);}
+
+inline camera_basis axes(const camera &c) { return axes(c.yaw, c.pitch); }
 
 // Canonical renderer-facing primitives. The application owns data instances;
 // VS never owns or serializes a world and every renderer consumes this schema.
-using vec3=vk::util::math::vec3;
-struct surface {
-    vec3 origin{},u{},v{},normal{};
-    vec3 albedo{.725f,.710f,.680f},emission{};
-    bool triangle=false; // Triangle: origin, origin+u, origin+v; otherwise quad.
-    std::uint32_t optical_type=0; // 0 diffuse, 1 glass, 2 mirror
-    float optical_strength=0.f,roughness=0.f,ior=1.52f;
-    std::uint32_t pattern=0;
+using vec3 = vk::util::math::vec3;
+
+struct surface
+{
+    vec3 origin{}, u{}, v{}, normal{};
+    vec3 albedo{.725f, .710f, .680f}, emission{};
+
+    bool triangle = false;          // Triangle: origin, origin+u, origin+v; otherwise quad.
+    std::uint32_t optical_type = 0; // 0 diffuse, 1 glass, 2 mirror
+    float optical_strength = 0.f, roughness = 0.f, ior = 1.52f;
+
+    std::uint32_t pattern = 0;
     // The same original per-face shading data also drives optical rays:
     // no separate normals/UV/texture arrays authored by application code.
-    std::array<std::array<float,2>,3> uv{{{{0.f,0.f}},{{1.f,0.f}},{{0.f,1.f}}}};
-    std::array<vec3,3> vertex_normals{};
-    std::uint32_t base_color_texture=0,metallic_roughness_texture=0;
-    std::uint32_t normal_texture=0,occlusion_texture=0,emissive_texture=0;
-    float alpha_cutoff=0.f,base_alpha=1.f;
+    std::array<std::array<float, 2>, 3> uv{{{{0.f, 0.f}}, {{1.f, 0.f}}, {{0.f, 1.f}}}};
+    std::array<vec3, 3> vertex_normals{};
+    std::uint32_t base_color_texture = 0, metallic_roughness_texture = 0;
+    std::uint32_t normal_texture = 0, occlusion_texture = 0, emissive_texture = 0;
+
+    float alpha_cutoff = 0.f, base_alpha = 1.f;
     // Generic geometry participation controls. Probes can sample a coarse
     // patch while shadow rays use separate exact triangles from the same scene.
-    bool probe_receiver=true,shadow_caster=true;
+    bool probe_receiver = true, shadow_caster = true;
 };
-struct triangle {vec3 a{},b{},c{};}; // Transient geometry, never a second scene.
-struct cutout {std::uint32_t receiver=0,cover=0;};
-struct glass_sphere {vec3 center{};float radius=0.f,ior=1.52f;};
+
+struct triangle
+{ vec3 a{}, b{}, c{}; }; // Transient geometry, never a second scene.
+struct cutout
+{ std::uint32_t receiver = 0, cover = 0; };
+struct glass_sphere
+{
+    vec3 center{};
+
+    float radius = 0.f, ior = 1.52f;
+};
 
 // This is scene *data*, not a world/scene manager. No global state, registry,
 // lifetime rules or entity behavior. Every project constructs and owns it.
-struct data {
+struct data
+{
     std::vector<mesh> meshes;
     std::vector<instance> instances;
     std::vector<texture> textures;
     std::vector<skin> skins;
-    std::vector<surface> surfaces;  // Procedural/static faces not stored as meshes.
+    std::vector<surface> surfaces; // Procedural/static faces not stored as meshes.
     std::vector<point_light> lights;
     std::vector<collision_box> collision_boxes;
     std::vector<cutout> cutouts;
     glass_sphere glass{};
-    std::uint32_t emitter=UINT32_MAX; // Optional explicit emissive face index.
-    bool omnidirectional_emitter=false;
+    std::uint32_t emitter = UINT32_MAX; // Optional explicit emissive face index.
+    bool omnidirectional_emitter = false;
 };
 
 // One conversion path for mesh instances across all GI systems. Applies mesh
 // material and instance optics without caching or duplicating renderer scenes.
-template<class Visit>
-void each_mesh_surface(const data& value, Visit&& visit) {
-    each_mesh_instance(value.meshes,value.instances,[&](const mesh& m,const instance& entity) {
+template <class Visit>
+void each_mesh_surface(const data &value, Visit &&visit)
+{
+    each_mesh_instance(value.meshes, value.instances, [&](const mesh &m, const instance &entity)
+                       {
         for(std::size_t i=0;i+2<m.indices.size();i+=3) {
             const auto ia=m.indices[i],ib=m.indices[i+1],ic=m.indices[i+2];
             if(ia>=m.vertices.size()||ib>=m.vertices.size()||ic>=m.vertices.size())
@@ -263,12 +303,14 @@ void each_mesh_surface(const data& value, Visit&& visit) {
             face.alpha_cutoff=m.surface.alpha_cutoff;
             face.base_alpha=m.surface.base_color[3];
             visit(face);
-        }
-    });
+        } });
 }
-template<class Visit>
-void each_surface(const data& value,Visit&& visit) {
-    for(const auto& face:value.surfaces)visit(face);
-    each_mesh_surface(value,visit);
+
+template <class Visit>
+void each_surface(const data &value, Visit &&visit)
+{
+    for (const auto &face : value.surfaces)
+        visit(face);
+    each_mesh_surface(value, visit);
 }
-} // namespace scene
+} // namespace vs::scene

@@ -1,14 +1,21 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "lighting_shared.glsl"
-layout(local_size_x = 8, local_size_y = 8) in;
+#include "../tone_workgroup.h"
+layout(local_size_x = VS_PCLOUD_TONE_WORKGROUP_SIZE,
+       local_size_y = VS_PCLOUD_TONE_WORKGROUP_SIZE) in;
 layout(set=0,binding=0) uniform sampler2D hdr;
 layout(rgba8, set=0,binding=1) writeonly uniform image2D ldr;
-layout(push_constant) uniform Controls { float exposure; } pc;
+layout(push_constant) uniform Controls {
+    float exposure;
+    layout(offset=124) uint dispatch_origin;
+} pc;
 
 void main()
 {
-    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    uvec2 group_origin = uvec2(pc.dispatch_origin & 65535u, pc.dispatch_origin >> 16u);
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy +
+                    group_origin * uint(VS_PCLOUD_TONE_WORKGROUP_SIZE));
     if (any(greaterThanEqual(p, imageSize(ldr)))) return;
     // Identical final transfer for the opaque and reflected HDR paths.
     vec3 color = shared_tonemap(texelFetch(hdr,p,0).rgb,pc.exposure);

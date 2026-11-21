@@ -8,7 +8,6 @@ layout(std430,set=0,binding=VS_DYNAMIC_NODE_BINDING) readonly buffer VsDynamicNo
     uvec4 vs_dynamic_counts;
     ShadowNode vs_dynamic_nodes[];
 };
-
 bool vs_dynamic_triangle_hit(vec3 origin,vec3 ray,float limit,
                              vec3 a,vec3 e1,vec3 e2)
 {
@@ -37,22 +36,29 @@ vec3 vs_shadow_inverse_direction(vec3 ray)
 bool vs_dynamic_hit(vec3 origin,vec3 ray,float distance,
                     vec3 inverse_direction)
 {
-    uint total=min(vs_dynamic_counts.x,uint(vs_dynamic_nodes.length()));
-    uint vertex_count=min(vs_dynamic_counts.y,uint(vs_dynamic_vertices.length()));
+    uint total=vs_dynamic_counts.x;
+    uint vertex_count=vs_dynamic_counts.y;
     if(total==0u || vertex_count==0u || distance<=.001)return false;
     uint index=0u;
     while(index<total) {
         ShadowNode node=vs_dynamic_nodes[index];
         if(!shadow_box(origin,inverse_direction,distance,node)) {
-            index=max(node.next,index+1u);
+            index=node.next;
             continue;
         }
         uint count=node.first_and_count&15u;
         if(count!=0u) {
             uint first=node.first_and_count>>4u;
-            uint end=min(first+count,vertex_count/3u);
+            uint end=first+count;
             for(uint i=first;i<end;++i) {
                 uint v=i*3u;
+#ifdef VS_DYNAMIC_TRIANGLES_ONLY
+                if(vs_dynamic_triangle_hit(origin,ray,distance,
+                    vs_dynamic_vertices[v].xyz,
+                    vs_dynamic_vertices[v+1u].xyz,
+                    vs_dynamic_vertices[v+2u].xyz))
+                    return true;
+#else
                 vec4 primitive=vs_dynamic_vertices[v];
                 if(primitive.w<0.0) {
                     // The same BVH stores animated bone spheres and triangles.
@@ -73,12 +79,14 @@ bool vs_dynamic_hit(vec3 origin,vec3 ray,float distance,
                     vs_dynamic_vertices[v+1u].xyz,
                     vs_dynamic_vertices[v+2u].xyz))
                     return true;
+#endif
             }
         }
         ++index;
     }
     return false;
 }
+
 bool vs_dynamic_hit(vec3 origin,vec3 ray,float distance)
 {
     if(vs_dynamic_counts.x==0u || vs_dynamic_counts.y==0u ||

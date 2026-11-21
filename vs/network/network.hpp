@@ -1,9 +1,9 @@
 #pragma once
 #include <vs/network/endpoint.hpp>
-#include <vs/network/socket.hpp>
-#include <vs/network/secure.hpp>
-#include <vs/network/stream.hpp>
-#include <vs/network/session.hpp>
+#include <vs/network/environment.hpp>
 #include <vs/network/region.hpp>
 #include <vs/network/region_sync.hpp>
-#include <vs/network/environment.hpp>
+#include <vs/network/secure.hpp>
+#include <vs/network/session.hpp>
+#include <vs/network/socket.hpp>
+#include <vs/network/stream.hpp>

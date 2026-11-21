@@ -10,11 +10,12 @@ layout(set=0,binding=2) uniform sampler2D optic_normal;
 layout(set=0,binding=3) uniform sampler2D optic_tint;
 layout(set=0,binding=5) uniform sampler2D optic_depth;
 layout(set=0,binding=17) uniform sampler2D planar_reflection;
-layout(set=0,binding=22) uniform sampler2D reflected_normal;
-layout(set=0,binding=23) uniform sampler2D reflected_tint;
-layout(set=0,binding=24) uniform sampler2D reflected_material;
-layout(set=0,binding=25) uniform sampler2D reflected_depth;
-layout(set=0,binding=26) uniform sampler2D reflected_opaque_depth;
+layout(set=0,binding=22) uniform texture2D reflected_normal;
+layout(set=0,binding=23) uniform texture2D reflected_tint;
+layout(set=0,binding=24) uniform texture2D reflected_material;
+layout(set=0,binding=25) uniform texture2D reflected_depth;
+layout(set=0,binding=26) uniform texture2D reflected_opaque_depth;
+layout(set=0,binding=35) uniform sampler layer_sampler;
 #include "legacy_glass_layer.glsl"
 layout(push_constant) uniform View {
     mat4 vp;
@@ -34,13 +35,13 @@ void main()
     // The reflected camera also rasterizes optical surfaces. Composite
     // their nearest glass layer over the reflected scene before applying
     // the mirror's own authored tint.
-    vec4 mask_glass=texture(reflected_normal,reflected_uv);
-    float depth_glass=texture(reflected_depth,reflected_uv).r;
-    float depth_opaque=texture(reflected_opaque_depth,reflected_uv).r;
+    vec4 mask_glass=texture(sampler2D(reflected_normal,layer_sampler),reflected_uv);
+    float depth_glass=texture(sampler2D(reflected_depth,layer_sampler),reflected_uv).r;
+    float depth_opaque=texture(sampler2D(reflected_opaque_depth,layer_sampler),reflected_uv).r;
     if(mask_glass.a>.25 && mask_glass.a<.75 &&
        depth_glass<depth_opaque+.0003) {
-        vec4 glass_tint=texture(reflected_tint,reflected_uv);
-        vec4 glass_material=texture(reflected_material,reflected_uv);
+        vec4 glass_tint=texture(sampler2D(reflected_tint,layer_sampler),reflected_uv);
+        vec4 glass_material=texture(sampler2D(reflected_material,layer_sampler),reflected_uv);
         vec3 plane_normal=normalize(camera.vp[0].xyz);
         vec3 view_forward=reflect(camera.forward.xyz,plane_normal);
         vec3 view_up=reflect(camera.up.xyz,plane_normal);

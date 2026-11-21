@@ -8,13 +8,13 @@ struct VsRegionRecord {
     uvec4 span;
 };
 #ifndef VS_REGION_RECORD_BINDING
-#define VS_REGION_RECORD_BINDING 19
+#define VS_REGION_RECORD_BINDING 18
 #endif
 #ifndef VS_REGION_VERTEX_BINDING
-#define VS_REGION_VERTEX_BINDING 20
+#define VS_REGION_VERTEX_BINDING 19
 #endif
 #ifndef VS_REGION_NODE_BINDING
-#define VS_REGION_NODE_BINDING 21
+#define VS_REGION_NODE_BINDING 20
 #endif
 layout(std430,set=0,binding=VS_REGION_RECORD_BINDING) readonly buffer VsRegionRecords {
     VsRegionRecord vs_region_records[];
@@ -48,7 +48,7 @@ bool vs_region_static_hit(vec3 origin,vec3 ray,float distance,
         while(at<end) {
             ShadowNode node=vs_region_nodes[region.span.y+at];
             if(!shadow_box(origin,inv_dir,distance,node)) {
-                at=max(node.next,at+1u);
+                at=node.next;
                 continue;
             }
             uint triangles=node.first_and_count&15u;

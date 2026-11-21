@@ -3,7 +3,6 @@
 #define STBI_NO_STDIO
 #include <stb_image.h>
 #undef STB_IMAGE_IMPLEMENTATION
-#include <vs/scene/scene.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -12,8 +11,6 @@
 #include <fastgltf/types.hpp>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
-#include <unordered_map>
 #include <limits>
 #include <ozz/animation/offline/animation_builder.h>
 #include <ozz/animation/offline/raw_animation.h>
@@ -25,13 +22,15 @@
 #include <ozz/base/io/stream.h>
 #include <ozz/base/memory/unique_ptr.h>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
+#include <vs/scene/scene.hpp>
 
 namespace vs::detail::gltf
 {
-
 
 struct rig
 {
@@ -88,7 +87,9 @@ std::vector<::vs::scene::texture> images(const fastgltf::Asset &asset, std::uint
         texture.id = first_texture + std::uint32_t(i);
         texture.width = std::uint32_t(w);
         texture.height = std::uint32_t(h);
-        texture.encoded.assign(reinterpret_cast<const std::uint8_t *>(source.data()), reinterpret_cast<const std::uint8_t *>(source.data()) + source.size());
+        texture.encoded = std::make_shared<const std::vector<std::uint8_t>>(
+            reinterpret_cast<const std::uint8_t *>(source.data()),
+            reinterpret_cast<const std::uint8_t *>(source.data()) + source.size());
         stbi_image_free(pixels);
         result.push_back(std::move(texture));
     }
@@ -126,26 +127,33 @@ namespace
         return first_texture + std::uint32_t(*ref.imageIndex);
     };
 
-    const auto uv_set = [](std::size_t index) -> std::uint32_t {
+    const auto uv_set = [](std::size_t index) -> std::uint32_t
+    {
         if (index > 1) throw std::runtime_error("glTF TEXCOORD_2+ is unsupported");
+
         return static_cast<std::uint32_t>(index);
     };
+
     if (source.pbrData.baseColorTexture) {
         result.base_color_texture = id(source.pbrData.baseColorTexture->textureIndex);
         result.texture_uv_sets |= uv_set(source.pbrData.baseColorTexture->texCoordIndex) << 0;
     }
+
     if (source.pbrData.metallicRoughnessTexture) {
         result.metallic_roughness_texture = id(source.pbrData.metallicRoughnessTexture->textureIndex);
         result.texture_uv_sets |= uv_set(source.pbrData.metallicRoughnessTexture->texCoordIndex) << 1;
     }
+
     if (source.normalTexture) {
         result.normal_texture = id(source.normalTexture->textureIndex);
         result.texture_uv_sets |= uv_set(source.normalTexture->texCoordIndex) << 2;
     }
+
     if (source.occlusionTexture) {
         result.occlusion_texture = id(source.occlusionTexture->textureIndex);
         result.texture_uv_sets |= uv_set(source.occlusionTexture->texCoordIndex) << 3;
     }
+
     if (source.emissiveTexture) {
         result.emissive_texture = id(source.emissiveTexture->textureIndex);
         result.texture_uv_sets |= uv_set(source.emissiveTexture->texCoordIndex) << 4;
@@ -442,11 +450,14 @@ rig import_rig(const fastgltf::Asset &asset, std::size_t skin_index)
     if (!result.skeleton)
         throw std::runtime_error("Ozz skeleton build failed");
 
-    std::vector<std::size_t> track_of_node(count,none);
-    for(std::size_t i=0;i<ordered.size();++i)
-        track_of_node[ordered[i]]=i;
-    for(const auto joint:skin.joints) {
-        if(track_of_node[joint]==none)
+    std::vector<std::size_t> track_of_node(count, none);
+
+    for (std::size_t i = 0; i < ordered.size(); ++i)
+        track_of_node[ordered[i]] = i;
+
+    for (const auto joint : skin.joints)
+    {
+        if (track_of_node[joint] == none)
             throw std::runtime_error("Skin remap missing joint");
         result.skin_joints.push_back(std::uint32_t(track_of_node[joint]));
     }
@@ -464,9 +475,10 @@ rig import_rig(const fastgltf::Asset &asset, std::size_t skin_index)
         {
             if (!channel.nodeIndex) continue;
 
-            const auto node=*channel.nodeIndex;
-            if(node>=track_of_node.size() || track_of_node[node]==none ||
-               channel.path==fastgltf::AnimationPath::Weights)continue;
+            const auto node = *channel.nodeIndex;
+
+            if (node >= track_of_node.size() || track_of_node[node] == none ||
+                channel.path == fastgltf::AnimationPath::Weights) continue;
             const auto &sampler = source.samplers.at(channel.samplerIndex);
 
             if (sampler.interpolation != fastgltf::AnimationInterpolation::Linear)
@@ -476,7 +488,7 @@ rig import_rig(const fastgltf::Asset &asset, std::size_t skin_index)
 
             if (inputs.count != outputs.count)
                 throw std::runtime_error("Mismatched glTF animation channels");
-            auto& track=clip.tracks[track_of_node[node]];
+            auto &track = clip.tracks[track_of_node[node]];
 
             for (std::size_t i = 0; i < inputs.count; ++i)
             {
@@ -567,97 +579,138 @@ rig import_rig(const fastgltf::Asset &asset, std::size_t skin_index)
 
 } // namespace vs::detail::gltf
 
-namespace vs::detail::obj {
+namespace vs::detail::obj
+{
 // Indexed Wavefront OBJ import. Material selection is owned by the caller;
 // this loader owns geometry only, as with the shared glTF import.
-::vs::model::data load(const std::filesystem::path& path,::vs::model::ids first)
+::vs::model::data load(const std::filesystem::path &path, ::vs::model::ids first)
 {
     std::ifstream file(path);
-    if(!file)throw std::runtime_error("Could not open OBJ: "+path.string());
-    using vec3=::vk::util::math::vec3;
-    std::vector<vec3> positions,normals;
-    std::vector<std::array<float,2>> uvs;
+
+    if (!file) throw std::runtime_error("Could not open OBJ: " + path.string());
+
+    using vec3 = ::vk::util::math::vec3;
+    std::vector<vec3> positions, normals;
+    std::vector<std::array<float, 2>> uvs;
     ::vs::model::data result{};
     ::vs::scene::mesh current{};
-    std::unordered_map<std::string,std::uint32_t> keys;
-    const auto flush=[&] {
-        if(current.indices.empty())return;
-        current.id=first.mesh++;
+    std::unordered_map<std::string, std::uint32_t> keys;
+
+    const auto flush = [&]
+    {
+        if (current.indices.empty()) return;
+        current.id = first.mesh++;
         ::vs::scene::instance instance{};
-        instance.id=first.instance++;
-        instance.mesh_id=current.id;
+        instance.id = first.instance++;
+        instance.mesh_id = current.id;
         result.instances.push_back(instance);
         result.meshes.push_back(std::move(current));
-        current={};
+        current = {};
         keys.clear();
     };
-    const auto index=[](int value,std::size_t count)->std::size_t {
-        if(value==0)throw std::runtime_error("OBJ index cannot be zero");
-        const auto resolved=value>0?
-            std::int64_t(value)-1:std::int64_t(count)+value;
-        if(resolved<0 || resolved>=std::int64_t(count))
+
+    const auto index = [](int value, std::size_t count) -> std::size_t
+    {
+        if (value == 0) throw std::runtime_error("OBJ index cannot be zero");
+
+        const auto resolved = value > 0 ? std::int64_t(value) - 1 : std::int64_t(count) + value;
+
+        if (resolved < 0 || resolved >= std::int64_t(count))
             throw std::runtime_error("OBJ index out of range");
+
         return std::size_t(resolved);
     };
-    const auto vertex=[&](const std::string& id)->std::uint32_t {
-        if(const auto found=keys.find(id);found!=keys.end())return found->second;
-        std::array<int,3> parts{};
-        std::size_t start=0;
-        for(int i=0;i<3 && start<=id.size();++i) {
-            const auto end=id.find('/',start);
-            if(end!=std::string::npos && end==start)parts[i]=0;
-            else parts[i]=std::stoi(id.substr(start,end-start));
-            if(end==std::string::npos)break;
-            start=end+1;
+
+    const auto vertex = [&](const std::string &id) -> std::uint32_t
+    {
+        if (const auto found = keys.find(id); found != keys.end()) return found->second;
+        std::array<int, 3> parts{};
+        std::size_t start = 0;
+
+        for (int i = 0; i < 3 && start <= id.size(); ++i)
+        {
+            const auto end = id.find('/', start);
+            if (end != std::string::npos && end == start) parts[i] = 0;
+            else
+                parts[i] = std::stoi(id.substr(start, end - start));
+
+            if (end == std::string::npos) break;
+            start = end + 1;
         }
         ::vs::scene::vertex value{};
-        value.position=positions.at(index(parts[0],positions.size()));
-        value.normal=parts[2]?
-            normals.at(index(parts[2],normals.size())):vec3{0,1,0};
-        if(parts[1]) {
-            const auto uv=uvs.at(index(parts[1],uvs.size()));
-            value.u=uv[0];
-            value.v=1.f-uv[1];
+        value.position = positions.at(index(parts[0], positions.size()));
+        value.normal = parts[2] ? normals.at(index(parts[2], normals.size())) : vec3{0, 1, 0};
+
+        if (parts[1]) {
+            const auto uv = uvs.at(index(parts[1], uvs.size()));
+            value.u = uv[0];
+            value.v = 1.f - uv[1];
         }
-        const auto id_value=std::uint32_t(current.vertices.size());
+
+        const auto id_value = std::uint32_t(current.vertices.size());
+
         current.vertices.push_back(value);
-        keys.emplace(id,id_value);
+        keys.emplace(id, id_value);
+
         return id_value;
     };
+
     std::string line;
-    while(std::getline(file,line)) {
-        if(line.size()<2 || line[0]=='#')continue;
+
+    while (std::getline(file, line))
+    {
+        if (line.size() < 2 || line[0] == '#') continue;
         std::istringstream in(line);
         std::string type;
-        in>>type;
-        if(type=="v") {
-            vec3 p{};if(in>>p.x>>p.y>>p.z)positions.push_back(p);
-        } else if(type=="vn") {
-            vec3 n{};if(in>>n.x>>n.y>>n.z)normals.push_back(n);
-        } else if(type=="vt") {
-            std::array<float,2> uv{};if(in>>uv[0]>>uv[1])uvs.push_back(uv);
-        } else if(type=="g" || type=="o") {
+        in >> type;
+
+        if (type == "v") {
+            vec3 p{};
+
+            if (in >> p.x >> p.y >> p.z) positions.push_back(p);
+        }
+        else if (type == "vn") {
+            vec3 n{};
+
+            if (in >> n.x >> n.y >> n.z) normals.push_back(n);
+        }
+        else if (type == "vt") {
+            std::array<float, 2> uv{};
+
+            if (in >> uv[0] >> uv[1]) uvs.push_back(uv);
+        }
+        else if (type == "g" || type == "o") {
             flush();
-        } else if(type=="f") {
+        }
+        else if (type == "f") {
             std::vector<std::uint32_t> face;
             std::string token;
-            while(in>>token)face.push_back(vertex(token));
-            for(std::size_t i=2;i<face.size();++i)
+
+            while (in >> token)
+                face.push_back(vertex(token));
+
+            for (std::size_t i = 2; i < face.size(); ++i)
                 current.indices.insert(current.indices.end(),
-                                       {face[0],face[i-1],face[i]});
+                                       {face[0], face[i - 1], face[i]});
         }
     }
+
     flush();
-    if(result.meshes.empty())
-        throw std::runtime_error("OBJ contains no triangles: "+path.string());
+
+    if (result.meshes.empty())
+        throw std::runtime_error("OBJ contains no triangles: " + path.string());
+
     return result;
 }
-}
+} // namespace vs::detail::obj
 
-namespace vs::model {
-::vs::model::data load(const std::filesystem::path& path, ids start) {
-    if(path.extension()==".obj")
-        return detail::obj::load(path,start);
-    return detail::gltf::load(path,start.mesh,start.instance,start.texture,start.skin);
+namespace vs::model
+{
+::vs::model::data load(const std::filesystem::path &path, ids start)
+{
+    if (path.extension() == ".obj")
+        return detail::obj::load(path, start);
+
+    return detail::gltf::load(path, start.mesh, start.instance, start.texture, start.skin);
 }
-}
+} // namespace vs::model

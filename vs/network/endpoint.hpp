@@ -8,20 +8,23 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
-#include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/socket.h>
 #endif
-namespace vs::network::endpoint {
-struct resource {
+namespace vs::network::endpoint
+{
+struct resource
+{
     sockaddr_storage address{};
 #ifdef _WIN32
-    int length=0;
+    int length = 0;
 #else
-    socklen_t length=0;
+    socklen_t length = 0;
 #endif
 };
-resource resolve(const std::string& host,std::uint16_t port);
-bool equal(const resource& first,const resource& second);
+
+resource resolve(const std::string &host, std::uint16_t port);
+bool equal(const resource &first, const resource &second);
 // Collision-free family/address/port identity, including IPv6 scope ID.
-std::string identifier(const resource& peer);
-}
+std::string identifier(const resource &peer);
+} // namespace vs::network::endpoint
