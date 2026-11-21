@@ -2016,30 +2016,6 @@ void prepare_dynamic_geometry(
         data.dynamic_group_signature != group_signature)
     {
         if (data.dynamic_topology_pending) return;
-        std::vector<std::array<float, 4>> initial;
-        initial.reserve(primitive_count * 3u);
-
-        for (std::uint32_t i = 0; i < faces.size(); ++i)
-        {
-            const auto &t = faces[i];
-            initial.push_back({t.a.x, t.a.y, t.a.z, float(i)});
-            initial.push_back({t.b.x, t.b.y, t.b.z, 0.f});
-            initial.push_back({t.c.x, t.c.y, t.c.z, 0.f});
-        }
-
-        for (std::size_t i = 0; i < spheres.size(); ++i)
-        {
-            const auto &ball = spheres[i];
-
-            const auto p = ball.center;
-            const float r = std::max(ball.radius, .001f);
-            const vec3 extent{r, r, r};
-
-            const vec3 lo = p - extent, hi = p + extent;
-            initial.push_back({lo.x, lo.y, lo.z, float(faces.size() + i)});
-            initial.push_back({hi.x, hi.y, hi.z, 0.f});
-            initial.push_back({p.x, p.y, p.z, 0.f});
-        }
         // Eight-primitive leaves reduced exact shadow traversal time on M2.
         // Keep the four-primitive comparison override for repeatable A/B runs.
         static const std::size_t dynamic_max_leaf = []
@@ -2072,16 +2048,52 @@ void prepare_dynamic_geometry(
         };
 
         auto result = std::make_shared<build_result>();
+        std::vector<triangle> topology_faces(faces);
+        std::vector<shadow_sphere> topology_spheres(spheres);
+        std::vector<std::uint32_t> topology_face_owners, topology_sphere_owners;
+        if (grouped) {
+            topology_face_owners.assign(face_owners.begin(), face_owners.end());
+            topology_sphere_owners.assign(sphere_owners.begin(), sphere_owners.end());
+        }
 
         data.dynamic_topology_pending = true;
         data.pending_dynamic_signature = group_signature;
         data.pending_dynamic_primitives = primitive_count;
 
         const bool accepted = dynamic_preparation.submit(
-            [&data, initial = std::move(initial), owners = std::move(owners),
-             result, grouped, group_signature, primitive_count,
+            [&data, faces = std::move(topology_faces),
+             spheres = std::move(topology_spheres),
+             face_owners = std::move(topology_face_owners),
+             sphere_owners = std::move(topology_sphere_owners), result,
+             grouped, group_signature, primitive_count,
              max_leaf]() mutable -> ::vs::jobs::completion
             {
+                std::vector<std::array<float, 4>> initial;
+                initial.reserve(primitive_count * 3u);
+                for (std::uint32_t i = 0; i < faces.size(); ++i)
+                {
+                    const auto &t = faces[i];
+                    initial.push_back({t.a.x, t.a.y, t.a.z, float(i)});
+                    initial.push_back({t.b.x, t.b.y, t.b.z, 0.f});
+                    initial.push_back({t.c.x, t.c.y, t.c.z, 0.f});
+                }
+                for (std::size_t i = 0; i < spheres.size(); ++i)
+                {
+                    const auto &ball = spheres[i];
+                    const auto p = ball.center;
+                    const float r = std::max(ball.radius, .001f);
+                    const vec3 extent{r, r, r};
+                    const vec3 lo = p - extent, hi = p + extent;
+                    initial.push_back({lo.x, lo.y, lo.z, float(faces.size() + i)});
+                    initial.push_back({hi.x, hi.y, hi.z, 0.f});
+                    initial.push_back({p.x, p.y, p.z, 0.f});
+                }
+                std::vector<std::uint32_t> owners;
+                if (grouped) {
+                    owners.reserve(primitive_count);
+                    owners.insert(owners.end(), face_owners.begin(), face_owners.end());
+                    owners.insert(owners.end(), sphere_owners.begin(), sphere_owners.end());
+                }
                 if (grouped)
                     result->nodes = ::vs::bvh::build_grouped_stackless(
                         initial, owners, max_leaf / 2u, max_leaf);
