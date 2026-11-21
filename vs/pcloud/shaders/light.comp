@@ -97,12 +97,27 @@ bool triangle_hit(vec3 origin,vec3 ray,float far_distance,vec3 a,vec3 e1,vec3 e2
     vec3 p=cross(ray,e2);
     float det=dot(e1,p);
     if(abs(det)<0.00001)return false;
-    float inv=1.0/det;
     vec3 t=origin-a;
-    float u=dot(t,p)*inv;
-    if(u<0.0 || u>1.0)return false;
+    float un=dot(t,p);
+    float determinant=abs(det);
+    float orientation=det<0.0?-1.0:1.0;
+    float margin=determinant*1e-6;
+    float oriented_u=un*orientation;
+    // Most BVH leaf triangles miss outside one of the barycentric edges.
+    // Reject those before the reciprocal; ambiguous boundary cases still
+    // use the original divided comparisons below.
+    if(oriented_u < -margin || oriented_u > determinant+margin)
+        return false;
     vec3 q=cross(t,e1);
-    float v=dot(ray,q)*inv;
+    float vn=dot(ray,q);
+    float oriented_v=vn*orientation;
+    if(oriented_v < -margin || oriented_v > determinant+margin ||
+       oriented_u+oriented_v > determinant+margin)
+        return false;
+    float inv=1.0/det;
+    float u=un*inv;
+    if(u<0.0 || u>1.0)return false;
+    float v=vn*inv;
     if(v<0.0 || u+v>1.0)return false;
     float distance=dot(e2,q)*inv;
     return distance>0.001 && distance<far_distance;
