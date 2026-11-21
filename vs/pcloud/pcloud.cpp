@@ -154,7 +154,8 @@ struct state
     vk::PipelineLayout present_layout{};
     std::unique_ptr<::vs::gpu::compute> cloud_program;
     std::unique_ptr<::vs::gpu::compute> gi_program;
-    std::unique_ptr<::vs::gpu::compute> lighting_program, opaque_lighting_program;
+    std::unique_ptr<::vs::gpu::compute> lighting_program, opaque_lighting_program,
+        reflection_lighting_program;
     std::unique_ptr<::vs::gpu::compute> tone_program;
     std::unique_ptr<::vs::render::pipeline> present_program;
 };
@@ -269,6 +270,12 @@ bool indirect_lighting_enabled()
     }
 
     return enabled;
+}
+
+bool reflection_tonemap_fused()
+{
+    static const char *value = std::getenv("VS_FUSED_REFLECTION_TONEMAP");
+    return !value || std::strcmp(value, "0") != 0;
 }
 
 bool direct_brdf_enabled()
@@ -553,7 +560,17 @@ void create(const configuration &shaders,
         data.gi_sets = std::make_unique<::vs::gpu::descriptors>();
         data.gi_sets->create(bindings(0, 1, vk::ShaderStageFlagBits::eCompute, 14), count);
         data.lighting_sets = std::make_unique<::vs::gpu::descriptors>();
-        data.lighting_sets->create(bindings(5, 1, vk::ShaderStageFlagBits::eCompute, 15), count * 2);
+        auto lighting_bindings = bindings(
+            5, 1, vk::ShaderStageFlagBits::eCompute, 15);
+        if (!data.shader_paths.reflection_lighting_shader.empty()) {
+            vk::DescriptorSetLayoutBinding reflection_ldr{};
+            reflection_ldr.binding = 21;
+            reflection_ldr.descriptorCount = 1;
+            reflection_ldr.descriptorType = vk::DescriptorType::eStorageImage;
+            reflection_ldr.stageFlags = vk::ShaderStageFlagBits::eCompute;
+            lighting_bindings.push_back(reflection_ldr);
+        }
+        data.lighting_sets->create(std::move(lighting_bindings), count * 2);
         data.tone_sets = std::make_unique<::vs::gpu::descriptors>();
         data.tone_sets->create(bindings(1, 1, vk::ShaderStageFlagBits::eCompute), count * 2);
         data.present_sets = std::make_unique<::vs::gpu::descriptors>();
@@ -569,6 +586,13 @@ void create(const configuration &shaders,
         data.lighting_program->create(
             data.shader_paths.lighting_shader,
             {data.lighting_sets->layout()}, sizeof(push));
+        if (!data.shader_paths.reflection_lighting_shader.empty()) {
+            data.reflection_lighting_program =
+                std::make_unique<::vs::gpu::compute>();
+            data.reflection_lighting_program->create(
+                data.shader_paths.reflection_lighting_shader,
+                {data.lighting_sets->layout()}, sizeof(push));
+        }
         if (!data.shader_paths.opaque_lighting_shader.empty()) {
             data.opaque_lighting_program = std::make_unique<::vs::gpu::compute>();
             data.opaque_lighting_program->create(
@@ -707,6 +731,13 @@ void create(const configuration &shaders,
             lighting[5].imageView = current.hdr.view;
             lighting[5].imageLayout = vk::ImageLayout::eGeneral;
 
+            if (data.reflection_lighting_program) {
+                vk::DescriptorImageInfo reflected_ldr{};
+                reflected_ldr.imageView = current.ldr.view;
+                reflected_ldr.imageLayout = vk::ImageLayout::eGeneral;
+                data.lighting_sets->write_image(i, 21, reflected_ldr);
+            }
+
             for (std::uint32_t j = 0; j < lighting.size(); ++j)
                 data.lighting_sets->write_image(i, j, lighting[j]);
             data.lighting_sets->write_buffer(i, 6, vk::buffer::descriptor(data.lights));
@@ -803,6 +834,12 @@ void create_reflection(const std::vector<gbuffer> &gbuffers)
         hdr.imageView = current.hdr.view;
         hdr.imageLayout = vk::ImageLayout::eGeneral;
         data.lighting_sets->write_image(i + count, 5, hdr);
+        if (data.reflection_lighting_program) {
+            vk::DescriptorImageInfo reflected_ldr{};
+            reflected_ldr.imageView = current.ldr.view;
+            reflected_ldr.imageLayout = vk::ImageLayout::eGeneral;
+            data.lighting_sets->write_image(i + count, 21, reflected_ldr);
+        }
         data.lighting_sets->write_buffer(i + count, 6,
                                          vk::buffer::descriptor(data.lights));
         data.lighting_sets->write_buffer(i + count, 7,
@@ -874,15 +911,20 @@ void reflection_lighting(vk::CommandBuffer command, std::uint32_t image,
         area.origin
     };
 
-    data.lighting_program->dispatch(command,
-                                    area.columns, area.rows, 1,
-                                    {current.lighting}, &controls, sizeof(controls));
+    const auto &program = reflection_tonemap_fused() &&
+                                  data.reflection_lighting_program
+                              ? *data.reflection_lighting_program
+                              : *data.lighting_program;
+    program.dispatch(command, area.columns, area.rows, 1,
+                     {current.lighting}, &controls, sizeof(controls));
 }
 
 void reflection_tonemap(vk::CommandBuffer command, std::uint32_t image,
                         vk::Rect2D pixels)
 {
     const auto &data = get();
+    if (reflection_tonemap_fused() && data.reflection_lighting_program)
+        return;
 
     const auto area = reflection_area(data.output.extent, pixels,
                                       tone_workgroup_size);
@@ -2543,6 +2585,7 @@ void release()
     data.gi_program.reset();
     data.lighting_program.reset();
     data.opaque_lighting_program.reset();
+    data.reflection_lighting_program.reset();
     data.tone_program.reset();
     data.present_program.reset();
     data.presentation.reset();

@@ -9,6 +9,9 @@ layout(set=0,binding=2) uniform sampler2D g_material;
 layout(set=0,binding=3) uniform sampler2D g_depth;
 layout(set=0,binding=4) uniform sampler3D probes;
 layout(rgba16f,set=0,binding=5) writeonly uniform image2D hdr;
+#ifdef VS_REFLECTION_OUTPUT
+layout(rgba8,set=0,binding=21) writeonly uniform image2D reflection_ldr;
+#endif
 
 struct PointLight {
     vec4 position_range;
@@ -57,6 +60,20 @@ layout(push_constant) uniform Controls {
     uint direct_enabled;
     uint dispatch_origin;
 } pc;
+
+void store_lighting(ivec2 pixel,vec4 value)
+{
+    imageStore(hdr,pixel,value);
+#ifdef VS_REFLECTION_OUTPUT
+    // Match the separate tone pass: it reads the value after RGBA16F
+    // conversion, then writes the same clamped curve to RGBA8.
+    vec2 half_rg=unpackHalf2x16(packHalf2x16(value.rg));
+    float half_b=unpackHalf2x16(packHalf2x16(vec2(value.b,0.0))).x;
+    vec3 color=shared_tonemap(vec3(half_rg,half_b),pc.exposure);
+    imageStore(reflection_ldr,pixel,
+               vec4(clamp(color,vec3(0.0),vec3(1.0)),1.0));
+#endif
+}
 
 float linear_depth(float depth)
 {
@@ -341,12 +358,12 @@ uint reconstruct_block(ivec2 base,ivec2 size,int rate,uvec2 group)
         ivec2 pixel=base+ivec2(x,y);
         if(any(greaterThanEqual(pixel,size)))continue;
         if(all(equal(pixel,center))) {
-            imageStore(hdr,pixel,center_color);
+            store_lighting(pixel,center_color);
             continue;
         }
         float depth=texelFetch(g_depth,pixel,0).r;
         if(depth>=0.999999) {
-            imageStore(hdr,pixel,vec4(0.0,0.0,0.0,1.0));
+            store_lighting(pixel,vec4(0.0,0.0,0.0,1.0));
             continue;
         }
         bool edge=center_is_sky || depth<0.1;
@@ -368,9 +385,9 @@ uint reconstruct_block(ivec2 base,ivec2 size,int rate,uvec2 group)
             vec3 albedo=texelFetch(g_albedo,pixel,0).rgb;
             vec3 texture_scale=clamp(albedo/max(center_albedo,vec3(0.05)),
                 vec3(0.1),vec3(4.0));
-            imageStore(hdr,pixel,vec4(center_color.rgb*texture_scale,1.0));
+            store_lighting(pixel,vec4(center_color.rgb*texture_scale,1.0));
         } else {
-            imageStore(hdr,pixel,center_color);
+            store_lighting(pixel,center_color);
         }
     }
     return edges;
@@ -492,9 +509,9 @@ void main()
             uint local=edge_pixels[slot];
             ivec2 pixel=group_base+ivec2(int(local%32u),int(local/32u));
 #ifdef VS_OPAQUE_LIGHTING
-            imageStore(hdr,pixel,vs_crowd_shade(pixel,size));
+            store_lighting(pixel,vs_crowd_shade(pixel,size));
 #else
-            imageStore(hdr,pixel,vs_crowd_shade(pixel,size,group));
+            store_lighting(pixel,vs_crowd_shade(pixel,size,group));
 #endif
         }
         return;
@@ -543,7 +560,7 @@ void main()
     if(!inside)return;
     // Sky pixels need no shading or world-position reconstruction.
     if(depth>=0.999999) {
-        imageStore(hdr,p,vec4(0.0,0.0,0.0,1.0));
+        store_lighting(p,vec4(0.0,0.0,0.0,1.0));
         return;
     }
     vec3 eye=pc.eye_near.xyz;
@@ -619,6 +636,6 @@ void main()
             (0.01*min(1.0,roughness*1.5));
     vec3 emission=vec3(albedo.a,n.a,material.a);
     color+=emission/max(vec3(1.0)-emission,vec3(1.0/255.0));
-    imageStore(hdr,p,vec4(max(color,vec3(0.0)),1.0));
+    store_lighting(p,vec4(max(color,vec3(0.0)),1.0));
 #endif
 }
